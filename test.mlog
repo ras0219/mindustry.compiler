@@ -1,0 +1,4 @@
+result = sensor(nucleus1, __metaglass);
+write(cell1, 0);
+result = result < 11000;
+control(enabled, conveyor1, result, 0, 0, 0);
