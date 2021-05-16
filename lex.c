@@ -10,7 +10,8 @@ static int is_ascii_alnumu(int ch) { return is_ascii_alphu(ch) || is_ascii_digit
 static int is_ascii_symbol(int ch)
 {
     return ch == '/' || ch == '(' || ch == ')' || ch == '=' || ch == ',' || ch == ';' || ch == '[' || ch == ']' ||
-           ch == '*' || ch == '%' || ch == '&' || ch == '+' || ch == '-' || ch == '<' || ch == '>';
+           ch == '*' || ch == '%' || ch == '&' || ch == '+' || ch == '-' || ch == '<' || ch == '>' || ch == '{' ||
+           ch == '}';
 }
 
 static int emit_token(Lexer* l)
@@ -195,6 +196,7 @@ int lex(Lexer* l, Buffer* buf)
                     if (rc = push_tok_char(l, ch)) return rc;
                     advance_rowcol(&l->rc, buf->buf[i++]);
                 }
+                l->state = LEX_STRING;
                 goto LEX_STRING;
             }
             break;
@@ -245,6 +247,10 @@ int lex(Lexer* l, Buffer* buf)
                     else if (l->sz == sizeof("void") - 1 && memcmp("void", l->tok, l->sz) == 0)
                     {
                         l->state = LEX_VOID;
+                    }
+                    else if (l->sz == sizeof("return") - 1 && memcmp("return", l->tok, l->sz) == 0)
+                    {
+                        l->state = LEX_RETURN;
                     }
                     if (rc = emit_token(l)) return rc;
                     l->state = LEX_START;

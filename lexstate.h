@@ -17,6 +17,7 @@ enum LexerState_t
     LEX_ATTRIBUTE,
     LEX_INT,
     LEX_VOID,
+    LEX_RETURN,
 };
 
 const char* lexstate_to_string(enum LexerState_t s);

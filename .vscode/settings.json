@@ -6,6 +6,7 @@
         "tok.h": "c",
         "lexstate.h": "c",
         "array.h": "c",
-        "fwd.h": "c"
+        "fwd.h": "c",
+        "*.mlog": "c"
     }
 }

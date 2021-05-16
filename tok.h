@@ -57,6 +57,21 @@ struct Scope
     struct Array binds;
 };
 
+struct CodeGenLabel
+{
+    ptrdiff_t str_offset;
+    ptrdiff_t str_len;
+    size_t line;
+};
+
+struct CodeGen
+{
+    size_t lines;
+    struct Array text;
+    struct Array labels;
+    struct Array label_strs;
+};
+
 typedef struct Parser
 {
     struct Array toks;
@@ -66,7 +81,18 @@ typedef struct Parser
 
     struct Scope scope;
     struct Scope type_scope;
+
+    struct CodeGen cg;
 } Parser;
 
 void parser_init(Parser* p);
 int parse(Parser* p, Lexer* l);
+
+void cg_init(struct CodeGen* cg);
+void cg_write_bin_entry(struct CodeGen* cg);
+void cg_write_push_ret(struct CodeGen* cg);
+void cg_write_return(struct CodeGen* cg);
+void cg_write_inst_set(struct CodeGen* cg, const char* dst, const char* src);
+void cg_write_inst(struct CodeGen* cg, const char* inst);
+void cg_emit(struct CodeGen* cg);
+void cg_mark_label(struct CodeGen* cg, const char* sym);

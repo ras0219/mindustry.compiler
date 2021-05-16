@@ -17,7 +17,7 @@ typedef struct
 int fe_on_token(Lexer* l)
 {
     FrontEnd* self = (FrontEnd*)((char*)l - offsetof(FrontEnd, lexer));
-    printf("TOK: %s\n", self->lexer.tok);
+    //printf("TOK: '%s' %d\n", self->lexer.tok, self->lexer.state);
     return parse(&self->parser, &self->lexer);
 }
 

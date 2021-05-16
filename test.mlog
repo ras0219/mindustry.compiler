@@ -1,13 +1,65 @@
+/* write the value 'value' to the 'addr' address in memory 'dst' */
 void __attribute__((asmstr("write %0 %1 %2"))) write(int dst, int addr, int value);
+
+/* control the enabled state of 'tgt' */
 void __attribute__((asmstr("control enabled %0 %1 0 0 0"))) control_enabled(int tgt, int enabled);
+/* tell @unit to stop moving and stop shooting */
+int __attribute__((asmstr("ucontrol stop"))) unit_stop();
+/* tell @unit to move to x, y */
+int __attribute__((asmstr("ucontrol move %0 %1"))) unit_move(int x, int y);
+/* tell @unit to approach x, y at radius 'r'*/
+int __attribute__((asmstr("ucontrol approach %0 %1 %2"))) unit_approach(int x, int y, int r);
+/* tell @unit to revert to standard AI */
+int __attribute__((asmstr("ucontrol pathfind"))) unit_pathfind();
+/* tell @unit to shoot at a position. NOTE: will not shoot if pos is out of range. */
+int __attribute__((asmstr("ucontrol target %0 %1 %2"))) unit_shoot(int x, int y, int shoot);
+int __attribute__((asmstr("ucontrol itemTake %0 %1 %2"))) unit_take_item(int building, int item, int amt);
+int __attribute__((asmstr("ucontrol itemDrop %0 %1"))) unit_drop_item(int building, int amt);
+/* binds '\@unit' to the next unit of 'type'; e.g. __poly or __mono */
+int __attribute__((asmstr("ubind %0"))) unit_bind_next(int type);
+/* flush the draw buffer to 'device' */
+int __attribute__((asmstr("drawflush %0"))) draw_flush(int device);
+/* queue drawing a line to the draw buffer */
+int __attribute__((asmstr("draw line %0 %1 %2 %3"))) draw_line(int x1, int y1, int x2, int y2);
+/* queue drawing a filled rectangle to the draw buffer */
+int __attribute__((asmstr("draw rect %0 %1 %2 %3"))) draw_rect(int x1, int y1, int x2, int y2);
+/* clear the draw buffer */
+int __attribute__((asmstr("draw clear %0 %1 %2"))) draw_clear(int r, int g, int b);
+/* queue drawing a filled rectangle to the draw buffer */
+int __attribute__((asmstr("draw color %0 %1 %2"))) draw_color(int r, int g, int b);
+
+int __attribute__((sym("@unit"))) __unit;
+int __attribute__((sym("@poly"))) __poly;
+int __attribute__((sym("@mono"))) __mono;
+int __attribute__((sym("@metaglass"))) metaglass;
+int __attribute__((sym("cell1"))) cell1;
+int __attribute__((sym("conveyor1"))) conveyor1;
+int __attribute__((sym("display1"))) display1;
+
+/* queue 'str' to the print buffer */
+void __attribute__((asmstr("print %0"))) print(int str);
+
+/* flush the print buffer to 'device' */
+void __attribute__((asmstr("printflush %0"))) print_flush(int device);
+
 /* sense 'sense' from 'dst' and return the result */
 int __attribute__((asmstr("sensor %r %0 %1"))) sensor(int dst, int sense);
 
-int __attribute__((sym("@metaglass"))) metaglass;
+int __attribute__((sym("message1"))) message1;
+int __attribute__((sym("@thorium"))) thorium;
 int __attribute__((sym("nucleus1"))) nucleus1;
-int __attribute__((sym("cell1"))) cell1;
-int __attribute__((sym("conveyor1"))) conveyor1;
+int __attribute__((sym("\"thorium: \""))) thorium_msg;
 
-int result = sensor(nucleus1, metaglass);
-write(cell1, 0, result);
-control_enabled(conveyor1, result < 11000);
+int my_sensor(int tgt);
+
+void main()
+{
+    int result = my_sensor(nucleus1);
+    print(thorium_msg);
+    print(result);
+    print_flush(message1);
+    draw_clear(0, 255, 255);
+    draw_flush(display1);
+}
+
+int my_sensor(int tgt) { return sensor(tgt, thorium); }

@@ -1,5 +1,6 @@
 #include <malloc.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "lexstate.h"
@@ -34,7 +35,7 @@ static const char* PARAM_NAMES_ARR[REG_COUNT] = {"eax", "ebx", "ecx", "edx", "ee
 
 struct FreeVar
 {
-    char buf[16];
+    char buf[24];
 };
 static struct FreeVar s_freevar_zero = {0};
 static struct FreeVar free_var(Parser* p)
@@ -48,6 +49,16 @@ static struct FreeVar free_var_from(Parser* p, const char* base)
 {
     struct FreeVar ret;
     snprintf(ret.buf, sizeof(ret.buf), "_%d_%s", p->free_var_counter++, base);
+    return ret;
+}
+static struct FreeVar extern_var_from(Parser* p, const char* base)
+{
+    struct FreeVar ret;
+    if (sizeof(ret.buf) <= snprintf(ret.buf, sizeof(ret.buf), "$%s$", base))
+    {
+        fprintf(stderr, "resource exceeded -- extern identifier too long (max %lu chars)\n", sizeof(ret.buf) - 3);
+        abort();
+    }
     return ret;
 }
 
@@ -112,6 +123,18 @@ static void scope_shrink(struct Scope* s, size_t sz)
         s->binds.sz = sz * sizeof(struct Binding);
     }
 }
+static void scope_shrink_free_syms(struct Scope* s, size_t sz)
+{
+    const size_t cur_sz = scope_size(s);
+    if (sz < cur_sz)
+    {
+        const struct Binding* data = scope_data(s);
+        for (size_t i = sz; i < cur_sz; ++i)
+            symbol_free(data[i].sym);
+        s->strings.sz = data[sz].ident_offset;
+        s->binds.sz = sz * sizeof(struct Binding);
+    }
+}
 static void scope_pop(struct Scope* s)
 {
     const size_t sz = scope_size(s) - 1;
@@ -154,14 +177,14 @@ static void bb_acquire_reg(Parser* p, struct BasicBlock* b, struct RegisterInfo*
     if (info->prev && !info->prev->renamed.buf[0])
     {
         info->prev->renamed = free_var(p);
-        printf("set %s %s\n", info->prev->renamed.buf, PARAM_NAMES_ARR[reg]);
+        cg_write_inst_set(&p->cg, info->prev->renamed.buf, PARAM_NAMES_ARR[reg]);
     }
 }
-static void bb_restore_reg(struct BasicBlock* b, int reg)
+static void bb_restore_reg(struct CodeGen* cg, struct BasicBlock* b, int reg)
 {
     if (b->reg[reg]->renamed.buf[0])
     {
-        printf("set %s %s\n", PARAM_NAMES_ARR[reg], b->reg[reg]->renamed.buf);
+        cg_write_inst_set(cg, PARAM_NAMES_ARR[reg], b->reg[reg]->renamed.buf);
     }
 }
 static void bb_close(struct Parser* p, struct BasicBlock* b)
@@ -177,11 +200,11 @@ static void bb_close(struct Parser* p, struct BasicBlock* b)
 
 static struct Token* compile_expr(Parser* p, struct Token* cur_tok, struct ValDest* dst, struct BasicBlock* bb);
 
-static void mov_or_assign_dst(struct ValDest* dst, const char* val)
+static void mov_or_assign_dst(struct CodeGen* cg, struct ValDest* dst, const char* val)
 {
     if (dst->dst_name)
     {
-        printf("set %s %s\n", dst->dst_name, val);
+        cg_write_inst_set(cg, dst->dst_name, val);
     }
     else
     {
@@ -263,19 +286,30 @@ static struct Token* compile_call_expr_sym(Parser* p,
             {
                 // pseudo-format
                 const char* s = fn->intrinsic_asm_str;
-                char buf[64];
+                char buf[128];
                 size_t i = 0;
-                while (i < 62 && *s)
+                while (1)
                 {
+                    if (i == 127)
+                    {
+                        fprintf(stderr, "resource exceeded\n");
+                        abort();
+                    }
+                    if (!*s) break;
                     if (*s == '%')
                     {
                         ++s;
                         if (*s == 'r')
                         {
                             dst_fill_name(p, dst);
-                            buf[i] = 0;
-                            printf("%s%s", buf, dst->dst_name);
-                            i = 0;
+                            size_t len = strlen(dst->dst_name);
+                            if (i + len > 127)
+                            {
+                                fprintf(stderr, "resource exceeded\n");
+                                abort();
+                            }
+                            memcpy(buf + i, dst->dst_name, len);
+                            i += len;
                         }
                         else
                         {
@@ -312,9 +346,14 @@ static struct Token* compile_call_expr_sym(Parser* p,
                                          cur_tok->rc.col);
                                 return NULL;
                             }
-                            buf[i] = 0;
-                            printf("%s%s", buf, p->param.buf);
-                            i = 0;
+                            size_t len = strlen(p->param.buf);
+                            if (i + len > 127)
+                            {
+                                fprintf(stderr, "resource exceeded\n");
+                                abort();
+                            }
+                            memcpy(buf + i, p->param.buf, len);
+                            i += len;
                         }
                         ++s;
                     }
@@ -324,7 +363,7 @@ static struct Token* compile_call_expr_sym(Parser* p,
                     }
                 }
                 buf[i] = 0;
-                printf("%s\n", buf);
+                cg_write_inst(&p->cg, buf);
                 if (!dst->dst_name) dst->dst_name = "null";
             }
             else
@@ -341,19 +380,14 @@ static struct Token* compile_call_expr_sym(Parser* p,
                                  REG_COUNT);
                         return NULL;
                     }
-                    printf("set %s %s\n", PARAM_NAMES_ARR[params->idx], params->param.buf);
+                    cg_write_inst_set(&p->cg, PARAM_NAMES_ARR[params->idx], params->param.buf);
                     params = params->prev;
                 }
 
                 const struct FreeVar fv_ret = free_var(p);
-                printf("set %s ret\n"
-                       "op add ret 1 @counter\n"
-                       "set @counter %s\n"
-                       "set ret %s\n",
-                       fv_ret.buf,
-                       fn->rename.buf,
-                       fv_ret.buf);
-                mov_or_assign_dst(dst, PARAM_NAMES_ARR[0]);
+                cg_write_inst(&p->cg, "op add ret 1 @counter");
+                cg_write_inst_set(&p->cg, "@counter", fn->rename.buf);
+                mov_or_assign_dst(&p->cg, dst, PARAM_NAMES_ARR[0]);
             }
             return cur_tok + 1;
         }
@@ -423,7 +457,7 @@ static struct Token* compile_expr(Parser* p, struct Token* cur_tok, struct ValDe
                     struct ValDest new_dst = dest_reg(lhs_bind->sym->rename.buf);
                     cur_tok = compile_expr(p, cur_tok + 1, &new_dst, bb);
                     if (!cur_tok) return NULL;
-                    mov_or_assign_dst(dst, new_dst.dst_name);
+                    mov_or_assign_dst(&p->cg, dst, new_dst.dst_name);
                 }
                 else if (op[0] == '<')
                 {
@@ -431,7 +465,14 @@ static struct Token* compile_expr(Parser* p, struct Token* cur_tok, struct ValDe
                     struct ValDest rhs = s_any_destination;
                     if (cur_tok = compile_expr(p, cur_tok + 1, &rhs, bb))
                     {
-                        printf("op lessThan %s %s %s\n", dst->dst_name, lhs_bind->sym->rename.buf, rhs.dst_name);
+                        char buf[128];
+                        snprintf(buf,
+                                 sizeof(buf),
+                                 "op lessThan %s %s %s",
+                                 dst->dst_name,
+                                 lhs_bind->sym->rename.buf,
+                                 rhs.dst_name);
+                        cg_write_inst(&p->cg, buf);
                     }
                 }
                 else if (op[0] == '(')
@@ -458,14 +499,14 @@ static struct Token* compile_expr(Parser* p, struct Token* cur_tok, struct ValDe
                 }
                 else
                 {
-                    mov_or_assign_dst(dst, lhs_bind->sym->rename.buf);
+                    mov_or_assign_dst(&p->cg, dst, lhs_bind->sym->rename.buf);
                 }
             }
             return cur_tok;
         }
         case LEX_NUMBER:
         {
-            mov_or_assign_dst(dst, token_str(p, cur_tok));
+            mov_or_assign_dst(&p->cg, dst, token_str(p, cur_tok));
             return cur_tok + 1;
         }
         default:
@@ -543,7 +584,7 @@ error:
 
 static struct Token* compile_declstmt(Parser* p, struct Token* cur_tok, struct BasicBlock* bb);
 static struct Token* compile_declspecs(Parser* p, struct Token* cur_tok);
-static struct Token* compile_declarator(Parser* p, struct Token* cur_tok, struct BasicBlock* bb)
+static struct Token* compile_declarator(Parser* p, struct Token* cur_tok, struct BasicBlock* bb, struct Symbol** p_sym)
 {
     struct Attribute attr = {0};
     if (cur_tok->type == LEX_ATTRIBUTE)
@@ -564,6 +605,7 @@ static struct Token* compile_declarator(Parser* p, struct Token* cur_tok, struct
     struct Token* id = cur_tok++;
     const char* name = token_str(p, id);
     struct Symbol* const sym = symbol_alloc();
+    if (p_sym) *p_sym = sym;
     if (attr.symname)
     {
         if (strlen(attr.symname) >= sizeof(sym->rename.buf))
@@ -578,56 +620,75 @@ static struct Token* compile_declarator(Parser* p, struct Token* cur_tok, struct
         }
         strcpy(sym->rename.buf, attr.symname);
     }
-    else
-    {
-        sym->rename = free_var_from(p, name);
-    }
     sym->intrinsic_asm_str = attr.asmstr;
-    scope_insert(&p->scope, name, sym);
-    if (cur_tok->type == LEX_SYMBOL)
+
+    const char ch = cur_tok->type == LEX_SYMBOL ? token_str(p, cur_tok)[0] : '\0';
+    if (ch == '(')
     {
-        const char ch = token_str(p, cur_tok)[0];
-        if (ch == '(')
+        if (sym->rename.buf[0])
         {
-            sym->is_function = 1;
-            ++cur_tok;
-            if (cur_tok->type == LEX_SYMBOL && token_str(p, cur_tok)[0] == ')')
+            if (sym->rename.buf[0] != '$' || !sym->rename.buf[1] || sym->rename.buf[strlen(sym->rename.buf) - 1] != '$')
             {
-                ++cur_tok;
-            }
-            else
-            {
-                while (cur_tok = compile_declspecs(p, cur_tok))
-                {
-                    ++sym->arg_count;
-                    if (!(cur_tok = compile_declarator(p, cur_tok, bb)))
-                    {
-                        return NULL;
-                    }
-                    if (cur_tok->type == LEX_SYMBOL)
-                    {
-                        const char ch = token_str(p, cur_tok)[0];
-                        if (ch == ',')
-                        {
-                            ++cur_tok;
-                            continue;
-                        }
-                        else if (ch == ')')
-                        {
-                            ++cur_tok;
-                            break;
-                        }
-                    }
-                    snprintf(s_error_buffer,
-                             sizeof(s_error_buffer),
-                             "%d:%d: error: expected ',' and further parameter declarations or ')'\n",
-                             cur_tok->rc.row,
-                             cur_tok->rc.col);
-                    return NULL;
-                }
+                snprintf(s_error_buffer,
+                         sizeof(s_error_buffer),
+                         "%d:%d: error: external symbol names must be of the form '$foo$' (was '%s')\n",
+                         cur_tok->rc.row,
+                         cur_tok->rc.col,
+                         sym->rename.buf);
+                return NULL;
             }
         }
-        else if (ch == '=')
+        else
+        {
+            sym->rename = extern_var_from(p, name);
+        }
+        scope_insert(&p->scope, name, sym);
+        sym->is_function = 1;
+        ++cur_tok;
+        if (cur_tok->type == LEX_SYMBOL && token_str(p, cur_tok)[0] == ')')
+        {
+            ++cur_tok;
+        }
+        else
+        {
+            while (cur_tok = compile_declspecs(p, cur_tok))
+            {
+                struct Symbol* arg_sym;
+                if (!(cur_tok = compile_declarator(p, cur_tok, bb, &arg_sym)))
+                {
+                    return NULL;
+                }
+                if (sym->arg_count < REG_COUNT) strcpy(arg_sym->rename.buf, PARAM_NAMES_ARR[sym->arg_count]);
+                ++sym->arg_count;
+                if (cur_tok->type == LEX_SYMBOL)
+                {
+                    const char ch = token_str(p, cur_tok)[0];
+                    if (ch == ',')
+                    {
+                        ++cur_tok;
+                        continue;
+                    }
+                    else if (ch == ')')
+                    {
+                        ++cur_tok;
+                        break;
+                    }
+                }
+                snprintf(s_error_buffer,
+                         sizeof(s_error_buffer),
+                         "%d:%d: error: expected ',' and further parameter declarations or ')'\n",
+                         cur_tok->rc.row,
+                         cur_tok->rc.col);
+                return NULL;
+            }
+        }
+    }
+    else
+    {
+        // not a function
+        if (!sym->rename.buf[0]) sym->rename = free_var_from(p, name);
+        scope_insert(&p->scope, name, sym);
+        if (ch == '=')
         {
             struct ValDest dst = dest_reg(sym->rename.buf);
             cur_tok = compile_expr(p, cur_tok + 1, &dst, bb);
@@ -652,24 +713,60 @@ static struct Token* compile_declspecs(Parser* p, struct Token* cur_tok)
     }
     return cur_tok;
 }
-
+static struct Token* compile_stmts(Parser* p, struct Token* cur_tok);
+static struct Token* compile_compound_stmt(Parser* p, struct Token* cur_tok, struct BasicBlock* bb)
+{
+    size_t scope_sz = scope_size(&p->scope);
+    if (cur_tok = compile_stmts(p, cur_tok))
+    {
+        if (cur_tok->type != LEX_SYMBOL || token_str(p, cur_tok)[0] != '}')
+        {
+            snprintf(s_error_buffer,
+                     sizeof(s_error_buffer),
+                     "%d:%d: error: expected '}'\n",
+                     cur_tok->rc.row,
+                     cur_tok->rc.col);
+            return NULL;
+        }
+        ++cur_tok;
+    }
+    scope_shrink_free_syms(&p->scope, scope_sz);
+    return cur_tok;
+}
 static struct Token* compile_declstmt(Parser* p, struct Token* cur_tok, struct BasicBlock* bb)
 {
     if (cur_tok = compile_declspecs(p, cur_tok))
     {
-        while (cur_tok = compile_declarator(p, cur_tok, bb))
+        size_t scope_sz;
+        struct Symbol* sym = NULL;
+        while (scope_sz = scope_size(&p->scope), cur_tok = compile_declarator(p, cur_tok, bb, &sym))
         {
             if (cur_tok->type == LEX_SYMBOL)
             {
                 const char ch = token_str(p, cur_tok)[0];
-                if (ch == ',')
+                if (ch == '{')
                 {
-                    ++cur_tok;
-                    continue;
+                    // begin compound block
+                    cg_mark_label(&p->cg, sym->rename.buf);
+                    cg_write_push_ret(&p->cg);
+                    cur_tok = compile_compound_stmt(p, cur_tok + 1, bb);
+                    cg_write_return(&p->cg);
+                    scope_shrink_free_syms(&p->scope, scope_sz + 1);
+                    return cur_tok;
                 }
-                else if (ch == ';')
+                else
                 {
-                    return cur_tok + 1;
+                    // since we aren't defining the function body, remove the parameters from the scope
+                    scope_shrink_free_syms(&p->scope, scope_sz + 1);
+                    if (ch == ',')
+                    {
+                        ++cur_tok;
+                        continue;
+                    }
+                    else if (ch == ';')
+                    {
+                        return cur_tok + 1;
+                    }
                 }
             }
             snprintf(s_error_buffer,
@@ -688,9 +785,15 @@ static struct Token* compile_stmt(Parser* p, struct Token* cur_tok, struct Basic
     switch (cur_tok->type)
     {
         case LEX_INT:
-        case LEX_VOID:
+        case LEX_VOID: return compile_declstmt(p, cur_tok, bb);
+        case LEX_RETURN:
         {
-            return compile_declstmt(p, cur_tok, bb);
+            struct ValDest dst = dest_reg(PARAM_NAMES_ARR[0]);
+            if (cur_tok = compile_expr(p, cur_tok + 1, &dst, bb))
+            {
+                cg_write_return(&p->cg);
+            }
+            return cur_tok;
         }
         case LEX_IDENT:
         {
@@ -722,6 +825,17 @@ static struct Token* compile_stmt(Parser* p, struct Token* cur_tok, struct Basic
             }
             return cur_tok;
         }
+        case LEX_SYMBOL:
+            if (token_str(p, cur_tok)[0] != ';')
+            {
+                snprintf(s_error_buffer,
+                         sizeof(s_error_buffer),
+                         "%d:%d: error: expected statement\n",
+                         cur_tok->rc.row,
+                         cur_tok->rc.col);
+                return NULL;
+            }
+            return cur_tok + 1;
         default:
             snprintf(s_error_buffer,
                      sizeof(s_error_buffer),
@@ -739,6 +853,7 @@ static struct Token* compile_stmts(Parser* p, struct Token* cur_tok)
     do
     {
         if (cur_tok->type == LEX_EOF) return cur_tok;
+        if (cur_tok->type == LEX_SYMBOL && token_str(p, cur_tok)[0] == '}') return cur_tok;
         cur_tok = compile_stmt(p, cur_tok, &bb);
         if (!cur_tok) return NULL;
     } while (1);
@@ -751,6 +866,7 @@ void parser_init(Parser* p)
     array_init(&p->strings_to_free);
     scope_init(&p->scope);
     scope_init(&p->type_scope);
+    cg_init(&p->cg);
     p->free_var_counter = 0;
 }
 void parser_destroy(Parser* p)
@@ -780,20 +896,18 @@ int parse(Parser* p, Lexer* l)
         // actually parse
         const size_t num_toks = p->toks.sz / sizeof(struct Token);
         struct Token* const arr_toks = (struct Token*)p->toks.data;
-        for (size_t i = 0; i < num_toks; ++i)
-        {
-            printf("parsing: %s\n", token_str(p, arr_toks + i));
-        }
-        printf("\nCode Gen\n--------\n");
+        cg_write_bin_entry(&p->cg);
         struct Token* tk = compile_stmts(p, arr_toks);
-        if (tk)
+        if (!tk) return 1;
+        if (tk->type != LEX_EOF)
         {
-            if (tk->type == LEX_EOF) return 0;
             snprintf(s_error_buffer, sizeof(s_error_buffer), "%d:%d: error: expected eof\n", tk->rc.row, tk->rc.col);
             return 1;
         }
-        else
-            return 1;
+
+        printf("\nCode Gen\n--------\n");
+        cg_emit(&p->cg);
+        return 0;
     }
     else if (l->state == LEX_MULTILINE_COMMENT)
     {
