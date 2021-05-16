@@ -4,4 +4,4 @@ project(mindustry.compiler C)
 
 add_compile_options(-Werror -std=c11)
 
-add_executable(main main.c lex.c parse.c)
+add_executable(main main.c lex.c parse.c array.c)

@@ -1,4 +1,13 @@
-result = sensor(nucleus1, __metaglass);
-write(cell1, 0);
-result = result < 11000;
-control(enabled, conveyor1, result, 0, 0, 0);
+void __attribute__((asmstr("write %0 %1 %2"))) write(int dst, int addr, int value);
+void __attribute__((asmstr("control enabled %0 %1 0 0 0"))) control_enabled(int tgt, int enabled);
+/* sense 'sense' from 'dst' and return the result */
+int __attribute__((asmstr("sensor %r %0 %1"))) sensor(int dst, int sense);
+
+int __attribute__((sym("@metaglass"))) metaglass;
+int __attribute__((sym("nucleus1"))) nucleus1;
+int __attribute__((sym("cell1"))) cell1;
+int __attribute__((sym("conveyor1"))) conveyor1;
+
+int result = sensor(nucleus1, metaglass);
+write(cell1, 0, result);
+control_enabled(conveyor1, result < 11000);

@@ -4,6 +4,8 @@
         "string.h": "c",
         "parsestate.h": "c",
         "tok.h": "c",
-        "lexstate.h": "c"
+        "lexstate.h": "c",
+        "array.h": "c",
+        "fwd.h": "c"
     }
 }
