@@ -256,6 +256,58 @@ int lex(Lexer* l, Buffer* buf)
                     {
                         l->state = LEX_RETURN;
                     }
+                    else if (l->sz == sizeof("if") - 1 && memcmp("if", l->tok, l->sz) == 0)
+                    {
+                        l->state = LEX_IF;
+                    }
+                    else if (l->sz == sizeof("for") - 1 && memcmp("for", l->tok, l->sz) == 0)
+                    {
+                        l->state = LEX_FOR;
+                    }
+                    else if (l->sz == sizeof("while") - 1 && memcmp("while", l->tok, l->sz) == 0)
+                    {
+                        l->state = LEX_WHILE;
+                    }
+                    else if (l->sz == sizeof("do") - 1 && memcmp("do", l->tok, l->sz) == 0)
+                    {
+                        l->state = LEX_DO;
+                    }
+                    else if (l->sz == sizeof("auto") - 1 && memcmp("auto", l->tok, l->sz) == 0)
+                    {
+                        l->state = LEX_AUTO;
+                    }
+                    else if (l->sz == sizeof("struct") - 1 && memcmp("struct", l->tok, l->sz) == 0)
+                    {
+                        l->state = LEX_STRUCT;
+                    }
+                    else if (l->sz == sizeof("short") - 1 && memcmp("short", l->tok, l->sz) == 0)
+                    {
+                        l->state = LEX_INT;
+                    }
+                    else if (l->sz == sizeof("char") - 1 && memcmp("char", l->tok, l->sz) == 0)
+                    {
+                        l->state = LEX_INT;
+                    }
+                    else if (l->sz == sizeof("long") - 1 && memcmp("long", l->tok, l->sz) == 0)
+                    {
+                        l->state = LEX_INT;
+                    }
+                    else if (l->sz == sizeof("register") - 1 && memcmp("register", l->tok, l->sz) == 0)
+                    {
+                        l->state = LEX_REGISTER;
+                    }
+                    else if (l->sz == sizeof("const") - 1 && memcmp("const", l->tok, l->sz) == 0)
+                    {
+                        l->state = LEX_CONST;
+                    }
+                    else if (l->sz == sizeof("volatile") - 1 && memcmp("volatile", l->tok, l->sz) == 0)
+                    {
+                        l->state = LEX_VOLATILE;
+                    }
+                    else if (l->sz == sizeof("else") - 1 && memcmp("else", l->tok, l->sz) == 0)
+                    {
+                        l->state = LEX_ELSE;
+                    }
                     if (rc = emit_token(l)) return rc;
                     l->state = LEX_START;
                     goto LEX_START;

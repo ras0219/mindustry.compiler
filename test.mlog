@@ -54,12 +54,18 @@ int my_sensor(int tgt);
 
 void main()
 {
-foo:
     int result = my_sensor(nucleus1);
     print(thorium_msg);
     print(result);
     print_flush(message1);
-    draw_clear(255, 0, 0);
+    if (result < 11001)
+    {
+        draw_clear(255, 0, 0);
+    }
+    else
+    {
+        draw_clear(0, 255, 0);
+    }
     draw_flush(display1);
 }
 

@@ -10,6 +10,7 @@
 struct ValDest
 {
     const char* dst_name;
+    int dst_is_const;
 };
 
 struct Token
@@ -23,6 +24,15 @@ static struct ValDest dest_reg(const char* ch)
 {
     struct ValDest ret = {
         .dst_name = ch,
+        .dst_is_const = 0,
+    };
+    return ret;
+}
+static struct ValDest dest_const(const char* ch)
+{
+    struct ValDest ret = {
+        .dst_name = ch,
+        .dst_is_const = 1,
     };
     return ret;
 }
@@ -206,6 +216,22 @@ static void bb_close(struct Parser* p, struct BasicBlock* b)
 
 static struct Token* compile_expr(Parser* p, struct Token* cur_tok, struct ValDest* dst, struct BasicBlock* bb);
 
+static void mov_or_assign_dsts(struct CodeGen* cg, struct ValDest* dst, struct ValDest* src)
+{
+    if (dst->dst_name)
+    {
+        cg_write_inst_set(cg, dst->dst_name, src->dst_name);
+        if (dst->dst_is_const)
+        {
+            fprintf(stderr, "internal compiler error -- attempting to write to constant\n");
+            abort();
+        }
+    }
+    else
+    {
+        *dst = *src;
+    }
+}
 static void mov_or_assign_dst(struct CodeGen* cg, struct ValDest* dst, const char* val)
 {
     if (dst->dst_name)
@@ -436,7 +462,7 @@ static struct Token* compile_call_expr(Parser* p,
 
 static const struct ValDest s_any_destination = {.dst_name = NULL};
 
-static struct Token* compile_expr(Parser* p, struct Token* cur_tok, struct ValDest* dst, struct BasicBlock* bb)
+static struct Token* compile_expr_atom(Parser* p, struct Token* cur_tok, struct ValDest* dst, struct BasicBlock* bb)
 {
     switch (cur_tok->type)
     {
@@ -458,30 +484,8 @@ static struct Token* compile_expr(Parser* p, struct Token* cur_tok, struct ValDe
             {
                 struct Token* tok_op = cur_tok;
                 char* op = token_str(p, tok_op);
-                if (op[0] == '=')
-                {
-                    struct ValDest new_dst = dest_reg(lhs_bind->sym->rename.buf);
-                    cur_tok = compile_expr(p, cur_tok + 1, &new_dst, bb);
-                    if (!cur_tok) return NULL;
-                    mov_or_assign_dst(&p->cg, dst, new_dst.dst_name);
-                }
-                else if (op[0] == '<')
-                {
-                    dst_fill_name(p, dst);
-                    struct ValDest rhs = s_any_destination;
-                    if (cur_tok = compile_expr(p, cur_tok + 1, &rhs, bb))
-                    {
-                        char buf[128];
-                        snprintf(buf,
-                                 sizeof(buf),
-                                 "op lessThan %s %s %s",
-                                 dst->dst_name,
-                                 lhs_bind->sym->rename.buf,
-                                 rhs.dst_name);
-                        cg_write_inst(&p->cg, buf);
-                    }
-                }
-                else if (op[0] == '(')
+
+                if (op[0] == '(')
                 {
                     if (!lhs_bind->sym->is_function)
                     {
@@ -508,11 +512,16 @@ static struct Token* compile_expr(Parser* p, struct Token* cur_tok, struct ValDe
                     mov_or_assign_dst(&p->cg, dst, lhs_bind->sym->rename.buf);
                 }
             }
+            else
+            {
+                mov_or_assign_dst(&p->cg, dst, lhs_bind->sym->rename.buf);
+            }
             return cur_tok;
         }
         case LEX_NUMBER:
         {
-            mov_or_assign_dst(&p->cg, dst, token_str(p, cur_tok));
+            struct ValDest src = dest_const(token_str(p, cur_tok));
+            mov_or_assign_dsts(&p->cg, dst, &src);
             return cur_tok + 1;
         }
         default:
@@ -523,6 +532,53 @@ static struct Token* compile_expr(Parser* p, struct Token* cur_tok, struct ValDe
                      cur_tok->rc.col);
             return NULL;
     }
+}
+
+static struct Token* compile_expr(Parser* p, struct Token* cur_tok, struct ValDest* dst, struct BasicBlock* bb)
+{
+    struct ValDest lhs_dst = s_any_destination;
+    if (!(cur_tok = compile_expr_atom(p, cur_tok, &lhs_dst, bb))) return NULL;
+
+    if (cur_tok->type == LEX_SYMBOL)
+    {
+        struct Token* tok_op = cur_tok;
+        char* op = token_str(p, tok_op);
+        if (op[0] == '=')
+        {
+            if (lhs_dst.dst_is_const)
+            {
+                snprintf(s_error_buffer,
+                         sizeof(s_error_buffer),
+                         "%d:%d: error: illegal assignment to constant value\n",
+                         cur_tok->rc.row,
+                         cur_tok->rc.col);
+                return NULL;
+            }
+            cur_tok = compile_expr(p, cur_tok + 1, &lhs_dst, bb);
+            if (!cur_tok) return NULL;
+            mov_or_assign_dsts(&p->cg, dst, &lhs_dst);
+        }
+        else if (op[0] == '<')
+        {
+            dst_fill_name(p, dst);
+            struct ValDest rhs = s_any_destination;
+            if (cur_tok = compile_expr(p, cur_tok + 1, &rhs, bb))
+            {
+                char buf[128];
+                snprintf(buf, sizeof(buf), "op lessThan %s %s %s", dst->dst_name, lhs_dst.dst_name, rhs.dst_name);
+                cg_write_inst(&p->cg, buf);
+            }
+        }
+        else
+        {
+            mov_or_assign_dsts(&p->cg, dst, &lhs_dst);
+        }
+    }
+    else
+    {
+        mov_or_assign_dsts(&p->cg, dst, &lhs_dst);
+    }
+    return cur_tok;
 }
 struct Attribute
 {
@@ -807,6 +863,67 @@ static struct Token* compile_stmt(Parser* p, struct Token* cur_tok, struct Basic
             }
             return cur_tok;
         }
+        case LEX_IF:
+        {
+            ++cur_tok;
+            if (cur_tok->type == LEX_SYMBOL && token_str(p, cur_tok)[0] == '(')
+            {
+                ++cur_tok;
+            }
+            else
+            {
+                snprintf(s_error_buffer,
+                         sizeof(s_error_buffer),
+                         "%d:%d: error: expected '('\n",
+                         cur_tok->rc.row,
+                         cur_tok->rc.col);
+                return NULL;
+            }
+            struct ValDest dst = s_any_destination;
+            if (!(cur_tok = compile_expr(p, cur_tok, &dst, bb)))
+            {
+                return cur_tok;
+            }
+            struct FreeVar else_lbl = free_var_label(p);
+            char buf[64];
+            if (sizeof(buf) <= snprintf(buf, sizeof(buf), "jump %s notEqual %s true", else_lbl.buf, dst.dst_name))
+            {
+                fprintf(stderr, "resource exceeded\n");
+                abort();
+            }
+            cg_write_inst(&p->cg, buf);
+            if (cur_tok->type == LEX_SYMBOL && token_str(p, cur_tok)[0] == ')')
+            {
+                ++cur_tok;
+            }
+            else
+            {
+                snprintf(s_error_buffer,
+                         sizeof(s_error_buffer),
+                         "%d:%d: error: expected ')'\n",
+                         cur_tok->rc.row,
+                         cur_tok->rc.col);
+                return NULL;
+            }
+            if (cur_tok = compile_stmt(p, cur_tok, bb))
+            {
+                if (cur_tok->type == LEX_ELSE)
+                {
+                    ++cur_tok;
+                    struct FreeVar endif_lbl = free_var_label(p);
+                    cg_write_inst_set(&p->cg, "@counter", endif_lbl.buf);
+                    cg_mark_label(&p->cg, else_lbl.buf);
+                    cur_tok = compile_stmt(p, cur_tok, bb);
+                    cg_mark_label(&p->cg, endif_lbl.buf);
+                    return cur_tok;
+                }
+                else
+                {
+                    cg_mark_label(&p->cg, else_lbl.buf);
+                }
+            }
+            return cur_tok;
+        }
         case LEX_GOTO:
         {
             ++cur_tok;
@@ -874,7 +991,30 @@ static struct Token* compile_stmt(Parser* p, struct Token* cur_tok, struct Basic
             return cur_tok;
         }
         case LEX_SYMBOL:
-            if (token_str(p, cur_tok)[0] != ';')
+        {
+            const char ch = token_str(p, cur_tok)[0];
+            if (ch == ';')
+            {
+                return cur_tok + 1;
+            }
+            else if (ch == '{')
+            {
+                if (cur_tok = compile_stmts(p, cur_tok + 1))
+                {
+                    if (cur_tok->type != LEX_SYMBOL || token_str(p, cur_tok)[0] != '}')
+                    {
+                        snprintf(s_error_buffer,
+                                 sizeof(s_error_buffer),
+                                 "%d:%d: error: expected '}'\n",
+                                 cur_tok->rc.row,
+                                 cur_tok->rc.col);
+                        return NULL;
+                    }
+                    ++cur_tok;
+                }
+                return cur_tok;
+            }
+            else
             {
                 snprintf(s_error_buffer,
                          sizeof(s_error_buffer),
@@ -883,7 +1023,7 @@ static struct Token* compile_stmt(Parser* p, struct Token* cur_tok, struct Basic
                          cur_tok->rc.col);
                 return NULL;
             }
-            return cur_tok + 1;
+        }
         default:
             snprintf(s_error_buffer,
                      sizeof(s_error_buffer),
