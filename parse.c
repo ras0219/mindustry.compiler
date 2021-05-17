@@ -246,12 +246,12 @@ static void mov_or_assign_dst(struct CodeGen* cg, struct ValDest* dst, const cha
 
 struct ParamList
 {
-    const struct FreeVar param;
+    struct ValDest param;
     int idx;
     struct ParamList* prev;
 };
 
-struct ParamList make_plist(struct ParamList* prev, struct FreeVar param)
+struct ParamList make_plist(struct ParamList* prev, struct ValDest param)
 {
     struct ParamList ret = {
         .param = param,
@@ -378,13 +378,13 @@ static struct Token* compile_call_expr_sym(Parser* p,
                                          cur_tok->rc.col);
                                 return NULL;
                             }
-                            size_t len = strlen(p->param.buf);
+                            size_t len = strlen(p->param.dst_name);
                             if (i + len > 127)
                             {
                                 fprintf(stderr, "resource exceeded\n");
                                 abort();
                             }
-                            memcpy(buf + i, p->param.buf, len);
+                            memcpy(buf + i, p->param.dst_name, len);
                             i += len;
                         }
                         ++s;
@@ -396,7 +396,7 @@ static struct Token* compile_call_expr_sym(Parser* p,
                 }
                 buf[i] = 0;
                 cg_write_inst(&p->cg, buf);
-                if (!dst->dst_name) dst->dst_name = "null";
+                if (!dst->dst_name) *dst = dest_const("null");
             }
             else
             {
@@ -412,13 +412,14 @@ static struct Token* compile_call_expr_sym(Parser* p,
                                  REG_COUNT);
                         return NULL;
                     }
-                    cg_write_inst_set(&p->cg, PARAM_NAMES_ARR[params->idx], params->param.buf);
+                    cg_write_inst_set(&p->cg, PARAM_NAMES_ARR[params->idx], params->param.dst_name);
                     params = params->prev;
                 }
 
                 const struct FreeVar fv_ret = free_var(p);
                 cg_write_inst(&p->cg, "op add ret 1 @counter");
                 cg_write_inst_set(&p->cg, "@counter", fn->rename.buf);
+                dst_fill_name(p, dst);
                 mov_or_assign_dst(&p->cg, dst, PARAM_NAMES_ARR[0]);
             }
             return cur_tok + 1;
@@ -436,6 +437,8 @@ static struct Token* compile_call_expr_sym(Parser* p,
     return NULL;
 }
 
+static const struct ValDest s_any_destination = {.dst_name = NULL};
+
 static struct Token* compile_call_expr(Parser* p,
                                        struct Token* cur_tok,
                                        struct ValDest* dst,
@@ -443,24 +446,24 @@ static struct Token* compile_call_expr(Parser* p,
                                        struct ParamList* params,
                                        struct BasicBlock* bb)
 {
-    struct ParamList plist = make_plist(params, free_var(p));
-    if (fn->arg_count <= plist.idx)
-    {
-        snprintf(s_error_buffer,
-                 sizeof(s_error_buffer),
-                 "%d:%d: error: function only accepts '%d' arguments\n",
-                 cur_tok->rc.row,
-                 cur_tok->rc.col,
-                 fn->arg_count);
-        return NULL;
-    }
-    struct ValDest new_dst = dest_reg(plist.param.buf);
+    struct ValDest new_dst = s_any_destination;
     if (cur_tok = compile_expr(p, cur_tok, &new_dst, bb))
+    {
+        struct ParamList plist = make_plist(params, new_dst);
+        if (fn->arg_count <= plist.idx)
+        {
+            snprintf(s_error_buffer,
+                     sizeof(s_error_buffer),
+                     "%d:%d: error: function only accepts '%d' arguments\n",
+                     cur_tok->rc.row,
+                     cur_tok->rc.col,
+                     fn->arg_count);
+            return NULL;
+        }
         cur_tok = compile_call_expr_sym(p, cur_tok, dst, fn, &plist, bb);
+    }
     return cur_tok;
 }
-
-static const struct ValDest s_any_destination = {.dst_name = NULL};
 
 static struct Token* compile_expr_atom(Parser* p, struct Token* cur_tok, struct ValDest* dst, struct BasicBlock* bb)
 {
