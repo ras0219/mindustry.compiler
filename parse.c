@@ -44,6 +44,12 @@ static struct FreeVar free_var(Parser* p)
     snprintf(ret.buf, sizeof(ret.buf), "_%d", p->free_var_counter++);
     return ret;
 }
+static struct FreeVar free_var_label(Parser* p)
+{
+    struct FreeVar ret;
+    snprintf(ret.buf, sizeof(ret.buf), "$%d$", p->free_var_counter++);
+    return ret;
+}
 
 static struct FreeVar free_var_from(Parser* p, const char* base)
 {
@@ -747,6 +753,12 @@ static struct Token* compile_declstmt(Parser* p, struct Token* cur_tok, struct B
                 if (ch == '{')
                 {
                     // begin compound block
+                    if (sizeof(p->fn_label_prefix) <=
+                        snprintf(p->fn_label_prefix, sizeof(p->fn_label_prefix), "%d_", p->free_var_counter++))
+                    {
+                        fprintf(stderr, "resource exceeded -- too many symbols\n");
+                        abort();
+                    }
                     cg_mark_label(&p->cg, sym->rename.buf);
                     cg_write_push_ret(&p->cg);
                     cur_tok = compile_compound_stmt(p, cur_tok + 1, bb);
@@ -792,6 +804,42 @@ static struct Token* compile_stmt(Parser* p, struct Token* cur_tok, struct Basic
             if (cur_tok = compile_expr(p, cur_tok + 1, &dst, bb))
             {
                 cg_write_return(&p->cg);
+            }
+            return cur_tok;
+        }
+        case LEX_GOTO:
+        {
+            ++cur_tok;
+            if (cur_tok->type != LEX_IDENT)
+            {
+                snprintf(s_error_buffer,
+                         sizeof(s_error_buffer),
+                         "%d:%d: error: expected label to go to\n",
+                         cur_tok->rc.row,
+                         cur_tok->rc.col);
+                return NULL;
+            }
+            char buf[64];
+            const char* const cur_tok_str = token_str(p, cur_tok);
+            if (sizeof(buf) <= snprintf(buf, sizeof(buf), "set @counter $%s%s$", p->fn_label_prefix, cur_tok_str))
+            {
+                fprintf(stderr, "resource exceeded: label too long: '%s'\n", cur_tok_str);
+                abort();
+            }
+            cg_write_inst(&p->cg, buf);
+            ++cur_tok;
+            if (cur_tok->type == LEX_SYMBOL && token_str(p, cur_tok)[0] == ';')
+            {
+                ++cur_tok;
+            }
+            else
+            {
+                snprintf(s_error_buffer,
+                         sizeof(s_error_buffer),
+                         "%d:%d: error: expected semicolon\n",
+                         cur_tok->rc.row,
+                         cur_tok->rc.col);
+                return NULL;
             }
             return cur_tok;
         }
@@ -854,6 +902,20 @@ static struct Token* compile_stmts(Parser* p, struct Token* cur_tok)
     {
         if (cur_tok->type == LEX_EOF) return cur_tok;
         if (cur_tok->type == LEX_SYMBOL && token_str(p, cur_tok)[0] == '}') return cur_tok;
+
+        // check for label
+        if (cur_tok->type == LEX_IDENT && cur_tok[1].type == LEX_SYMBOL && token_str(p, cur_tok + 1)[0] == ':')
+        {
+            const char* const str = token_str(p, cur_tok);
+            char buf[64];
+            if (sizeof(buf) <= snprintf(buf, sizeof(buf), "$%s%s$", p->fn_label_prefix, str))
+            {
+                fprintf(stderr, "resource exceeded: label too long: '%s'\n", str);
+                abort();
+            }
+            cg_mark_label(&p->cg, buf);
+            cur_tok += 2;
+        }
         cur_tok = compile_stmt(p, cur_tok, &bb);
         if (!cur_tok) return NULL;
     } while (1);
@@ -868,6 +930,7 @@ void parser_init(Parser* p)
     scope_init(&p->type_scope);
     cg_init(&p->cg);
     p->free_var_counter = 0;
+    memset(p->fn_label_prefix, 0, sizeof(p->fn_label_prefix));
 }
 void parser_destroy(Parser* p)
 {

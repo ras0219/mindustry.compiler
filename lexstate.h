@@ -17,6 +17,7 @@ enum LexerState_t
     LEX_ATTRIBUTE,
     LEX_INT,
     LEX_VOID,
+    LEX_GOTO,
     LEX_RETURN,
 };
 

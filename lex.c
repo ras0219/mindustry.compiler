@@ -11,7 +11,7 @@ static int is_ascii_symbol(int ch)
 {
     return ch == '/' || ch == '(' || ch == ')' || ch == '=' || ch == ',' || ch == ';' || ch == '[' || ch == ']' ||
            ch == '*' || ch == '%' || ch == '&' || ch == '+' || ch == '-' || ch == '<' || ch == '>' || ch == '{' ||
-           ch == '}';
+           ch == '}' || ch == ':';
 }
 
 static int emit_token(Lexer* l)
@@ -247,6 +247,10 @@ int lex(Lexer* l, Buffer* buf)
                     else if (l->sz == sizeof("void") - 1 && memcmp("void", l->tok, l->sz) == 0)
                     {
                         l->state = LEX_VOID;
+                    }
+                    else if (l->sz == sizeof("goto") - 1 && memcmp("goto", l->tok, l->sz) == 0)
+                    {
+                        l->state = LEX_GOTO;
                     }
                     else if (l->sz == sizeof("return") - 1 && memcmp("return", l->tok, l->sz) == 0)
                     {

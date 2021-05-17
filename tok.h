@@ -79,6 +79,8 @@ typedef struct Parser
     int free_var_counter;
     struct Array strings_to_free;
 
+    char fn_label_prefix[16];
+
     struct Scope scope;
     struct Scope type_scope;
 
