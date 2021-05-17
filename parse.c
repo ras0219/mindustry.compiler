@@ -288,6 +288,7 @@ static void dst_fill_name(Parser* p, struct ValDest* dst)
         struct FreeVar fv_ret = free_var(p);
         dst->dst_name = my_strdup(fv_ret.buf);
         array_push(&p->strings_to_free, dst->dst_name, sizeof(dst->dst_name));
+        dst->dst_is_const = 0;
     }
 }
 
@@ -418,7 +419,7 @@ static struct Token* compile_call_expr_sym(Parser* p,
 
                 const struct FreeVar fv_ret = free_var(p);
                 cg_write_inst(&p->cg, "op add ret 1 @counter");
-                cg_write_inst_set(&p->cg, "@counter", fn->rename.buf);
+                cg_write_inst_jump(&p->cg, fn->rename.buf);
                 dst_fill_name(p, dst);
                 mov_or_assign_dst(&p->cg, dst, PARAM_NAMES_ARR[0]);
             }
@@ -914,7 +915,7 @@ static struct Token* compile_stmt(Parser* p, struct Token* cur_tok, struct Basic
                 {
                     ++cur_tok;
                     struct FreeVar endif_lbl = free_var_label(p);
-                    cg_write_inst_set(&p->cg, "@counter", endif_lbl.buf);
+                    cg_write_inst_jump(&p->cg, endif_lbl.buf);
                     cg_mark_label(&p->cg, else_lbl.buf);
                     cur_tok = compile_stmt(p, cur_tok, bb);
                     cg_mark_label(&p->cg, endif_lbl.buf);
@@ -941,7 +942,7 @@ static struct Token* compile_stmt(Parser* p, struct Token* cur_tok, struct Basic
             }
             char buf[64];
             const char* const cur_tok_str = token_str(p, cur_tok);
-            if (sizeof(buf) <= snprintf(buf, sizeof(buf), "set @counter $%s%s$", p->fn_label_prefix, cur_tok_str))
+            if (sizeof(buf) <= snprintf(buf, sizeof(buf), "$%s%s$", p->fn_label_prefix, cur_tok_str))
             {
                 fprintf(stderr, "resource exceeded: label too long: '%s'\n", cur_tok_str);
                 abort();

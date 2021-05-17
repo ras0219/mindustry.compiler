@@ -94,6 +94,7 @@ void cg_init(struct CodeGen* cg);
 void cg_write_bin_entry(struct CodeGen* cg);
 void cg_write_push_ret(struct CodeGen* cg);
 void cg_write_return(struct CodeGen* cg);
+void cg_write_inst_jump(struct CodeGen* cg, const char* dst);
 void cg_write_inst_set(struct CodeGen* cg, const char* dst, const char* src);
 void cg_write_inst(struct CodeGen* cg, const char* inst);
 void cg_emit(struct CodeGen* cg);

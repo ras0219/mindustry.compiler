@@ -14,7 +14,7 @@ void cg_init(struct CodeGen* cg)
 void cg_write_bin_entry(struct CodeGen* cg)
 {
     cg_write_inst(cg, "set __retstk__ $__fn_return__$");
-    cg_write_inst(cg, "set ret 1");
+    cg_write_inst(cg, "set ret 0");
     cg_write_inst(cg, "jump $main$ always");
 
     cg_mark_label(cg, "$__fn_return__$");
@@ -49,9 +49,16 @@ void cg_write_inst_set(struct CodeGen* cg, const char* dst, const char* src)
     snprintf(buf, sizeof(buf), "set %s %s", dst, src);
     cg_write_inst(cg, buf);
 }
+void cg_write_inst_jump(struct CodeGen* cg, const char* dst)
+{
+    char buf[64];
+    snprintf(buf, sizeof(buf), "jump %s always", dst);
+    cg_write_inst(cg, buf);
+}
 
 void cg_write_inst(struct CodeGen* cg, const char* inst)
 {
+    printf("%03lu: %s\n", cg->lines, inst);
     static const char s_nl = '\n';
     array_push(&cg->text, inst, strlen(inst));
     array_push(&cg->text, &s_nl, 1);
@@ -59,6 +66,7 @@ void cg_write_inst(struct CodeGen* cg, const char* inst)
 }
 void cg_mark_label(struct CodeGen* cg, const char* sym)
 {
+    printf("   : %s\n", sym);
     const size_t sym_len = strlen(sym);
     if (sym[0] != '$' || sym_len < 2 || sym[sym_len - 1] != '$')
     {
