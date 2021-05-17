@@ -45,16 +45,16 @@ void __attribute__((asmstr("printflush %0"))) print_flush(int device);
 /* sense 'sense' from 'dst' and return the result */
 int __attribute__((asmstr("sensor %r %0 %1"))) sensor(int dst, int sense);
 
-int __attribute__((sym("message1"))) message1;
-int __attribute__((sym("@thorium"))) thorium;
-int __attribute__((sym("nucleus1"))) nucleus1;
-int __attribute__((sym("\"thorium: \""))) thorium_msg;
+const int __attribute__((sym("message1"))) message1;
+const int __attribute__((sym("@thorium"))) thorium;
+const int __attribute__((sym("nucleus1"))) nucleus1;
+const int __attribute__((sym("\"thorium: \""))) thorium_msg;
 
 int my_sensor(int tgt);
 
 void main()
 {
-    int result = my_sensor(nucleus1);
+    const int result = my_sensor(thorium);
     print(thorium_msg);
     print(result);
     print_flush(message1);
@@ -69,4 +69,4 @@ void main()
     draw_flush(display1);
 }
 
-int my_sensor(int tgt) { return sensor(tgt, thorium); }
+int my_sensor(int mat) { return sensor(nucleus1, mat); }

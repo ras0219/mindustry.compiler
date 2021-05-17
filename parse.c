@@ -20,11 +20,33 @@ struct Token
     ptrdiff_t sp_offset;
 };
 
+struct FreeVar
+{
+    char buf[24];
+};
+struct Symbol
+{
+    struct FreeVar rename;
+    char incomplete : 1;
+    char is_function : 1;
+    char is_const : 1;
+    int arg_count;
+    const char* intrinsic_asm_str;
+};
+
 static struct ValDest dest_reg(const char* ch)
 {
     struct ValDest ret = {
         .dst_name = ch,
         .dst_is_const = 0,
+    };
+    return ret;
+}
+static struct ValDest dest_sym(const struct Symbol* sym)
+{
+    struct ValDest ret = {
+        .dst_name = sym->rename.buf,
+        .dst_is_const = sym->is_const,
     };
     return ret;
 }
@@ -43,10 +65,6 @@ static char* token_str(Parser* p, const struct Token* tk) { return (char*)p->str
 
 static const char* PARAM_NAMES_ARR[REG_COUNT] = {"eax", "ebx", "ecx", "edx", "eex", "efx"};
 
-struct FreeVar
-{
-    char buf[24];
-};
 static struct FreeVar s_freevar_zero = {0};
 static struct FreeVar free_var(Parser* p)
 {
@@ -78,15 +96,6 @@ static struct FreeVar extern_var_from(Parser* p, const char* base)
     return ret;
 }
 
-struct Symbol
-{
-    struct FreeVar rename;
-    char incomplete : 1;
-    char is_function : 1;
-    int arg_count;
-    const char* intrinsic_asm_str;
-};
-
 static void symbol_destroy(struct Symbol* sym) { }
 static void symbol_free(struct Symbol* sym) { free(sym); }
 static void symbol_init(struct Symbol* ret)
@@ -94,6 +103,7 @@ static void symbol_init(struct Symbol* ret)
     ret->rename = s_freevar_zero;
     ret->incomplete = 0;
     ret->is_function = 0;
+    ret->is_const = 0;
     ret->arg_count = 0;
     ret->intrinsic_asm_str = NULL;
 }
@@ -466,6 +476,8 @@ static struct Token* compile_call_expr(Parser* p,
     return cur_tok;
 }
 
+// https://en.cppreference.com/w/cpp/language/operator_precedence
+// Precedence level 2
 static struct Token* compile_expr_atom(Parser* p, struct Token* cur_tok, struct ValDest* dst, struct BasicBlock* bb)
 {
     switch (cur_tok->type)
@@ -484,6 +496,7 @@ static struct Token* compile_expr_atom(Parser* p, struct Token* cur_tok, struct 
                          token_str(p, lhs));
                 return NULL;
             }
+            struct ValDest lhs_dst = dest_sym(lhs_bind->sym);
             if (cur_tok->type == LEX_SYMBOL)
             {
                 struct Token* tok_op = cur_tok;
@@ -513,12 +526,12 @@ static struct Token* compile_expr_atom(Parser* p, struct Token* cur_tok, struct 
                 }
                 else
                 {
-                    mov_or_assign_dst(&p->cg, dst, lhs_bind->sym->rename.buf);
+                    mov_or_assign_dsts(&p->cg, dst, &lhs_dst);
                 }
             }
             else
             {
-                mov_or_assign_dst(&p->cg, dst, lhs_bind->sym->rename.buf);
+                mov_or_assign_dsts(&p->cg, dst, &lhs_dst);
             }
             return cur_tok;
         }
@@ -553,9 +566,10 @@ static struct Token* compile_expr(Parser* p, struct Token* cur_tok, struct ValDe
             {
                 snprintf(s_error_buffer,
                          sizeof(s_error_buffer),
-                         "%d:%d: error: illegal assignment to constant value\n",
+                         "%d:%d: error: illegal assignment to constant value '%s'\n",
                          cur_tok->rc.row,
-                         cur_tok->rc.col);
+                         cur_tok->rc.col,
+                         lhs_dst.dst_name);
                 return NULL;
             }
             cur_tok = compile_expr(p, cur_tok + 1, &lhs_dst, bb);
@@ -570,6 +584,61 @@ static struct Token* compile_expr(Parser* p, struct Token* cur_tok, struct ValDe
             {
                 char buf[128];
                 snprintf(buf, sizeof(buf), "op lessThan %s %s %s", dst->dst_name, lhs_dst.dst_name, rhs.dst_name);
+                cg_write_inst(&p->cg, buf);
+            }
+        }
+        else if (op[0] == '>')
+        {
+            dst_fill_name(p, dst);
+            struct ValDest rhs = s_any_destination;
+            if (cur_tok = compile_expr(p, cur_tok + 1, &rhs, bb))
+            {
+                char buf[128];
+                snprintf(buf, sizeof(buf), "op lessThan %s %s %s", dst->dst_name, rhs.dst_name, lhs_dst.dst_name);
+                cg_write_inst(&p->cg, buf);
+            }
+        }
+        else if (op[0] == '+')
+        {
+            dst_fill_name(p, dst);
+            struct ValDest rhs = s_any_destination;
+            if (cur_tok = compile_expr(p, cur_tok + 1, &rhs, bb))
+            {
+                char buf[128];
+                snprintf(buf, sizeof(buf), "op add %s %s %s", dst->dst_name, lhs_dst.dst_name, rhs.dst_name);
+                cg_write_inst(&p->cg, buf);
+            }
+        }
+        else if (op[0] == '-')
+        {
+            dst_fill_name(p, dst);
+            struct ValDest rhs = s_any_destination;
+            if (cur_tok = compile_expr(p, cur_tok + 1, &rhs, bb))
+            {
+                char buf[128];
+                snprintf(buf, sizeof(buf), "op sub %s %s %s", dst->dst_name, lhs_dst.dst_name, rhs.dst_name);
+                cg_write_inst(&p->cg, buf);
+            }
+        }
+        else if (op[0] == '*')
+        {
+            dst_fill_name(p, dst);
+            struct ValDest rhs = s_any_destination;
+            if (cur_tok = compile_expr(p, cur_tok + 1, &rhs, bb))
+            {
+                char buf[128];
+                snprintf(buf, sizeof(buf), "op mul %s %s %s", dst->dst_name, lhs_dst.dst_name, rhs.dst_name);
+                cg_write_inst(&p->cg, buf);
+            }
+        }
+        else if (op[0] == '/')
+        {
+            dst_fill_name(p, dst);
+            struct ValDest rhs = s_any_destination;
+            if (cur_tok = compile_expr(p, cur_tok + 1, &rhs, bb))
+            {
+                char buf[128];
+                snprintf(buf, sizeof(buf), "op idiv %s %s %s", dst->dst_name, lhs_dst.dst_name, rhs.dst_name);
                 cg_write_inst(&p->cg, buf);
             }
         }
@@ -648,8 +717,13 @@ error:
     return NULL;
 }
 
+struct DeclSpecs
+{
+    int is_const : 1;
+    int is_volatile : 1;
+};
 static struct Token* compile_declstmt(Parser* p, struct Token* cur_tok, struct BasicBlock* bb);
-static struct Token* compile_declspecs(Parser* p, struct Token* cur_tok);
+static struct Token* compile_declspecs(Parser* p, struct Token* cur_tok, struct DeclSpecs* specs);
 static struct Token* compile_declarator(Parser* p, struct Token* cur_tok, struct BasicBlock* bb, struct Symbol** p_sym)
 {
     struct Attribute attr = {0};
@@ -717,7 +791,8 @@ static struct Token* compile_declarator(Parser* p, struct Token* cur_tok, struct
         }
         else
         {
-            while (cur_tok = compile_declspecs(p, cur_tok))
+            struct DeclSpecs specs = {0};
+            while (cur_tok = compile_declspecs(p, cur_tok, &specs))
             {
                 struct Symbol* arg_sym;
                 if (!(cur_tok = compile_declarator(p, cur_tok, bb, &arg_sym)))
@@ -762,22 +837,53 @@ static struct Token* compile_declarator(Parser* p, struct Token* cur_tok, struct
     }
     return cur_tok;
 }
-
-static struct Token* compile_declspecs(Parser* p, struct Token* cur_tok)
+static struct Token* compile_declspecs(Parser* p, struct Token* cur_tok, struct DeclSpecs* specs)
 {
-    if (cur_tok->type == LEX_IDENT)
+    do
     {
-        struct Binding* const cur_bind = scope_find(&p->type_scope, token_str(p, cur_tok));
-        if (cur_bind)
+        if (cur_tok->type == LEX_IDENT)
         {
-            cur_tok = compile_declspecs(p, cur_tok + 1);
+            struct Binding* const cur_bind = scope_find(&p->type_scope, token_str(p, cur_tok));
+            if (!cur_bind)
+            {
+                return cur_tok;
+            }
         }
-    }
-    else if (cur_tok->type == LEX_VOID || cur_tok->type == LEX_INT)
-    {
-        cur_tok = compile_declspecs(p, cur_tok + 1);
-    }
-    return cur_tok;
+        else if (cur_tok->type == LEX_VOID || cur_tok->type == LEX_INT)
+        {
+        }
+        else if (cur_tok->type == LEX_CONST)
+        {
+            if (specs->is_const)
+            {
+                snprintf(s_error_buffer,
+                         sizeof(s_error_buffer),
+                         "%d:%d: error: repeated 'const' declaration specifiers are not allowed\n",
+                         cur_tok->rc.row,
+                         cur_tok->rc.col);
+                return NULL;
+            }
+            specs->is_const = 1;
+        }
+        else if (cur_tok->type == LEX_VOLATILE)
+        {
+            if (specs->is_volatile)
+            {
+                snprintf(s_error_buffer,
+                         sizeof(s_error_buffer),
+                         "%d:%d: error: repeated 'volatile' declaration specifiers are not allowed\n",
+                         cur_tok->rc.row,
+                         cur_tok->rc.col);
+                return NULL;
+            }
+            specs->is_volatile = 1;
+        }
+        else
+        {
+            return cur_tok;
+        }
+        ++cur_tok;
+    } while (1);
 }
 static struct Token* compile_stmts(Parser* p, struct Token* cur_tok);
 static struct Token* compile_compound_stmt(Parser* p, struct Token* cur_tok, struct BasicBlock* bb)
@@ -801,12 +907,14 @@ static struct Token* compile_compound_stmt(Parser* p, struct Token* cur_tok, str
 }
 static struct Token* compile_declstmt(Parser* p, struct Token* cur_tok, struct BasicBlock* bb)
 {
-    if (cur_tok = compile_declspecs(p, cur_tok))
+    struct DeclSpecs specs = {0};
+    if (cur_tok = compile_declspecs(p, cur_tok, &specs))
     {
         size_t scope_sz;
         struct Symbol* sym = NULL;
         while (scope_sz = scope_size(&p->scope), cur_tok = compile_declarator(p, cur_tok, bb, &sym))
         {
+            sym->is_const = specs.is_const;
             if (cur_tok->type == LEX_SYMBOL)
             {
                 const char ch = token_str(p, cur_tok)[0];
@@ -857,6 +965,8 @@ static struct Token* compile_stmt(Parser* p, struct Token* cur_tok, struct Basic
     switch (cur_tok->type)
     {
         case LEX_INT:
+        case LEX_VOLATILE:
+        case LEX_CONST:
         case LEX_VOID: return compile_declstmt(p, cur_tok, bb);
         case LEX_RETURN:
         {
@@ -990,6 +1100,27 @@ static struct Token* compile_stmt(Parser* p, struct Token* cur_tok, struct Basic
                                  cur_tok->rc.col);
                         return NULL;
                     }
+                }
+            }
+            return cur_tok;
+        }
+        case LEX_NUMBER:
+        {
+            struct ValDest dst = s_any_destination;
+            if (cur_tok = compile_expr(p, cur_tok, &dst, bb))
+            {
+                if (cur_tok->type == LEX_SYMBOL && token_str(p, cur_tok)[0] == ';')
+                {
+                    ++cur_tok;
+                }
+                else
+                {
+                    snprintf(s_error_buffer,
+                             sizeof(s_error_buffer),
+                             "%d:%d: error: expected semicolon\n",
+                             cur_tok->rc.row,
+                             cur_tok->rc.col);
+                    return NULL;
                 }
             }
             return cur_tok;
