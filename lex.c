@@ -11,7 +11,7 @@ static int is_ascii_symbol(int ch)
 {
     return ch == '/' || ch == '(' || ch == ')' || ch == '=' || ch == ',' || ch == ';' || ch == '[' || ch == ']' ||
            ch == '*' || ch == '%' || ch == '&' || ch == '+' || ch == '-' || ch == '<' || ch == '>' || ch == '{' ||
-           ch == '}' || ch == ':';
+           ch == '}' || ch == ':' || ch == '!';
 }
 
 static int emit_token(Lexer* l)
@@ -43,11 +43,12 @@ static void advance_rowcol(struct RowCol* l, int ch)
     }
 }
 
-void init_lexer(Lexer* l, int (*f_on_token)(struct Lexer*))
+void init_lexer(Lexer* l, const char* file, int (*f_on_token)(struct Lexer*))
 {
     l->f_on_token = f_on_token;
     l->state = LEX_START;
     l->sz = 0;
+    l->rc.file = file;
     l->rc.row = 1;
     l->rc.col = 1;
     l->tok_rc = l->rc;
@@ -57,12 +58,7 @@ static int push_tok_char(Lexer* l, char ch)
 {
     if (l->sz == sizeof(l->tok) - 1)
     {
-        snprintf(s_error_buffer,
-                 sizeof(s_error_buffer),
-                 "%d:%d: error: overflowed identifier buffer\n",
-                 l->rc.row,
-                 l->rc.col);
-        return 1;
+        return parser_ferror(&l->rc, "error: overflowed identifier buffer\n"), 1;
     }
     l->tok[l->sz++] = ch;
     return 0;
@@ -108,16 +104,33 @@ int lex(Lexer* l, Buffer* buf)
                     advance_rowcol(&l->rc, buf->buf[i++]);
                     goto LEX_STRING;
                 }
+                else if (ch == '#' && l->rc.col == 1)
+                {
+                    // Todo: support preprocessor directives with preceeding spaces
+                    advance_rowcol(&l->rc, buf->buf[i++]);
+                    l->tok_rc = l->rc;
+                    l->state = LEX_DIRECTIVE;
+                    goto LEX_DIRECTIVE;
+                }
                 else
                 {
-                    snprintf(s_error_buffer,
-                             sizeof(s_error_buffer),
-                             "%d:%d: error: unrecognized character: '%c'\n",
-                             l->rc.row,
-                             l->rc.col,
-                             ch);
-                    return 1;
+                    return parser_ferror(&l->rc, "error: unrecognized character: '%c'\n", ch), 1;
                 }
+            }
+            break;
+        case LEX_DIRECTIVE:
+        LEX_DIRECTIVE:
+            for (; i < buf->sz; advance_rowcol(&l->rc, buf->buf[i++]))
+            {
+                int rc;
+                const char ch = buf->buf[i];
+                if (ch == '\n' || ch == '\r')
+                {
+                    if (rc = emit_token(l)) return rc;
+                    l->state = LEX_START;
+                    goto LEX_START;
+                }
+                if (rc = push_tok_char(l, ch)) return rc;
             }
             break;
         case LEX_SYMBOL:
@@ -125,7 +138,7 @@ int lex(Lexer* l, Buffer* buf)
             for (; i < buf->sz; advance_rowcol(&l->rc, buf->buf[i++]))
             {
                 const char ch = buf->buf[i];
-                if (l->tok[0] == '/' && ch == '*')
+                if (l->sz == 1 && l->tok[0] == '/' && ch == '*')
                 {
                     // multi-line comment
                     advance_rowcol(&l->rc, buf->buf[i++]);
@@ -133,7 +146,15 @@ int lex(Lexer* l, Buffer* buf)
                     l->state = LEX_MULTILINE_COMMENT;
                     goto LEX_MULTILINE_COMMENT;
                 }
-                l->tok[l->sz] = 0;
+                if (l->sz == 1 && ch == '=')
+                {
+                    if (l->tok[0] == '=' || l->tok[0] == '!' || l->tok[0] == '>' || l->tok[0] == '<')
+                    {
+                        l->tok[1] = '=';
+                        l->sz = 2;
+                        continue;
+                    }
+                }
                 if (rc = emit_token(l)) return rc;
                 l->state = LEX_START;
                 goto LEX_START;
@@ -161,12 +182,7 @@ int lex(Lexer* l, Buffer* buf)
                 }
                 else if (ch == '\n')
                 {
-                    snprintf(s_error_buffer,
-                             sizeof(s_error_buffer),
-                             "%d:%d: error: unexpected end of line in string literal\n",
-                             l->rc.row,
-                             l->rc.col);
-                    return 1;
+                    return parser_ferror(&l->rc, "error: unexpected end of line in string literal\n"), 1;
                 }
                 else
                 {
@@ -182,12 +198,7 @@ int lex(Lexer* l, Buffer* buf)
                 const char ch = buf->buf[i];
                 if (ch == '\n')
                 {
-                    snprintf(s_error_buffer,
-                             sizeof(s_error_buffer),
-                             "%d:%d: error: unexpected end of line in string literal\n",
-                             l->rc.row,
-                             l->rc.col);
-                    return 1;
+                    return parser_ferror(&l->rc, "error: unexpected end of line in string literal\n"), 1;
                 }
                 else
                 {
@@ -211,7 +222,6 @@ int lex(Lexer* l, Buffer* buf)
                 }
                 else if (ch == '/' && l->sz == 1)
                 {
-                    l->tok[0] = 0;
                     l->sz = 0;
                     if (rc = emit_token(l)) return rc;
                     advance_rowcol(&l->rc, buf->buf[i++]);
@@ -275,6 +285,10 @@ int lex(Lexer* l, Buffer* buf)
                     else if (l->sz == sizeof("auto") - 1 && memcmp("auto", l->tok, l->sz) == 0)
                     {
                         l->state = LEX_AUTO;
+                    }
+                    else if (l->sz == sizeof("__string") - 1 && memcmp("__string", l->tok, l->sz) == 0)
+                    {
+                        l->state = LEX_MSTRING;
                     }
                     else if (l->sz == sizeof("struct") - 1 && memcmp("struct", l->tok, l->sz) == 0)
                     {
@@ -344,25 +358,14 @@ int end_lex(Lexer* l)
 {
     if (l->state == LEX_STRING || l->state == LEX_STRING1)
     {
-        snprintf(s_error_buffer,
-                 sizeof(s_error_buffer),
-                 "%d:%d: error: unexpected end of file in string literal\n",
-                 l->rc.row,
-                 l->rc.col);
-        return 1;
+        return parser_ferror(&l->rc, "error: unexpected end of file in string literal\n"), 1;
     }
     if (l->state == LEX_MULTILINE_COMMENT)
     {
-        snprintf(s_error_buffer,
-                 sizeof(s_error_buffer),
-                 "%d:%d: error: unexpected end of file inside comment\n",
-                 l->rc.row,
-                 l->rc.col);
-        return 1;
+        return parser_ferror(&l->rc, "error: unexpected end of file inside comment\n"), 1;
     }
     if (l->sz > 0)
     {
-        l->tok[l->sz] = 0;
         int rc;
         if (rc = emit_token(l)) return rc;
     }

@@ -9,12 +9,12 @@ enum LexerState_t
     LEX_NUMBER,
     LEX_STRING,
     LEX_STRING1,
+    LEX_DIRECTIVE,
     LEX_COMMENT,
     LEX_MULTILINE_COMMENT,
     LEX_SYMBOL,
     LEX_EOF,
     // keywords
-    LEX_ATTRIBUTE,
     LEX_INT,
     LEX_VOID,
     LEX_GOTO,
@@ -29,6 +29,9 @@ enum LexerState_t
     LEX_VOLATILE,
     LEX_REGISTER,
     LEX_AUTO,
+    // extensions
+    LEX_ATTRIBUTE,
+    LEX_MSTRING,
 };
 
 const char* lexstate_to_string(enum LexerState_t s);

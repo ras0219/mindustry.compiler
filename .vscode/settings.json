@@ -7,6 +7,8 @@
         "lexstate.h": "c",
         "array.h": "c",
         "fwd.h": "c",
-        "*.mlog": "c"
+        "*.mlog": "c",
+        "limits": "c",
+        "stdarg.h": "c"
     }
 }

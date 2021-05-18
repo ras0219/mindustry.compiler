@@ -10,39 +10,38 @@ void cg_init(struct CodeGen* cg)
     array_init(&cg->text);
     array_init(&cg->labels);
     array_init(&cg->label_strs);
+    cg->used_hw_callstack = 0;
 }
 void cg_write_bin_entry(struct CodeGen* cg)
 {
     cg_write_inst(cg, "set __retstk__ $__fn_return__$");
     cg_write_inst(cg, "set ret 0");
     cg_write_inst(cg, "jump $main$ always");
-
-    cg_mark_label(cg, "$__fn_return__$");
-    // jumping directly here is an error, reboot?
-    // This must be the exact size of the pop funclet below
-    cg_write_inst(cg, "jump 0 always");
-    cg_write_inst(cg, "jump 0 always");
-    char buf[64];
-    for (size_t i = 0; i < 4; ++i)
+}
+void cg_write_push_ret(struct CodeGen* cg, struct FreeVar* ret_addr)
+{
+    if (ret_addr->buf[0])
     {
-        // push funclet
-        snprintf(buf, sizeof(buf), "set __retstk%lu__ ret", i);
-        cg_write_inst(cg, buf);
-        cg_write_inst(cg, "op add __retstk__ __retstk__ 5");
-        cg_write_inst(cg, "set @counter __push_ret__ret_");
-
-        // pop funclet
-        cg_write_inst(cg, "op sub __retstk__ __retstk__ 5");
-        snprintf(buf, sizeof(buf), "set @counter __retstk%lu__", i);
-        cg_write_inst(cg, buf);
+        cg_write_inst_set(cg, ret_addr->buf, "ret");
+    }
+    else
+    {
+        cg->used_hw_callstack = 1;
+        cg_write_inst(cg, "op add __push_ret__ret_ @counter 1");
+        cg_write_inst(cg, "op add @counter __retstk__ 2");
     }
 }
-void cg_write_push_ret(struct CodeGen* cg)
+void cg_write_return(struct CodeGen* cg, struct FreeVar* ret_addr)
 {
-    cg_write_inst(cg, "op add __push_ret__ret_ @counter 1");
-    cg_write_inst(cg, "op add @counter __retstk__ 2");
+    if (ret_addr->buf[0])
+    {
+        cg_write_inst_set(cg, "@counter", ret_addr->buf);
+    }
+    else
+    {
+        cg_write_inst(cg, "set @counter __retstk__");
+    }
 }
-void cg_write_return(struct CodeGen* cg) { cg_write_inst(cg, "set @counter __retstk__"); }
 void cg_write_inst_set(struct CodeGen* cg, const char* dst, const char* src)
 {
     char buf[64];
@@ -53,6 +52,47 @@ void cg_write_inst_jump(struct CodeGen* cg, const char* dst)
 {
     char buf[64];
     snprintf(buf, sizeof(buf), "jump %s always", dst);
+    cg_write_inst(cg, buf);
+}
+static const char* str_for_op(const char* op)
+{
+    const char* str_op;
+    if (op[0] == '=' && op[1] == '=')
+        str_op = "equals";
+    else if (op[0] == '!' && op[1] == '=')
+        str_op = "notEquals";
+    else if (op[0] == '>' && op[1] == '\0')
+        str_op = "greaterThan";
+    else if (op[0] == '<' && op[1] == '\0')
+        str_op = "lessThan";
+    else if (op[0] == '>' && op[1] == '=')
+        str_op = "greaterThanEq";
+    else if (op[0] == '<' && op[1] == '=')
+        str_op = "lessThanEq";
+    else if (op[0] == '+' && op[1] == '\0')
+        str_op = "add";
+    else if (op[0] == '-' && op[1] == '\0')
+        str_op = "sub";
+    else if (op[0] == '*' && op[1] == '\0')
+        str_op = "mul";
+    else if (op[0] == '/' && op[1] == '\0')
+        str_op = "idiv";
+    else
+        abort();
+    return str_op;
+}
+void cg_write_inst_jump_op(struct CodeGen* cg, const char* tgt, const char* op, const char* a, const char* b)
+{
+    const char* str_op = str_for_op(op);
+    char buf[128];
+    snprintf(buf, sizeof(buf), "jump %s %s %s %s", tgt, str_op, a, b);
+    cg_write_inst(cg, buf);
+}
+void cg_write_inst_op(struct CodeGen* cg, const char* op, const char* dst, const char* a, const char* b)
+{
+    const char* str_op = str_for_op(op);
+    char buf[128];
+    snprintf(buf, sizeof(buf), "op %s %s %s %s", str_op, dst, a, b);
     cg_write_inst(cg, buf);
 }
 
@@ -96,6 +136,31 @@ static const struct CodeGenLabel* cg_lookup(struct CodeGen* cg, const char* sym,
 
 void cg_emit(struct CodeGen* cg)
 {
+    cg_mark_label(cg, "$__fn_return__$");
+    if (cg->used_hw_callstack)
+    {
+        // jumping directly here is an error, reboot?
+        // This must be the exact size of the pop funclet below
+        cg_write_inst(cg, "jump 0 always");
+        cg_write_inst(cg, "jump 0 always");
+        char buf[64];
+        for (size_t i = 0; i < 4; ++i)
+        {
+            // push funclet
+            snprintf(buf, sizeof(buf), "set __retstk%lu__ ret", i);
+            cg_write_inst(cg, buf);
+            cg_write_inst(cg, "op add __retstk__ __retstk__ 5");
+            cg_write_inst(cg, "set @counter __push_ret__ret_");
+
+            // pop funclet
+            cg_write_inst(cg, "op sub __retstk__ __retstk__ 5");
+            snprintf(buf, sizeof(buf), "set @counter __retstk%lu__", i);
+            cg_write_inst(cg, buf);
+        }
+    }
+
+    printf("\nCode Gen\n--------\n");
+
     const char* const text = (const char*)cg->text.data;
     size_t last_emit_point = 0;
     size_t i = 0;

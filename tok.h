@@ -13,9 +13,12 @@ struct Buffer
 
 struct RowCol
 {
+    const char* file;
     int row;
     int col;
 };
+
+void parser_ferror(const struct RowCol* rc, const char* fmt, ...);
 
 #define MAX_TOKEN_SIZE 128
 
@@ -29,7 +32,7 @@ struct Lexer
     char tok[MAX_TOKEN_SIZE];
 };
 
-void init_lexer(Lexer* l, int (*f_on_token)(struct Lexer*));
+void init_lexer(Lexer* l, const char* file, int (*f_on_token)(struct Lexer*));
 int lex(Lexer* l, Buffer* buf);
 int end_lex(Lexer* l);
 
@@ -70,6 +73,12 @@ struct CodeGen
     struct Array text;
     struct Array labels;
     struct Array label_strs;
+    int used_hw_callstack : 1;
+};
+
+struct FreeVar
+{
+    char buf[24];
 };
 
 typedef struct Parser
@@ -80,6 +89,8 @@ typedef struct Parser
     struct Array strings_to_free;
 
     char fn_label_prefix[16];
+    // set if fn is non-reentrant
+    struct FreeVar fn_ret_var;
 
     struct Scope scope;
     struct Scope type_scope;
@@ -92,10 +103,12 @@ int parse(Parser* p, Lexer* l);
 
 void cg_init(struct CodeGen* cg);
 void cg_write_bin_entry(struct CodeGen* cg);
-void cg_write_push_ret(struct CodeGen* cg);
-void cg_write_return(struct CodeGen* cg);
+void cg_write_push_ret(struct CodeGen* cg, struct FreeVar* ret_addr);
+void cg_write_return(struct CodeGen* cg, struct FreeVar* ret_addr);
 void cg_write_inst_jump(struct CodeGen* cg, const char* dst);
+void cg_write_inst_jump_op(struct CodeGen* cg, const char* tgt, const char* op, const char* a, const char* b);
 void cg_write_inst_set(struct CodeGen* cg, const char* dst, const char* src);
+void cg_write_inst_op(struct CodeGen* cg, const char* op, const char* dst, const char* a, const char* b);
 void cg_write_inst(struct CodeGen* cg, const char* inst);
 void cg_emit(struct CodeGen* cg);
 void cg_mark_label(struct CodeGen* cg, const char* sym);
