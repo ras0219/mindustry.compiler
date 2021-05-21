@@ -16,7 +16,8 @@ typedef struct
     Lexer lexer;
     Parser parser;
 
-    struct Array files_opened;
+    struct Array files_open;
+    struct Array filenames;
 } FrontEnd;
 
 struct SubLexer
@@ -35,13 +36,13 @@ void parser_ferror(const struct RowCol* rc, const char* fmt, ...)
         vsnprintf(s_error_buffer + n, sizeof(s_error_buffer) - n, fmt, argp);
     }
 }
+static int fe_handle_directive(FrontEnd* fe, Lexer* l);
 static int sublex_on_token(Lexer* l)
 {
     struct SubLexer* self = (struct SubLexer*)((char*)l - offsetof(struct SubLexer, lexer));
     if (l->state == LEX_DIRECTIVE)
     {
-        // drop directives
-        return 0;
+        return fe_handle_directive(self->fe, l);
     }
     else if (l->state == LEX_MULTILINE_COMMENT)
     {
@@ -73,38 +74,85 @@ static int lex_file(FILE* f, Lexer* l)
     return end_lex(l);
 }
 
+static int fe_handle_directive(FrontEnd* fe, Lexer* l)
+{
+    if (strncmp(l->tok, "include ", 8) == 0)
+    {
+        if (l->tok[8] != '"' || l->tok[l->sz - 1] != '"' || l->sz < 10)
+        {
+            return parser_ferror(&l->tok_rc, "error: #include only supports '\"'\n"), 1;
+        }
+        l->tok[l->sz - 1] = '\0';
+        char* const* const names_begin = (char* const* const)fe->filenames.data;
+        const size_t* const begin = (const size_t* const)fe->files_open.data;
+        const size_t n = fe->files_open.sz / sizeof(size_t);
+        for (size_t i = 0; i < n; ++i)
+        {
+            if (strcmp(names_begin[begin[i]], l->tok + 9) == 0)
+            {
+                return parser_ferror(&l->tok_rc, "error: attempted to recursively include '%s'\n", l->tok + 9), 1;
+            }
+        }
+        array_push(&fe->files_open, &fe->filenames.sz, sizeof(size_t));
+        char* filename = (char*)malloc(l->sz - 9);
+        strcpy(filename, l->tok + 9);
+        array_push(&fe->filenames, &filename, sizeof(filename));
+        struct SubLexer sublex;
+        sublex.fe = fe;
+        init_lexer(&sublex.lexer, filename, &sublex_on_token);
+        FILE* f = fopen(filename, "r");
+        if (!f)
+        {
+            char buf[128];
+            snprintf(buf, 128, "%s: failed to open", filename);
+            perror(buf);
+            return 1;
+        }
+        int rc = lex_file(f, &sublex.lexer);
+        fclose(f);
+        return rc;
+    }
+    else if (strncmp(l->tok, "define ", 7) == 0)
+    {
+        // ignore #defines
+        return 0;
+    }
+    else if (strncmp(l->tok, "ifdef ", 6) == 0)
+    {
+        // ignore #ifdef
+        return 0;
+    }
+    else if (strcmp(l->tok, "endif") == 0)
+    {
+        // ignore #endif
+        return 0;
+    }
+    else if (strncmp(l->tok, "pragma ", 7) == 0)
+    {
+        if (strcmp(l->tok + 7, "once") == 0)
+        {
+            // ignore #pragma once
+            return 0;
+        }
+        else if (strncmp(l->tok + 7, "memory ", 7) == 0)
+        {
+            return cg_set_memory_bank(&fe->parser.cg, &l->tok_rc, l->tok + 14);
+        }
+        return parser_ferror(&l->tok_rc, "error: unknown pragma directive: '#%s'\n", l->tok), 1;
+    }
+    else
+    {
+        return parser_ferror(&l->tok_rc, "error: unknown preprocessor directive: '#%s'\n", l->tok), 1;
+    }
+}
+
 int fe_on_token(Lexer* l)
 {
     FrontEnd* self = (FrontEnd*)((char*)l - offsetof(FrontEnd, lexer));
     // printf("TOK: '%s' %d\n", self->lexer.tok, self->lexer.state);
     if (l->state == LEX_DIRECTIVE)
     {
-        if (strncmp(l->tok, "include ", 8) == 0)
-        {
-            if (l->tok[8] != '"' || l->tok[l->sz - 1] != '"' || l->sz < 10)
-            {
-                return parser_ferror(&l->rc, "error: #include only supports '\"'\n"), 1;
-            }
-            l->tok[l->sz - 1] = '\0';
-            char* filename = (char*)malloc(l->sz - 9);
-            strcpy(filename, l->tok + 9);
-            array_push(&self->files_opened, &filename, sizeof(filename));
-            struct SubLexer sublex;
-            sublex.fe = self;
-            init_lexer(&sublex.lexer, filename, &sublex_on_token);
-            FILE* f = fopen(filename, "r");
-            if (!f)
-            {
-                char buf[128];
-                snprintf(buf, 128, "%s: failed to open", filename);
-                perror(buf);
-                return 1;
-            }
-            int rc = lex_file(f, &sublex.lexer);
-            fclose(f);
-            return rc;
-        }
-        return 0;
+        return fe_handle_directive(self, l);
     }
     else if (l->state == LEX_MULTILINE_COMMENT)
     {
@@ -120,7 +168,8 @@ int fe_on_token(Lexer* l)
 void init_front_end(FrontEnd* fe)
 {
     parser_init(&fe->parser);
-    array_init(&fe->files_opened);
+    array_init(&fe->filenames);
+    array_init(&fe->files_open);
 }
 
 static int fe_lex_file(FrontEnd* fe, const char* filename)

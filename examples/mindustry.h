@@ -53,6 +53,7 @@ int __attribute__((asmstr("uradar %0 any any distance 0 1 %r"))) unit_radar(int 
 const int __attribute__((sym("@unit"))) __unit;
 const int __attribute__((sym("@poly"))) __poly;
 const int __attribute__((sym("@mono"))) __mono;
+const int __attribute__((sym("@mega"))) __mega;
 
 const int __attribute__((sym("null"))) null;
 const int __attribute__((sym("@thisx"))) this_x;

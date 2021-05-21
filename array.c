@@ -3,12 +3,7 @@
 #include "malloc.h"
 #include "string.h"
 
-void array_init(struct Array* arr)
-{
-    arr->sz = 0;
-    arr->cap = 0;
-    arr->data = 0;
-}
+void array_init(struct Array* arr) { memset(arr, 0, sizeof(struct Array)); }
 void* array_alloc(struct Array* arr, size_t sz)
 {
     arr->sz += sz;

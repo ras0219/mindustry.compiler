@@ -40,19 +40,10 @@ int end_lex(Lexer* l);
 #define TREE_NODES_SIZE 128
 #define STRING_POOL_SIZE 1024
 
-typedef struct TreeNode
+struct FreeVar
 {
-    int type;
-    const char* str;
-    struct TreeNode_t* lhs;
-    struct TreeNode_t* rhs;
-} TreeNode;
-
-typedef struct
-{
-    int state;
-    TreeNode* ast;
-} ParserFrame;
+    char buf[24];
+};
 
 struct Scope
 {
@@ -73,12 +64,7 @@ struct CodeGen
     struct Array text;
     struct Array labels;
     struct Array label_strs;
-    int used_hw_callstack : 1;
-};
-
-struct FreeVar
-{
-    char buf[24];
+    struct FreeVar memory;
 };
 
 typedef struct Parser
@@ -96,6 +82,7 @@ typedef struct Parser
     struct Scope type_scope;
 
     struct CodeGen cg;
+    struct Symbol* first_active_sym;
 } Parser;
 
 void parser_init(Parser* p);
@@ -109,6 +96,12 @@ void cg_write_inst_jump(struct CodeGen* cg, const char* dst);
 void cg_write_inst_jump_op(struct CodeGen* cg, const char* tgt, const char* op, const char* a, const char* b);
 void cg_write_inst_set(struct CodeGen* cg, const char* dst, const char* src);
 void cg_write_inst_op(struct CodeGen* cg, const char* op, const char* dst, const char* a, const char* b);
+void cg_write_inst_add(struct CodeGen* cg, const char* dst, const char* a, int n);
 void cg_write_inst(struct CodeGen* cg, const char* inst);
 void cg_emit(struct CodeGen* cg);
 void cg_mark_label(struct CodeGen* cg, const char* sym);
+int cg_set_memory_bank(struct CodeGen* cg, const struct RowCol* rc, const char* mem);
+int cg_read_mem(struct CodeGen* cg, const char* addr, const char* reg, const struct RowCol* rc);
+int cg_write_mem(struct CodeGen* cg, const char* addr, const char* val, const struct RowCol* rc);
+int cg_store(struct CodeGen* cg, int offset, const char* val, const struct RowCol* rc);
+int cg_load(struct CodeGen* cg, int offset, const char* dst, const struct RowCol* rc);

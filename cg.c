@@ -10,11 +10,16 @@ void cg_init(struct CodeGen* cg)
     array_init(&cg->text);
     array_init(&cg->labels);
     array_init(&cg->label_strs);
-    cg->used_hw_callstack = 0;
+    memset(&cg->memory, 0, sizeof(cg->memory));
 }
+static struct RowCol s_unknown_rc = {
+    .file = "<unknown>",
+    .row = 1,
+    .col = 1,
+};
 void cg_write_bin_entry(struct CodeGen* cg)
 {
-    cg_write_inst(cg, "set __retstk__ $__fn_return__$");
+    cg_write_inst(cg, "set __stk__ 0");
     cg_write_inst(cg, "set ret 0");
     cg_write_inst(cg, "jump $main$ always");
 }
@@ -26,9 +31,10 @@ void cg_write_push_ret(struct CodeGen* cg, struct FreeVar* ret_addr)
     }
     else
     {
-        cg->used_hw_callstack = 1;
-        cg_write_inst(cg, "op add __push_ret__ret_ @counter 1");
-        cg_write_inst(cg, "op add @counter __retstk__ 2");
+        cg_write_mem(cg, "__stk__", "ret", &s_unknown_rc);
+        cg_write_inst_op(cg, "+", "__stk__", "__stk__", "1");
+        cg_write_mem(cg, "__stk__", "__ebp__", &s_unknown_rc);
+        cg_write_inst_set(cg, "__ebp__", "__stk__");
     }
 }
 void cg_write_return(struct CodeGen* cg, struct FreeVar* ret_addr)
@@ -39,7 +45,9 @@ void cg_write_return(struct CodeGen* cg, struct FreeVar* ret_addr)
     }
     else
     {
-        cg_write_inst(cg, "set @counter __retstk__");
+        cg_write_inst_op(cg, "-", "__stk__", "__ebp__", "1");
+        cg_read_mem(cg, "__ebp__", "__ebp__", &s_unknown_rc);
+        cg_read_mem(cg, "__stk__", "@counter", &s_unknown_rc);
     }
 }
 void cg_write_inst_set(struct CodeGen* cg, const char* dst, const char* src)
@@ -60,7 +68,7 @@ static const char* str_for_op(const char* op)
     if (op[0] == '=' && op[1] == '=')
         str_op = "equals";
     else if (op[0] == '!' && op[1] == '=')
-        str_op = "notEquals";
+        str_op = "notEqual";
     else if (op[0] == '>' && op[1] == '\0')
         str_op = "greaterThan";
     else if (op[0] == '<' && op[1] == '\0')
@@ -83,9 +91,19 @@ static const char* str_for_op(const char* op)
 }
 void cg_write_inst_jump_op(struct CodeGen* cg, const char* tgt, const char* op, const char* a, const char* b)
 {
+    if (op[0] == '=' && op[1] == '=' && strcmp(a, "1") == 0 && strcmp(b, "true") == 0)
+    {
+        return cg_write_inst_jump(cg, tgt);
+    }
     const char* str_op = str_for_op(op);
     char buf[128];
     snprintf(buf, sizeof(buf), "jump %s %s %s %s", tgt, str_op, a, b);
+    cg_write_inst(cg, buf);
+}
+void cg_write_inst_add(struct CodeGen* cg, const char* dst, const char* a, int n)
+{
+    char buf[128];
+    snprintf(buf, sizeof(buf), "op add %s %s %d", dst, a, n);
     cg_write_inst(cg, buf);
 }
 void cg_write_inst_op(struct CodeGen* cg, const char* op, const char* dst, const char* a, const char* b)
@@ -95,7 +113,38 @@ void cg_write_inst_op(struct CodeGen* cg, const char* op, const char* dst, const
     snprintf(buf, sizeof(buf), "op %s %s %s %s", str_op, dst, a, b);
     cg_write_inst(cg, buf);
 }
-
+int cg_store(struct CodeGen* cg, int offset, const char* val, const struct RowCol* rc)
+{
+    cg_write_inst_add(cg, "_", "__ebp__", offset);
+    return cg_write_mem(cg, "_", val, rc);
+}
+int cg_load(struct CodeGen* cg, int offset, const char* dst, const struct RowCol* rc)
+{
+    cg_write_inst_add(cg, "_", "__ebp__", offset);
+    return cg_read_mem(cg, "_", dst, rc);
+}
+int cg_write_mem(struct CodeGen* cg, const char* addr, const char* val, const struct RowCol* rc)
+{
+    if (!cg->memory.buf[0])
+    {
+        return parser_ferror(rc, "error: no memory bank configured yet -- use #pragma memory <memory1>"), 1;
+    }
+    char buf[128];
+    snprintf(buf, sizeof(buf), "write %s %s %s", val, cg->memory.buf, addr);
+    cg_write_inst(cg, buf);
+    return 0;
+}
+int cg_read_mem(struct CodeGen* cg, const char* addr, const char* reg, const struct RowCol* rc)
+{
+    if (!cg->memory.buf[0])
+    {
+        return parser_ferror(rc, "error: no memory bank configured yet -- use #pragma memory <memory1>"), 1;
+    }
+    char buf[128];
+    snprintf(buf, sizeof(buf), "read %s %s %s", reg, cg->memory.buf, addr);
+    cg_write_inst(cg, buf);
+    return 0;
+}
 void cg_write_inst(struct CodeGen* cg, const char* inst)
 {
     printf("%03lu: %s\n", cg->lines, inst);
@@ -136,29 +185,6 @@ static const struct CodeGenLabel* cg_lookup(struct CodeGen* cg, const char* sym,
 
 void cg_emit(struct CodeGen* cg)
 {
-    cg_mark_label(cg, "$__fn_return__$");
-    if (cg->used_hw_callstack)
-    {
-        // jumping directly here is an error, reboot?
-        // This must be the exact size of the pop funclet below
-        cg_write_inst(cg, "jump 0 always");
-        cg_write_inst(cg, "jump 0 always");
-        char buf[64];
-        for (size_t i = 0; i < 4; ++i)
-        {
-            // push funclet
-            snprintf(buf, sizeof(buf), "set __retstk%lu__ ret", i);
-            cg_write_inst(cg, buf);
-            cg_write_inst(cg, "op add __retstk__ __retstk__ 5");
-            cg_write_inst(cg, "set @counter __push_ret__ret_");
-
-            // pop funclet
-            cg_write_inst(cg, "op sub __retstk__ __retstk__ 5");
-            snprintf(buf, sizeof(buf), "set @counter __retstk%lu__", i);
-            cg_write_inst(cg, buf);
-        }
-    }
-
     printf("\nCode Gen\n--------\n");
 
     const char* const text = (const char*)cg->text.data;
@@ -199,4 +225,16 @@ void cg_emit(struct CodeGen* cg)
         perror("error: failed to write output");
         abort();
     }
+}
+int cg_set_memory_bank(struct CodeGen* cg, const struct RowCol* rc, const char* mem)
+{
+    size_t n = strlen(mem);
+    if (n >= sizeof(cg->memory.buf))
+    {
+        return parser_ferror(
+                   rc, "error: memory bank length must be less than '%lu' characters", sizeof(cg->memory.buf)),
+               1;
+    }
+    strcpy(cg->memory.buf, mem);
+    return 0;
 }
