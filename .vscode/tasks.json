@@ -9,9 +9,9 @@
             "command": "ninja",
             "args": [
                 "-C",
-                "~/build",
+                "${env:BUILD_DIR}",
                 "&&",
-                "~/build/main",
+                "${env:BUILD_DIR}/main",
                 "${workspaceFolder}/test.mlog"
             ],
             "group": {

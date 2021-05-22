@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "ast.h"
 #include "lexstate.h"
 #include "parsestate.h"
 #include "tok.h"
@@ -308,8 +309,7 @@ enum Precedence
     PRECEDENCE_MULT,
 };
 
-static struct Token* compile_expr(
-    Parser* p, struct Token* cur_tok, struct ValDest* dst, struct CompoundBlock* bb, int precedence);
+static int compile_expr(Parser* p, struct Expr* expr, struct ValDest* dst, struct CompoundBlock* bb);
 
 // requires !sym->prev_active_sym
 static void parser_push_active_sym(struct Parser* p, struct Symbol* sym)
@@ -403,6 +403,7 @@ static int parser_assign_dsts(struct Parser* p, struct ValDest* dst, struct ValD
         *dst = *src;
         return 0;
     }
+    if (!dst->is_sym && !src->is_sym && strcmp(src->reg, dst->reg) == 0) return 0;
 
     const char* src_reg = parser_prepare_src_reg(p, src);
     if (!src_reg) return 1;
@@ -411,313 +412,6 @@ static int parser_assign_dsts(struct Parser* p, struct ValDest* dst, struct ValD
     cg_write_inst_set(cg, dst_reg, src_reg);
     return 0;
 }
-
-struct ParamList
-{
-    struct ValDest param;
-    int idx;
-    struct ParamList* prev;
-};
-
-struct ParamList make_plist(struct ParamList* prev, struct ValDest param)
-{
-    struct ParamList ret = {
-        .param = param,
-        .idx = prev ? prev->idx + 1 : 0,
-        .prev = prev,
-    };
-    return ret;
-}
-
-static struct Token* compile_call_expr(Parser* p,
-                                       struct Token* cur_tok,
-                                       struct ValDest* dst,
-                                       struct Symbol* fn,
-                                       struct ParamList* params,
-                                       struct CompoundBlock* bb);
-
-static struct ParamList* paramlist_nth(struct ParamList* params, int n)
-{
-    if (!params || n > params->idx) return NULL;
-    do
-    {
-        if (!params) return NULL;
-        if (n == params->idx) return params;
-        params = params->prev;
-    } while (1);
-}
-
-static struct Token* compile_call_expr_sym(Parser* p,
-                                           struct Token* cur_tok,
-                                           struct ValDest* dst,
-                                           struct Symbol* fn,
-                                           struct ParamList* params,
-                                           struct CompoundBlock* bb)
-{
-    if (cur_tok->type == LEX_SYMBOL)
-    {
-        char ch = token_str(p, cur_tok)[0];
-        if (ch == ')')
-        {
-            if ((params ? params->idx + 1 : 0) < fn->arg_count)
-            {
-                return parser_ferror(&cur_tok->rc, "error: function requires %d arguments\n", fn->arg_count), NULL;
-            }
-
-            if (fn->intrinsic_asm_str)
-            {
-                // pseudo-format
-                const char* s = fn->intrinsic_asm_str;
-                char buf[128];
-                size_t i = 0;
-                while (1)
-                {
-                    if (i == 127)
-                    {
-                        fprintf(stderr, "resource exceeded\n");
-                        abort();
-                    }
-                    if (!*s) break;
-                    if (*s == '%')
-                    {
-                        ++s;
-                        if (*s == 'r')
-                        {
-                            const char* const reg = parser_prepare_dst_reg(p, dst);
-                            size_t len = strlen(reg);
-                            if (i + len > 127)
-                            {
-                                fprintf(stderr, "resource exceeded\n");
-                                abort();
-                            }
-                            memcpy(buf + i, reg, len);
-                            i += len;
-                        }
-                        else
-                        {
-                            struct ParamList* pl;
-                            if (*s == '0')
-                                pl = paramlist_nth(params, 0);
-                            else if (*s == '1')
-                                pl = paramlist_nth(params, 1);
-                            else if (*s == '2')
-                                pl = paramlist_nth(params, 2);
-                            else if (*s == '3')
-                                pl = paramlist_nth(params, 3);
-                            else if (*s == '4')
-                                pl = paramlist_nth(params, 4);
-                            else if (*s == '5')
-                                pl = paramlist_nth(params, 5);
-                            else if (*s == '6')
-                                pl = paramlist_nth(params, 6);
-                            else
-                            {
-                                return parser_ferror(&cur_tok->rc,
-                                                     "error: invalid intrinsic string: invalid format specifier\n"),
-                                       NULL;
-                            }
-                            if (!pl)
-                            {
-                                return parser_ferror(&cur_tok->rc,
-                                                     "error: invalid intrinsic string: wrong arguments\n"),
-                                       NULL;
-                            }
-                            const char* const reg = parser_prepare_src_reg(p, &pl->param);
-                            if (!reg) return NULL;
-                            size_t len = strlen(reg);
-                            if (i + len > 127)
-                            {
-                                fprintf(stderr, "resource exceeded\n");
-                                abort();
-                            }
-                            memcpy(buf + i, reg, len);
-                            i += len;
-                        }
-                        ++s;
-                    }
-                    else
-                    {
-                        buf[i++] = *s++;
-                    }
-                }
-                buf[i] = 0;
-                cg_write_inst(&p->cg, buf);
-                if (!dst->is_sym && !dst->reg) *dst = s_void_destination;
-            }
-            else
-            {
-                if (!bb->fn_sym)
-                {
-                    return parser_ferror(&cur_tok->rc, "error: not in function\n"), NULL;
-                }
-                if (!bb->fn_sym->is_nonreentrant)
-                {
-                    char buf[16];
-                    snprintf(buf, sizeof(buf), "%d", bb->frame_size);
-                    cg_write_inst_op(&p->cg, "+", "__stk__", "__ebp__", buf);
-                }
-                if (fn->is_nonreentrant)
-                {
-                    const char* const name = token_str(p, fn->token);
-                    struct FreeVar fv;
-                    while (params)
-                    {
-                        fv = nrfun_param(p, params->idx, name);
-                        struct ValDest fv_dst = dest_reg(fv.buf);
-                        if (parser_assign_dsts(p, &fv_dst, &params->param)) return NULL;
-                        params = params->prev;
-                    }
-                    if (parser_spill_registers(p)) return NULL;
-                    const struct FreeVar fv_ret = nrfun_param_ret(p, name);
-                    cg_write_inst_op(&p->cg, "+", fv_ret.buf, "1", "@counter");
-                }
-                else
-                {
-                    while (params)
-                    {
-                        if (params->idx >= REG_COUNT)
-                        {
-                            return parser_ferror(
-                                       &cur_tok->rc, "error: exceeded maximum call arguments (%d)\n", REG_COUNT),
-                                   NULL;
-                        }
-                        struct ValDest pdst = dest_reg(PARAM_NAMES_ARR[params->idx]);
-                        if (parser_assign_dsts(p, &pdst, &params->param)) return NULL;
-                        params = params->prev;
-                    }
-                    if (parser_spill_registers(p)) return NULL;
-                    cg_write_inst(&p->cg, "op add ret 1 @counter");
-                }
-                cg_write_inst_jump(&p->cg, fn->rename.buf);
-                if (!dst->is_void)
-                {
-                    if (!parser_prepare_dst_reg(p, dst)) return NULL;
-                    struct ValDest ret_dst = dest_reg(PARAM_NAMES_ARR[0]);
-                    if (parser_assign_dsts(p, dst, &ret_dst)) return NULL;
-                }
-            }
-            return cur_tok + 1;
-        }
-        else if (ch == ',')
-        {
-            return compile_call_expr(p, cur_tok + 1, dst, fn, params, bb);
-        }
-    }
-    return parser_ferror(&cur_tok->rc, "error: expected ',' or ')'\n"), NULL;
-}
-
-static struct Token* compile_call_expr(Parser* p,
-                                       struct Token* cur_tok,
-                                       struct ValDest* dst,
-                                       struct Symbol* fn,
-                                       struct ParamList* params,
-                                       struct CompoundBlock* bb)
-{
-    struct ValDest new_dst = s_any_destination;
-    if (cur_tok = compile_expr(p, cur_tok, &new_dst, bb, PRECEDENCE_ASSIGN))
-    {
-        struct ParamList plist = make_plist(params, new_dst);
-        if (fn->arg_count <= plist.idx)
-        {
-            return parser_ferror(&cur_tok->rc, "error: function only accepts '%d' arguments\n", fn->arg_count), NULL;
-        }
-        cur_tok = compile_call_expr_sym(p, cur_tok, dst, fn, &plist, bb);
-    }
-    return cur_tok;
-}
-
-// https://en.cppreference.com/w/cpp/language/operator_precedence
-// Precedence level 2
-static struct Token* compile_expr_atom(Parser* p, struct Token* cur_tok, struct ValDest* dst, struct CompoundBlock* bb)
-{
-    switch (cur_tok->type)
-    {
-        case LEX_IDENT:
-        {
-            struct Token* lhs = cur_tok++;
-            struct Binding* const lhs_bind = scope_find(&p->scope, token_str(p, lhs));
-            if (!lhs_bind)
-            {
-                return parser_ferror(&lhs->rc, "error: '%s' undeclared\n", token_str(p, lhs)), NULL;
-            }
-            struct ValDest lhs_dst = dest_sym(lhs_bind->sym);
-            if (cur_tok->type == LEX_SYMBOL)
-            {
-                struct Token* tok_op = cur_tok;
-                char* op = token_str(p, tok_op);
-
-                if (op[0] == '(')
-                {
-                    if (!lhs_bind->sym->is_function)
-                    {
-                        return parser_ferror(&cur_tok->rc, "error: '%s' is not a function\n", token_str(p, lhs)), NULL;
-                    }
-                    struct Token* tk = ++cur_tok;
-                    if (tk->type == LEX_SYMBOL && token_str(p, tk)[0] == ')')
-                    {
-                        return compile_call_expr_sym(p, cur_tok, dst, lhs_bind->sym, NULL, bb);
-                    }
-                    else
-                    {
-                        return compile_call_expr(p, cur_tok, dst, lhs_bind->sym, NULL, bb);
-                    }
-                }
-            }
-            if (parser_assign_dsts(p, dst, &lhs_dst)) return NULL;
-            return cur_tok;
-        }
-        case LEX_NUMBER:
-        {
-            struct ValDest src = dest_const(token_str(p, cur_tok));
-            if (parser_assign_dsts(p, dst, &src)) return NULL;
-            return cur_tok + 1;
-        }
-        case LEX_STRING:
-        {
-            const char* s = token_str(p, cur_tok);
-            const size_t slen = strlen(s);
-            if (memchr(s, '"', slen))
-            {
-                return parser_ferror(&cur_tok->rc, "error: string constants cannot represent \"\n"), NULL;
-            }
-            char* heap_s = (char*)malloc(slen + 3);
-            array_push(&p->strings_to_free, &heap_s, sizeof(heap_s));
-            heap_s[0] = '"';
-            strcpy(heap_s + 1, s);
-            heap_s[slen + 1] = '"';
-            heap_s[slen + 2] = '\0';
-            struct ValDest src = dest_const(heap_s);
-            if (parser_assign_dsts(p, dst, &src)) return NULL;
-            return cur_tok + 1;
-        }
-        default: return parser_ferror(&cur_tok->rc, "error: expected expression\n"), NULL;
-    }
-}
-
-static struct Token* compile_expr_unary_atom(Parser* p,
-                                             struct Token* cur_tok,
-                                             struct ValDest* dst,
-                                             struct CompoundBlock* bb)
-{
-    if (cur_tok->type == LEX_SYMBOL)
-    {
-        char* op = token_str(p, cur_tok);
-        if (op[0] == '!')
-        {
-            struct ValDest lhs_dst = s_any_destination;
-            if (!(cur_tok = compile_expr_unary_atom(p, cur_tok + 1, &lhs_dst, bb))) return NULL;
-            const char* const srcreg = parser_prepare_src_reg(p, &lhs_dst);
-            if (!srcreg) return NULL;
-            const char* const dstreg = parser_prepare_dst_reg(p, dst);
-            if (!dstreg) return NULL;
-            cg_write_inst_op(&p->cg, "!=", dstreg, srcreg, "true");
-            return cur_tok;
-        }
-    }
-
-    return compile_expr_atom(p, cur_tok, dst, bb);
-}
-
 static enum Precedence op_precedence(const char* op)
 {
     switch (op[0])
@@ -743,12 +437,136 @@ static enum Precedence op_precedence(const char* op)
 }
 static int op_precedence_assoc_right(enum Precedence p) { return p == PRECEDENCE_ASSIGN; }
 
-static struct Token* compile_expr_continue(Parser* p,
-                                           struct Token* cur_tok,
-                                           struct ValDest* dst,
-                                           struct ValDest* lhs_dst,
-                                           struct CompoundBlock* bb,
-                                           enum Precedence precedence)
+static struct ExprOp* parse_alloc_expr_op(Parser* p, struct Token* tok, struct Expr* lhs, struct Expr* rhs)
+{
+    struct ExprOp* e = (struct ExprOp*)pool_alloc(&p->expr_op_pool, sizeof(struct ExprOp));
+    e->kind = EXPR_OP;
+    e->tok = tok;
+    e->lhs = lhs;
+    e->rhs = rhs;
+    return e;
+}
+
+static struct ExprSym* parse_alloc_expr_sym(Parser* p, struct Token* tok, struct Symbol* sym)
+{
+    struct ExprSym* e = (struct ExprSym*)pool_alloc(&p->expr_sym_pool, sizeof(struct ExprSym));
+    e->kind = EXPR_SYM;
+    e->tok = tok;
+    e->sym = sym;
+    return e;
+}
+static struct ExprLit* parse_alloc_expr_lit(Parser* p, struct Token* tok)
+{
+    struct ExprLit* e = (struct ExprLit*)pool_alloc(&p->expr_lit_pool, sizeof(struct ExprLit));
+    e->kind = EXPR_LIT;
+    e->tok = tok;
+    return e;
+}
+static struct ExprCall* parse_alloc_expr_call(Parser* p, struct Token* tok, struct Expr* fn, size_t off, size_t ext)
+{
+    struct ExprCall* e = (struct ExprCall*)pool_alloc(&p->expr_call_pool, sizeof(struct ExprCall));
+    e->kind = EXPR_CALL;
+    e->tok = tok;
+    e->fn = fn;
+    e->offset = off;
+    e->extent = ext;
+    return e;
+}
+static void parse_clear_exprs(Parser* p)
+{
+    pool_clear(&p->expr_op_pool);
+    pool_clear(&p->expr_lit_pool);
+    pool_clear(&p->expr_call_pool);
+    pool_clear(&p->expr_sym_pool);
+    p->expr_seqs.sz = 0;
+}
+
+static struct Token* parse_expr(Parser* p, struct Token* cur_tok, struct Expr** ppe, int precedence);
+static struct Token* parse_expr_post_unary(Parser* p, struct Token* cur_tok, struct Expr* lhs, struct Expr** ppe)
+{
+    if (cur_tok->type == LEX_SYMBOL)
+    {
+        struct Token* tok_op = cur_tok;
+        char* op = token_str(p, tok_op);
+
+        if (op[0] == '(')
+        {
+            struct Token* tk = ++cur_tok;
+            struct ExprCall* op_expr;
+            if (tk->type == LEX_SYMBOL && token_str(p, tk)[0] == ')')
+            {
+                ++cur_tok;
+                op_expr = parse_alloc_expr_call(p, tok_op, lhs, 0, 0);
+            }
+            else
+            {
+                struct Expr* arg_exprs[REG_COUNT];
+                size_t i = 0;
+                do
+                {
+                    if (i == REG_COUNT)
+                        return parser_ferror(
+                                   &cur_tok->rc, "error: too many arguments for function (%d supported)", REG_COUNT),
+                               NULL;
+                    if (!(cur_tok = parse_expr(p, cur_tok, arg_exprs + i++, PRECEDENCE_ASSIGN))) return NULL;
+                    char ch = token_expect_comma_or_cparen(p, cur_tok++);
+                    if (ch == ',')
+                        continue;
+                    else if (ch == ')')
+                        break;
+                    else
+                        return NULL;
+                } while (1);
+                size_t offset = p->expr_seqs.sz / sizeof(struct Expr*);
+                size_t extent = i;
+                array_push(&p->expr_seqs, arg_exprs, i * sizeof(struct Expr*));
+                op_expr = parse_alloc_expr_call(p, tok_op, lhs, offset, extent);
+            }
+            return parse_expr_post_unary(p, cur_tok, (struct Expr*)op_expr, ppe);
+        }
+    }
+    *ppe = (struct Expr*)lhs;
+    return cur_tok;
+}
+static struct Token* parse_expr_unary_atom(Parser* p, struct Token* cur_tok, struct Expr** ppe)
+{
+    switch (cur_tok->type)
+    {
+        case LEX_SYMBOL:
+        {
+            char* op = token_str(p, cur_tok);
+            if (op[0] == '!')
+            {
+                struct ExprOp* e = parse_alloc_expr_op(p, cur_tok, NULL, NULL);
+                *ppe = (struct Expr*)e;
+                return parse_expr_unary_atom(p, cur_tok + 1, &e->lhs);
+            }
+            break;
+        }
+        case LEX_IDENT:
+        {
+            struct Token* lhs = cur_tok++;
+            const char* lhs_str = token_str(p, lhs);
+            struct Binding* const lhs_bind = scope_find(&p->scope, lhs_str);
+            if (!lhs_bind)
+            {
+                return parser_ferror(&lhs->rc, "error: '%s' undeclared\n", lhs_str), NULL;
+            }
+            struct ExprSym* lhs_expr = parse_alloc_expr_sym(p, lhs, lhs_bind->sym);
+            return parse_expr_post_unary(p, cur_tok, (struct Expr*)lhs_expr, ppe);
+        }
+        case LEX_NUMBER:
+        case LEX_STRING:
+        {
+            struct ExprLit* lhs_expr = parse_alloc_expr_lit(p, cur_tok++);
+            return parse_expr_post_unary(p, cur_tok, (struct Expr*)lhs_expr, ppe);
+        }
+        default: break;
+    }
+    return parser_ferror(&cur_tok->rc, "error: expected expression\n"), NULL;
+}
+static struct Token* parse_expr_continue(
+    Parser* p, struct Token* cur_tok, struct Expr* lhs, struct Expr** ppe, enum Precedence precedence)
 {
     if (cur_tok->type == LEX_SYMBOL)
     {
@@ -756,54 +574,310 @@ static struct Token* compile_expr_continue(Parser* p,
         char* op = token_str(p, tok_op);
         enum Precedence op_prec = op_precedence(op);
         if (op_prec)
+        {
             if (op_precedence_assoc_right(op_prec))
             {
                 if (op[0] == '=' && op[1] == '\0' && precedence <= PRECEDENCE_ASSIGN)
                 {
-                    if (lhs_dst->is_const)
-                    {
-                        return parser_ferror(&cur_tok->rc, "error: illegal assignment to constant\n"), NULL;
-                    }
-                    cur_tok = compile_expr(p, cur_tok + 1, lhs_dst, bb, PRECEDENCE_ASSIGN);
-                    if (!cur_tok) return NULL;
-                    if (parser_assign_dsts(p, dst, lhs_dst)) return NULL;
+                    struct ExprOp* op_expr = parse_alloc_expr_op(p, tok_op, lhs, NULL);
+                    *ppe = (struct Expr*)op_expr;
+                    if (!(cur_tok = parse_expr(p, cur_tok + 1, &op_expr->rhs, PRECEDENCE_ASSIGN))) return NULL;
+                }
+                else
+                {
+                    *ppe = lhs;
                 }
                 return cur_tok;
             }
             else if (precedence < op_prec)
             {
-                struct ValDest rhs = s_any_destination;
-                if (!(cur_tok = compile_expr(p, cur_tok + 1, &rhs, bb, op_prec))) return NULL;
-                const char* r2 = parser_prepare_src_reg(p, lhs_dst);
-                if (!r2) return NULL;
-                const char* r3 = parser_prepare_src_reg(p, &rhs);
-                if (!r3) return NULL;
-                if (token_is_sym(p, cur_tok, ';'))
-                {
-                    // hack to avoid emitting a temporary
-                    const char* r1 = parser_prepare_dst_reg(p, dst);
-                    if (!r1) return NULL;
-                    cg_write_inst_op(&p->cg, op, r1, r2, r3);
-                    return cur_tok;
-                }
-                struct ValDest res = s_any_destination;
-                const char* r1 = parser_prepare_dst_reg(p, &res);
-                if (!r1) return NULL;
-                cg_write_inst_op(&p->cg, op, r1, r2, r3);
-                return compile_expr_continue(p, cur_tok, dst, &res, bb, precedence);
+                struct Expr* rhs;
+                if (!(cur_tok = parse_expr(p, cur_tok + 1, &rhs, op_prec))) return NULL;
+                struct ExprOp* op_expr = parse_alloc_expr_op(p, tok_op, lhs, rhs);
+                return parse_expr_continue(p, cur_tok, (struct Expr*)op_expr, ppe, precedence);
             }
+        }
     }
-    if (parser_assign_dsts(p, dst, lhs_dst)) return NULL;
+    *ppe = lhs;
     return cur_tok;
 }
-static struct Token* compile_expr(
-    Parser* p, struct Token* cur_tok, struct ValDest* dst, struct CompoundBlock* bb, int precedence)
+static struct Token* parse_expr(Parser* p, struct Token* cur_tok, struct Expr** ppe, int precedence)
 {
-    struct ValDest lhs_dst = s_any_destination;
-    if (!(cur_tok = compile_expr_unary_atom(p, cur_tok, &lhs_dst, bb))) return NULL;
+    struct Expr* lhs;
+    if (!(cur_tok = parse_expr_unary_atom(p, cur_tok, &lhs))) return NULL;
 
-    return compile_expr_continue(p, cur_tok, dst, &lhs_dst, bb, precedence);
+    return parse_expr_continue(p, cur_tok, lhs, ppe, precedence);
 }
+
+static int compile_expr_lit(Parser* p, struct ExprLit* e, struct ValDest* dst)
+{
+    if (e->tok->type == LEX_NUMBER)
+    {
+        struct ValDest src = dest_const(token_str(p, e->tok));
+        return parser_assign_dsts(p, dst, &src);
+    }
+    else if (e->tok->type == LEX_STRING)
+    {
+        const char* s = token_str(p, e->tok);
+        const size_t slen = strlen(s);
+        if (memchr(s, '"', slen))
+        {
+            return parser_ferror(&e->tok->rc, "error: string constants cannot represent \"\n"), 1;
+        }
+        char* heap_s = (char*)malloc(slen + 3);
+        array_push(&p->strings_to_free, &heap_s, sizeof(heap_s));
+        heap_s[0] = '"';
+        strcpy(heap_s + 1, s);
+        heap_s[slen + 1] = '"';
+        heap_s[slen + 2] = '\0';
+        struct ValDest src = dest_const(heap_s);
+        return parser_assign_dsts(p, dst, &src);
+    }
+}
+
+static int compile_expr_op(Parser* p, struct ExprOp* e, struct ValDest* dst, struct CompoundBlock* bb)
+{
+    if (!e->lhs) return parser_ice(&e->tok->rc), 1;
+
+    struct ValDest lhs = s_any_destination;
+    if (compile_expr(p, e->lhs, &lhs, bb)) return 1;
+
+    const char* const op = token_str(p, e->tok);
+    if (op[0] == '!' && op[1] == '\0')
+    {
+        const char* const srcreg = parser_prepare_src_reg(p, &lhs);
+        if (!srcreg) return 1;
+        const char* const dstreg = parser_prepare_dst_reg(p, dst);
+        if (!dstreg) return 1;
+        cg_write_inst_op(&p->cg, "!=", dstreg, srcreg, "true");
+        return 0;
+    }
+
+    if (!e->rhs) return parser_ice(&e->tok->rc), 1;
+
+    if (op[0] == '=' && op[1] == '\0')
+    {
+        if (lhs.is_const)
+        {
+            return parser_ferror(&e->tok->rc, "error: illegal assignment to constant\n"), 1;
+        }
+        if (compile_expr(p, e->rhs, &lhs, bb)) return 1;
+        return parser_assign_dsts(p, dst, &lhs);
+    }
+
+    struct ValDest rhs = s_any_destination;
+    if (compile_expr(p, e->rhs, &rhs, bb)) return 1;
+    const char* r2 = parser_prepare_src_reg(p, &lhs);
+    if (!r2) return 1;
+    const char* r3 = parser_prepare_src_reg(p, &rhs);
+    if (!r3) return 1;
+    const char* r1 = parser_prepare_dst_reg(p, dst);
+    if (!r1) return 1;
+    cg_write_inst_op(&p->cg, op, r1, r2, r3);
+    return 0;
+}
+
+static struct Expr* parser_checked_expr_at(Parser* p, struct ExprCall* e, size_t index)
+{
+    if (index >= e->extent) return NULL;
+    return ((struct Expr**)p->expr_seqs.data)[e->offset + index];
+}
+
+static int compile_expr_call_intrinsic(
+    Parser* p, struct ExprCall* e, struct ValDest* dst, struct Symbol* fn, struct CompoundBlock* bb)
+{
+    if (e->extent > REG_COUNT)
+    {
+        return parser_ferror(&e->tok->rc, "error: exceeded maximum call arguments (%d)\n", REG_COUNT);
+    }
+
+    if (!bb->fn_sym)
+    {
+        return parser_ferror(&e->tok->rc, "error: not in function scope\n");
+    }
+
+    struct ValDest arg_dsts[REG_COUNT];
+    for (size_t i = 0; i < e->extent; ++i)
+    {
+        arg_dsts[i] = s_any_destination;
+        if (compile_expr(p, ((struct Expr**)p->expr_seqs.data)[e->offset + i], arg_dsts + i, bb)) return 1;
+    }
+
+    // pseudo-format
+    const char* s = fn->intrinsic_asm_str;
+    char buf[128];
+    size_t i = 0;
+    while (1)
+    {
+        if (i == 127)
+        {
+            fprintf(stderr, "resource exceeded\n");
+            abort();
+        }
+        if (!*s) break;
+        if (*s == '%')
+        {
+            ++s;
+            if (*s == 'r')
+            {
+                const char* const reg = parser_prepare_dst_reg(p, dst);
+                size_t len = strlen(reg);
+                if (i + len > 127)
+                {
+                    fprintf(stderr, "resource exceeded\n");
+                    abort();
+                }
+                memcpy(buf + i, reg, len);
+                i += len;
+            }
+            else if (*s >= '0' && *s <= '9')
+            {
+                size_t i = *s - '0';
+                if (i >= e->extent)
+                {
+                    return parser_ferror(&fn->token->rc, "error: invalid intrinsic string: wrong arguments\n");
+                }
+                const char* const reg = parser_prepare_src_reg(p, arg_dsts + i);
+                if (!reg) return 1;
+                size_t len = strlen(reg);
+                if (i + len > 127)
+                {
+                    fprintf(stderr, "resource exceeded\n");
+                    abort();
+                }
+                memcpy(buf + i, reg, len);
+                i += len;
+            }
+            else
+            {
+                return parser_ferror(&fn->token->rc, "error: invalid intrinsic string: invalid format specifier\n");
+            }
+            ++s;
+        }
+        else
+        {
+            buf[i++] = *s++;
+        }
+    }
+    buf[i] = 0;
+    cg_write_inst(&p->cg, buf);
+    if (!dst->is_sym && !dst->reg) *dst = s_void_destination;
+    return 0;
+}
+
+static int compile_expr_call(Parser* p, struct ExprCall* e, struct ValDest* dst, struct CompoundBlock* bb)
+{
+    if (!e->fn) return parser_ice(&e->tok->rc), 1;
+
+    struct ValDest fn = s_any_destination;
+    if (compile_expr(p, e->fn, &fn, bb)) return 1;
+
+    if (!fn.is_sym || !fn.sym->is_function)
+    {
+        return parser_ferror(&e->tok->rc, "error: attempting to call a non-function\n");
+    }
+
+    if (fn.sym->arg_count != e->extent)
+    {
+        return parser_ferror(
+            &e->tok->rc, "error: function requires %d arguments, %lu provided\n", fn.sym->arg_count, e->extent);
+    }
+    if (fn.sym->intrinsic_asm_str)
+    {
+        return compile_expr_call_intrinsic(p, e, dst, fn.sym, bb);
+    }
+    else
+    {
+        if (e->extent > REG_COUNT)
+        {
+            return parser_ferror(&e->tok->rc, "error: exceeded maximum call arguments (%d)\n", REG_COUNT);
+        }
+
+        if (!bb->fn_sym)
+        {
+            return parser_ferror(&e->tok->rc, "error: not in function scope\n");
+        }
+
+        struct ValDest arg_dsts[REG_COUNT - 1];
+        for (size_t i = 1; i < e->extent; ++i)
+        {
+            arg_dsts[i - 1] = s_any_destination;
+            if (compile_expr(p, ((struct Expr**)p->expr_seqs.data)[e->offset + i], arg_dsts + i - 1, bb)) return 1;
+        }
+
+        if (fn.sym->is_nonreentrant)
+        {
+            const char* const name = token_str(p, fn.sym->token);
+            struct FreeVar fv;
+            for (size_t i = 1; i < e->extent; ++i)
+            {
+                fv = nrfun_param(p, i, name);
+                struct ValDest fv_dst = dest_reg(fv.buf);
+                if (parser_assign_dsts(p, &fv_dst, arg_dsts + i - 1)) return 1;
+            }
+            if (e->extent > 0)
+            {
+                fv = nrfun_param(p, 0, name);
+                struct ValDest fv_dst = dest_reg(fv.buf);
+                if (compile_expr(p, ((struct Expr**)p->expr_seqs.data)[e->offset], &fv_dst, bb)) return 1;
+            }
+            if (!bb->fn_sym->is_nonreentrant)
+            {
+                char buf[16];
+                snprintf(buf, sizeof(buf), "%d", bb->frame_size);
+                cg_write_inst_op(&p->cg, "+", "__stk__", "__ebp__", buf);
+            }
+            if (parser_spill_registers(p)) return 1;
+            const struct FreeVar fv_ret = nrfun_param_ret(p, name);
+            cg_write_inst_op(&p->cg, "+", fv_ret.buf, "1", "@counter");
+        }
+        else
+        {
+            if (e->extent > REG_COUNT)
+            {
+                return parser_ferror(&e->tok->rc, "error: exceeded maximum call arguments (%d)\n", REG_COUNT);
+            }
+            for (size_t i = 1; i < e->extent; ++i)
+            {
+                struct ValDest pdst = dest_reg(PARAM_NAMES_ARR[i]);
+                if (parser_assign_dsts(p, &pdst, arg_dsts + i - 1)) return 1;
+            }
+            if (e->extent > 0)
+            {
+                struct ValDest pdst = dest_reg(PARAM_NAMES_ARR[0]);
+                if (compile_expr(p, ((struct Expr**)p->expr_seqs.data)[e->offset], &pdst, bb)) return 1;
+            }
+            if (parser_spill_registers(p)) return 1;
+            cg_write_inst(&p->cg, "op add ret 1 @counter");
+        }
+        cg_write_inst_jump(&p->cg, fn.sym->rename.buf);
+        if (!dst->is_void)
+        {
+            if (!parser_prepare_dst_reg(p, dst)) return 1;
+            struct ValDest ret_dst = dest_reg(PARAM_NAMES_ARR[0]);
+            if (parser_assign_dsts(p, dst, &ret_dst)) return 1;
+        }
+    }
+    return 0;
+}
+
+static int compile_expr(Parser* p, struct Expr* e, struct ValDest* dst, struct CompoundBlock* bb)
+{
+    switch (e->kind)
+    {
+        case EXPR_LIT: return compile_expr_lit(p, (struct ExprLit*)e, dst);
+        case EXPR_OP: return compile_expr_op(p, (struct ExprOp*)e, dst, bb);
+        case EXPR_CALL: return compile_expr_call(p, (struct ExprCall*)e, dst, bb);
+        case EXPR_SYM:
+        {
+            struct ExprSym* esym = (struct ExprSym*)e;
+            struct ValDest sym_dst = dest_sym(esym->sym);
+            return parser_assign_dsts(p, dst, &sym_dst);
+        }
+        default: return parser_ice(&s_unknown_rc), 1;
+    }
+}
+
 enum AttrKind
 {
     ATTR_SYM,
@@ -1121,14 +1195,16 @@ static struct Token* compile_decl(Parser* p, struct Token* cur_tok, struct Compo
                         }
                         cg_write_push_ret(&p->cg, &p->fn_ret_var);
                     }
-                    cur_tok = compile_compound_stmt(p, cur_tok + 1, &new_cb);
-                    if (!new_cb.has_returned)
+                    if (cur_tok = compile_compound_stmt(p, cur_tok + 1, &new_cb))
                     {
-                        if (parser_spill_registers(p)) return NULL;
-                        cg_write_return(&p->cg, &p->fn_ret_var);
+                        if (!new_cb.has_returned)
+                        {
+                            if (parser_spill_registers(p)) return NULL;
+                            cg_write_return(&p->cg, &p->fn_ret_var);
+                        }
+                        p->fn_ret_var = s_freevar_zero;
+                        scope_shrink_free_syms(&p->scope, scope_sz + 1);
                     }
-                    p->fn_ret_var = s_freevar_zero;
-                    scope_shrink_free_syms(&p->scope, scope_sz + 1);
                     return cur_tok;
                 }
                 else
@@ -1138,7 +1214,11 @@ static struct Token* compile_decl(Parser* p, struct Token* cur_tok, struct Compo
                     if (ch == '=')
                     {
                         struct ValDest dst = dest_sym(sym);
-                        if (!(cur_tok = compile_expr(p, cur_tok + 1, &dst, bb, PRECEDENCE_ASSIGN))) return NULL;
+
+                        struct Expr* expr;
+                        if (!(cur_tok = parse_expr(p, cur_tok + 1, &expr, PRECEDENCE_ASSIGN))) return NULL;
+                        if (compile_expr(p, expr, &dst, bb)) return NULL;
+                        parse_clear_exprs(p);
                     }
                     sym->is_const = specs.is_const;
                     if (cur_tok->type != LEX_SYMBOL)
@@ -1185,56 +1265,42 @@ static struct Token* compile_conditional(
 {
     if (!(cur_tok = token_consume_sym(p, cur_tok, '('))) return NULL;
 
-    struct ValDest lhs = s_any_destination;
-    if (!(cur_tok = compile_expr(p, cur_tok, &lhs, bb, PRECEDENCE_RELATION))) return NULL;
-    while (cur_tok->type == LEX_SYMBOL)
+    struct Expr* cond;
+    if (!(cur_tok = parse_expr(p, cur_tok, &cond, PRECEDENCE_COMMA))) return NULL;
+
+    if (cond->kind == EXPR_OP)
     {
-        const char* const op = token_str(p, cur_tok);
+        struct ExprOp* cond_op = (struct ExprOp*)cond;
+        const char* const op = token_str(p, cond_op->tok);
         enum Precedence pr = op_precedence(op);
         if (pr == PRECEDENCE_EQUALITY || pr == PRECEDENCE_RELATION)
         {
+            struct ValDest lhs = s_any_destination;
+            if (compile_expr(p, cond_op->lhs, &lhs, bb)) return NULL;
             struct ValDest rhs = s_any_destination;
-            if (!(cur_tok = compile_expr(p, cur_tok + 1, &rhs, bb, pr))) return NULL;
+            if (compile_expr(p, cond_op->rhs, &rhs, bb)) return NULL;
+
+            parse_clear_exprs(p);
+
             const char* const lhs_reg = parser_prepare_src_reg(p, &lhs);
             if (!lhs_reg) return NULL;
             const char* const rhs_reg = parser_prepare_src_reg(p, &rhs);
             if (!rhs_reg) return NULL;
-            if (token_is_sym(p, cur_tok, ')'))
-            {
-                // Do if-stmt fusion
-                if (parser_spill_registers(p)) return NULL;
-                cg_write_inst_jump_op(&p->cg, jump_to, inverted ? relation_invert(op) : op, lhs_reg, rhs_reg);
-                break;
-            }
-            else
-            {
-                struct ValDest tmp = s_any_destination;
-                const char* tmp_reg = parser_prepare_dst_reg(p, &tmp);
-                if (!tmp_reg) return NULL;
-                cg_write_inst_op(&p->cg, op, tmp_reg, lhs_reg, rhs_reg);
-                lhs = tmp;
-                continue;
-            }
-        }
-        else if (op[0] == ')')
-        {
-            const char* const lhs_reg = parser_prepare_src_reg(p, &lhs);
-            if (!lhs_reg) return NULL;
+
+            // Do if-stmt fusion
             if (parser_spill_registers(p)) return NULL;
-            cg_write_inst_jump_op(&p->cg, jump_to, inverted ? "!=" : "==", lhs_reg, "true");
-            break;
-        }
-        else
-        {
-            struct ValDest tmp = s_any_destination;
-            if (!(cur_tok = compile_expr_continue(p, cur_tok, &tmp, &lhs, bb, PRECEDENCE_ASSIGN))) return NULL;
-            const char* const tmp_reg = parser_prepare_src_reg(p, &tmp);
-            if (!tmp_reg) return NULL;
-            if (parser_spill_registers(p)) return NULL;
-            cg_write_inst_jump_op(&p->cg, jump_to, inverted ? "!=" : "==", tmp_reg, "true");
-            break;
+            cg_write_inst_jump_op(&p->cg, jump_to, inverted ? relation_invert(op) : op, lhs_reg, rhs_reg);
+            return token_consume_sym(p, cur_tok, ')');
         }
     }
+
+    struct ValDest lhs = s_any_destination;
+    if (compile_expr(p, cond, &lhs, bb)) return NULL;
+    parse_clear_exprs(p);
+    const char* const lhs_reg = parser_prepare_src_reg(p, &lhs);
+    if (!lhs_reg) return NULL;
+    if (parser_spill_registers(p)) return NULL;
+    cg_write_inst_jump_op(&p->cg, jump_to, inverted ? "!=" : "==", lhs_reg, "true");
     return token_consume_sym(p, cur_tok, ')');
 }
 static struct Token* compile_if_stmt(Parser* p, struct Token* cur_tok, struct CompoundBlock* bb)
@@ -1313,9 +1379,12 @@ static struct Token* compile_stmt(Parser* p, struct Token* cur_tok, struct Compo
         case LEX_RETURN:
         {
             bb->has_returned = 1;
-            struct ValDest dst = dest_reg(PARAM_NAMES_ARR[0]);
-            if (cur_tok = compile_expr(p, cur_tok + 1, &dst, bb, PRECEDENCE_COMMA))
+            struct Expr* e;
+            if (cur_tok = parse_expr(p, cur_tok + 1, &e, PRECEDENCE_COMMA))
             {
+                struct ValDest dst = dest_reg(PARAM_NAMES_ARR[0]);
+                if (compile_expr(p, e, &dst, bb)) return NULL;
+                parse_clear_exprs(p);
                 if (parser_spill_registers(p)) return NULL;
                 cg_write_return(&p->cg, &p->fn_ret_var);
             }
@@ -1367,38 +1436,15 @@ static struct Token* compile_stmt(Parser* p, struct Token* cur_tok, struct Compo
                 // this is a declaration
                 return compile_decl(p, cur_tok, bb);
             }
-            else
-            {
-                struct ValDest dst = s_void_destination;
-                if (cur_tok = compile_expr(p, cur_tok, &dst, bb, PRECEDENCE_COMMA))
-                {
-                    if (cur_tok->type == LEX_SYMBOL && token_str(p, cur_tok)[0] == ';')
-                    {
-                        ++cur_tok;
-                    }
-                    else
-                    {
-                        return parser_ferror(&cur_tok->rc, "error: expected semicolon\n"), NULL;
-                    }
-                }
-            }
-            return cur_tok;
         }
         case LEX_NUMBER:
         {
+            struct Expr* e;
+            if (!(cur_tok = parse_expr(p, cur_tok, &e, PRECEDENCE_COMMA))) return NULL;
             struct ValDest dst = s_void_destination;
-            if (cur_tok = compile_expr(p, cur_tok, &dst, bb, PRECEDENCE_COMMA))
-            {
-                if (cur_tok->type == LEX_SYMBOL && token_str(p, cur_tok)[0] == ';')
-                {
-                    ++cur_tok;
-                }
-                else
-                {
-                    return parser_ferror(&cur_tok->rc, "error: expected semicolon\n"), NULL;
-                }
-            }
-            return cur_tok;
+            if (compile_expr(p, e, &dst, bb)) return NULL;
+            parse_clear_exprs(p);
+            return token_consume_sym(p, cur_tok, ';');
         }
         case LEX_SYMBOL:
         {
@@ -1471,18 +1517,33 @@ void parser_init(Parser* p)
     p->free_var_counter = 0;
     p->first_active_sym = NULL;
     memset(p->fn_label_prefix, 0, sizeof(p->fn_label_prefix));
+
+    pool_init(&p->expr_op_pool);
+    pool_init(&p->expr_sym_pool);
+    pool_init(&p->expr_call_pool);
+    pool_init(&p->expr_lit_pool);
+    array_init(&p->expr_seqs);
 }
 void parser_destroy(Parser* p)
 {
-    array_destroy(&p->stringpool);
     array_destroy(&p->toks);
+    array_destroy(&p->stringpool);
     for (size_t i = 0; i < p->strings_to_free.sz / sizeof(char*); ++i)
     {
         free(((char**)p->strings_to_free.data)[i]);
     }
     array_destroy(&p->strings_to_free);
+    scope_shrink_free_syms(&p->scope, 0);
     scope_destroy(&p->scope);
+    scope_shrink_free_syms(&p->type_scope, 0);
     scope_destroy(&p->type_scope);
+    cg_destroy(&p->cg);
+
+    pool_destroy(&p->expr_op_pool);
+    pool_destroy(&p->expr_sym_pool);
+    pool_destroy(&p->expr_call_pool);
+    pool_destroy(&p->expr_lit_pool);
+    array_destroy(&p->expr_seqs);
 }
 
 int parse(Parser* p, Lexer* l)

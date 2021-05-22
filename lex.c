@@ -146,6 +146,14 @@ int lex(Lexer* l, Buffer* buf)
                     l->state = LEX_MULTILINE_COMMENT;
                     goto LEX_MULTILINE_COMMENT;
                 }
+                if (l->sz == 1 && l->tok[0] == '/' && ch == '/')
+                {
+                    // single-line comment
+                    advance_rowcol(&l->rc, buf->buf[i++]);
+                    l->sz = 0;
+                    l->state = LEX_COMMENT;
+                    goto LEX_COMMENT;
+                }
                 if (l->sz == 1 && ch == '=')
                 {
                     if (l->tok[0] == '=' || l->tok[0] == '!' || l->tok[0] == '>' || l->tok[0] == '<')
@@ -231,6 +239,21 @@ int lex(Lexer* l, Buffer* buf)
                 else
                 {
                     l->sz = 0;
+                }
+            }
+            break;
+        case LEX_COMMENT:
+        LEX_COMMENT:
+            for (; i < buf->sz; advance_rowcol(&l->rc, buf->buf[i++]))
+            {
+                const char ch = buf->buf[i];
+                if (ch == '\n')
+                {
+                    l->sz = 0;
+                    if (rc = emit_token(l)) return rc;
+                    advance_rowcol(&l->rc, buf->buf[i++]);
+                    l->state = LEX_START;
+                    goto LEX_START;
                 }
             }
             break;

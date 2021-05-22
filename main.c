@@ -26,7 +26,7 @@ struct SubLexer
     FrontEnd* fe;
 };
 
-void parser_ferror(const struct RowCol* rc, const char* fmt, ...)
+int parser_ferror(const struct RowCol* rc, const char* fmt, ...)
 {
     va_list argp;
     va_start(argp, fmt);
@@ -35,6 +35,12 @@ void parser_ferror(const struct RowCol* rc, const char* fmt, ...)
     {
         vsnprintf(s_error_buffer + n, sizeof(s_error_buffer) - n, fmt, argp);
     }
+    return 1;
+}
+int parser_ice(const struct RowCol* rc)
+{
+    parser_ferror(rc, "error: an internal compiler error has occurred.\n");
+    return 1;
 }
 static int fe_handle_directive(FrontEnd* fe, Lexer* l);
 static int sublex_on_token(Lexer* l)
@@ -43,6 +49,11 @@ static int sublex_on_token(Lexer* l)
     if (l->state == LEX_DIRECTIVE)
     {
         return fe_handle_directive(self->fe, l);
+    }
+    else if (l->state == LEX_COMMENT)
+    {
+        // drop comments
+        return 0;
     }
     else if (l->state == LEX_MULTILINE_COMMENT)
     {
@@ -154,6 +165,11 @@ int fe_on_token(Lexer* l)
     {
         return fe_handle_directive(self, l);
     }
+    else if (l->state == LEX_COMMENT)
+    {
+        // drop comments
+        return 0;
+    }
     else if (l->state == LEX_MULTILINE_COMMENT)
     {
         // drop comments
@@ -165,13 +181,23 @@ int fe_on_token(Lexer* l)
     }
 }
 
-void init_front_end(FrontEnd* fe)
+void fe_init(FrontEnd* fe)
 {
     parser_init(&fe->parser);
     array_init(&fe->filenames);
     array_init(&fe->files_open);
 }
-
+void fe_destroy(FrontEnd* fe)
+{
+    parser_destroy(&fe->parser);
+    char** b = fe->filenames.data;
+    for (size_t i = 0; i < fe->filenames.sz / sizeof(char*); ++i)
+    {
+        free(b[i]);
+    }
+    array_destroy(&fe->filenames);
+    array_destroy(&fe->files_open);
+}
 static int fe_lex_file(FrontEnd* fe, const char* filename)
 {
     FILE* f = fopen(filename, "r");
@@ -195,8 +221,9 @@ int main(int argc, const char* const* argv)
         return usage();
     }
     FrontEnd fe;
-    init_front_end(&fe);
+    fe_init(&fe);
     int rc = fe_lex_file(&fe, argv[1]);
+    fe_destroy(&fe);
     if (rc)
     {
         fprintf(stderr, "%s", s_error_buffer);

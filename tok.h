@@ -4,6 +4,7 @@
 
 #include "array.h"
 #include "fwd.h"
+#include "pool.h"
 
 struct Buffer
 {
@@ -18,7 +19,8 @@ struct RowCol
     int col;
 };
 
-void parser_ferror(const struct RowCol* rc, const char* fmt, ...);
+int parser_ferror(const struct RowCol* rc, const char* fmt, ...);
+int parser_ice(const struct RowCol* rc);
 
 #define MAX_TOKEN_SIZE 128
 
@@ -83,12 +85,21 @@ typedef struct Parser
 
     struct CodeGen cg;
     struct Symbol* first_active_sym;
+
+    // exprs
+    struct Pool expr_op_pool;
+    struct Pool expr_sym_pool;
+    struct Pool expr_call_pool;
+    struct Pool expr_lit_pool;
+    struct Array expr_seqs;
 } Parser;
 
 void parser_init(Parser* p);
+void parser_destroy(Parser* p);
 int parse(Parser* p, Lexer* l);
 
 void cg_init(struct CodeGen* cg);
+void cg_destroy(struct CodeGen* cg);
 void cg_write_bin_entry(struct CodeGen* cg);
 void cg_write_push_ret(struct CodeGen* cg, struct FreeVar* ret_addr);
 void cg_write_return(struct CodeGen* cg, struct FreeVar* ret_addr);

@@ -12,6 +12,12 @@ void cg_init(struct CodeGen* cg)
     array_init(&cg->label_strs);
     memset(&cg->memory, 0, sizeof(cg->memory));
 }
+void cg_destroy(struct CodeGen* cg)
+{
+    array_destroy(&cg->text);
+    array_destroy(&cg->labels);
+    array_destroy(&cg->label_strs);
+}
 static struct RowCol s_unknown_rc = {
     .file = "<unknown>",
     .row = 1,

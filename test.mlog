@@ -26,45 +26,40 @@ const int __attribute__((sym("reconstructor1"))) reconstructor1;
 const int __attribute__((sym("reconstructor2"))) reconstructor2;
 const __string __attribute__((sym("\"thorium: \""))) thorium_msg;
 const __string __attribute__((sym("\" \""))) space_str;
-/*
+
 int __attribute__((nonreentrant)) handle_mat(int f, int mat, int level)
 {
-        int n = sensor(f, mat);
-        if (n < level)
+    int n = sensor(f, mat);
+    if (n < level)
+    {
+        int s2 = sensor(__unit, mat);
+        if (s2 > 0)
         {
-            int s2 = sensor(__unit, mat);
-            if (s2 > 0)
-            {
-                int x = sense_x(f);
-                int y = sense_y(f);
-                unit_approach(x, y, 5);
-                unit_drop_item(f, 30);
-            }
-            else
-            {
-                int x = sense_x(nucleus1);
-                int y = sense_y(nucleus1);
-                unit_approach(x, y, 5);
-                if (sensor(f, totalitems) > 0)
-                {
-                    unit_drop_item(nucleus1, 30);
-                }
-                unit_take_item(nucleus1, mat, 30);
-            }
-            return 1;
+            int x = sense_x(f);
+            int y = sense_y(f);
+            unit_approach(x, y, 5);
+            unit_drop_item(f, 30);
         }
-    return f + mat;
-}*/
-
-int z;
-
-int __attribute__((nonreentrant)) foo(int n) { return z; }
+        else
+        {
+            int x = sense_x(nucleus1);
+            int y = sense_y(nucleus1);
+            unit_approach(x, y, 5);
+            if (sensor(f, totalitems) > 0)
+            {
+                unit_drop_item(nucleus1, 30);
+            }
+            unit_take_item(nucleus1, mat, 30);
+        }
+        return 1;
+    }
+    return 0;
+}
 
 void __attribute__((nonreentrant)) main()
 {
-    int x = 10;
-    if (x > 1)
-        foo(x);
-    else
-        foo(1);
+    if (handle_mat(factory1, thorium, 60))
+        ;
+    if (handle_mat(factory1, thorium, 60))
+        ;
 }
