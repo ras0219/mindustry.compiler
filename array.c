@@ -1,7 +1,7 @@
 #include "array.h"
 
-#include "malloc.h"
-#include "string.h"
+#include <malloc.h>
+#include <string.h>
 
 void array_init(struct Array* arr) { memset(arr, 0, sizeof(struct Array)); }
 void* array_alloc(struct Array* arr, size_t sz)

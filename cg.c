@@ -131,6 +131,7 @@ int cg_load(struct CodeGen* cg, int offset, const char* dst, const struct RowCol
 }
 int cg_write_mem(struct CodeGen* cg, const char* addr, const char* val, const struct RowCol* rc)
 {
+    if (!val || !*val) abort();
     if (!cg->memory.buf[0])
     {
         return parser_ferror(rc, "error: no memory bank configured yet -- use #pragma memory <memory1>"), 1;

@@ -10,7 +10,7 @@ struct Array
 };
 
 void array_init(struct Array* arr);
-void* array_alloc(struct Array* arr, size_t sz);
-void* array_push(struct Array* arr, const void* src, size_t sz);
+void* array_alloc(struct Array* arr, size_t sz) __attribute__((alloc_size(2), returns_nonnull));
+void* array_push(struct Array* arr, const void* src, size_t sz) __attribute__((alloc_size(3), returns_nonnull));
 void array_pop(struct Array* arr, size_t sz);
 void array_destroy(struct Array* arr);

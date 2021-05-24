@@ -85,28 +85,60 @@ static int lex_file(FILE* f, Lexer* l)
     return end_lex(l);
 }
 
+static size_t path_parent_span(const char* path)
+{
+    size_t r = 0;
+    size_t i = 0;
+    char ch;
+    while (ch = path[i++])
+    {
+#ifdef _WIN32_
+#error "TODO: path manipulation"
+#else
+        if (ch == '/') r = i;
+#endif
+    }
+    return r;
+}
+
+static int path_is_absolute(const char* path)
+{
+#ifdef _WIN32_
+#error "TODO: path manipulation"
+#else
+    return *path == '/';
+#endif
+}
+
 static int fe_handle_directive(FrontEnd* fe, Lexer* l)
 {
     if (strncmp(l->tok, "include ", 8) == 0)
     {
         if (l->tok[8] != '"' || l->tok[l->sz - 1] != '"' || l->sz < 10)
         {
-            return parser_ferror(&l->tok_rc, "error: #include only supports '\"'\n"), 1;
+            return parser_ferror(&l->tok_rc, "error: #include only supports '\"'\n");
         }
         l->tok[l->sz - 1] = '\0';
-        char* const* const names_begin = (char* const* const)fe->filenames.data;
-        const size_t* const begin = (const size_t* const)fe->files_open.data;
+        char* const* const names_begin = fe->filenames.data;
+        const size_t* const begin = fe->files_open.data;
         const size_t n = fe->files_open.sz / sizeof(size_t);
         for (size_t i = 0; i < n; ++i)
         {
             if (strcmp(names_begin[begin[i]], l->tok + 9) == 0)
             {
-                return parser_ferror(&l->tok_rc, "error: attempted to recursively include '%s'\n", l->tok + 9), 1;
+                return parser_ferror(&l->tok_rc, "error: attempted to recursively include '%s'\n", l->tok + 9);
             }
         }
+        if (path_is_absolute(l->tok + 9))
+        {
+            return parser_ferror(&l->tok_rc, "error: absolute include paths are not allowed\n");
+        }
         array_push(&fe->files_open, &fe->filenames.sz, sizeof(size_t));
-        char* filename = (char*)malloc(l->sz - 9);
-        strcpy(filename, l->tok + 9);
+
+        size_t parent_sz = path_parent_span(l->tok_rc.file);
+        char* filename = (char*)malloc(l->sz - 9 + parent_sz);
+        memcpy(filename, l->tok_rc.file, parent_sz);
+        memcpy(filename + parent_sz, l->tok + 9, l->sz - 9);
         array_push(&fe->filenames, &filename, sizeof(filename));
         struct SubLexer sublex;
         sublex.fe = fe;

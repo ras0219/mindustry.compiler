@@ -10,7 +10,7 @@
             "request": "launch",
             "program": "${env:BUILD_DIR}/main",
             "args": [
-                "${workspaceFolder}/test.mlog"
+                "${workspaceFolder}/examples/test.c"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",

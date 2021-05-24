@@ -2,12 +2,15 @@
 
 #include <stddef.h>
 
+#include "freevar.h"
+
 enum AstKind
 {
     EXPR_SYM,
     EXPR_LIT,
     EXPR_OP,
     EXPR_CALL,
+    AST_SYM,
 };
 
 struct Expr
@@ -17,14 +20,14 @@ struct Expr
 
 struct ExprLit
 {
-    enum AstKind kind;
+    struct Expr kind;
 
     const struct Token* tok;
 };
 
 struct ExprSym
 {
-    enum AstKind kind;
+    struct Expr kind;
 
     const struct Token* tok;
     struct Symbol* sym;
@@ -32,7 +35,7 @@ struct ExprSym
 
 struct ExprOp
 {
-    enum AstKind kind;
+    struct Expr kind;
 
     const struct Token* tok;
     struct Expr *lhs, *rhs;
@@ -40,7 +43,7 @@ struct ExprOp
 
 struct ExprCall
 {
-    enum AstKind kind;
+    struct Expr kind;
     const struct Token* tok;
     struct Expr* fn;
     size_t offset;

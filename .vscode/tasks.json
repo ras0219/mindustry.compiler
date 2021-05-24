@@ -12,7 +12,7 @@
                 "${env:BUILD_DIR}",
                 "&&",
                 "${env:BUILD_DIR}/main",
-                "${workspaceFolder}/test.mlog"
+                "${workspaceFolder}/examples/test.c"
             ],
             "group": {
                 "kind": "build",

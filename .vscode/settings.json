@@ -9,6 +9,8 @@
         "fwd.h": "c",
         "*.mlog": "c",
         "limits": "c",
-        "stdarg.h": "c"
+        "stdarg.h": "c",
+        "malloc.h": "c",
+        "mindustry.h": "c"
     }
 }

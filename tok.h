@@ -3,6 +3,7 @@
 #include <stddef.h>
 
 #include "array.h"
+#include "freevar.h"
 #include "fwd.h"
 #include "pool.h"
 
@@ -42,11 +43,6 @@ int end_lex(Lexer* l);
 #define TREE_NODES_SIZE 128
 #define STRING_POOL_SIZE 1024
 
-struct FreeVar
-{
-    char buf[24];
-};
-
 struct Scope
 {
     struct Array strings;
@@ -84,9 +80,10 @@ typedef struct Parser
     struct Scope type_scope;
 
     struct CodeGen cg;
-    struct Symbol* first_active_sym;
+    struct RegMap* first_active_reg;
 
     // exprs
+    struct Pool sym_pool;
     struct Pool expr_op_pool;
     struct Pool expr_sym_pool;
     struct Pool expr_call_pool;

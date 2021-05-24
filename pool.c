@@ -1,7 +1,6 @@
 #include "pool.h"
 
 #include <malloc.h>
-#include <stdlib.h>
 
 void pool_init(struct Pool* p)
 {
@@ -18,7 +17,6 @@ void pool_destroy(struct Pool* p)
     free(p->data);
 }
 
-// sz >= sizeof(void*)
 void* pool_alloc(struct Pool* p, size_t sz)
 {
     size_t n = p->sz++;
@@ -35,5 +33,4 @@ void* pool_alloc(struct Pool* p, size_t sz)
     p->data = realloc(p->data, p->sz_buckets * sizeof(void*));
     return p->data[p->sz_buckets - 1] = malloc((4 << p->sz_buckets) * sz);
 }
-
-void pool_clear(struct Pool* p) { p->sz = 0; }
+void pool_shrink(struct Pool* p, size_t count) { p->sz = count; }
