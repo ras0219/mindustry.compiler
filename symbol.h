@@ -17,29 +17,59 @@ struct DeclSpecs
     int is_typedef : 1;
 };
 
+struct Attribute
+{
+    const char* symname;
+    const char* asmstr;
+    int is_nonreentrant : 1;
+};
+
 struct RegMap
 {
     int is_dirty : 1;
     int stack_addr;
-    struct FreeVar rename;
     struct RegMap* next;
     struct RegMap** prev;
+    struct FreeVar rename;
 };
 
 struct Symbol
 {
     struct Expr kind;
-
-    struct DeclSpecs specs;
+    struct Decl* decl;
+    struct Type* type;
 
     int incomplete : 1;
-    int is_function : 1;
     int is_nonreentrant : 1;
-    size_t arg_offset;
-    size_t arg_count;
-    const struct Token* token;
-    const char* intrinsic_asm_str;
 
     // register mapping
     struct RegMap reg;
 };
+
+struct ArrSpan
+{
+    size_t offset;
+    size_t stride;
+};
+
+struct Decl
+{
+    struct Expr kind;
+
+    struct Token* id;
+    struct Attribute attr;
+    struct DeclSpecs specs;
+    struct Decl* def;
+    struct Expr* init;
+
+    int is_function : 1;
+    size_t offset;
+    size_t extent;
+
+    struct Symbol sym;
+
+    // elaboration information
+    struct ArrSpan callees;
+};
+
+struct Decl* decl_get_def(struct Decl*);

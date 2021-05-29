@@ -37,23 +37,31 @@ void __attribute__((asmstr("draw color %0 %1 %2"))) draw_color(int r, int g, int
 
 /* queue 'str' to the print buffer */
 void __attribute__((asmstr("print %0"))) print(__string str);
+void __attribute__((asmstr("print %0"))) printi(int i);
 
 /* flush the print buffer to 'device' */
 void __attribute__((asmstr("printflush %0"))) print_flush(int device);
 
 /* sense 'sense' from 'dst' and return the result */
 int __attribute__((asmstr("sensor %r %0 %1"))) sensor(int dst, int sense);
-
-int __attribute__((asmstr("sensor %r %0 @x"))) sense_x(int dst);
-int __attribute__((asmstr("sensor %r %0 @y"))) sense_y(int dst);
+int __attribute__((asmstr("sensor %r %0 @x"))) sensor_x(int dst);
+int __attribute__((asmstr("sensor %r %0 @y"))) sensor_y(int dst);
+int __attribute__((asmstr("sensor %r %0 @type"))) sensor_type(int dst);
 
 /*  */
 int __attribute__((asmstr("uradar %0 any any distance 0 1 %r"))) unit_radar(int filter);
 
-const int __attribute__((sym("@unit"))) __unit;
-const int __attribute__((sym("@poly"))) __poly;
-const int __attribute__((sym("@mono"))) __mono;
-const int __attribute__((sym("@mega"))) __mega;
+/* Gets the linked tiles by index */
+int __attribute__((asmstr("getlink %r %0"))) get_link(int index);
+
+/* Gets the number of linked tiles */
+const int __attribute__((sym("@links"))) num_links;
+
+const int __attribute__((sym("@unit"))) bound_unit;
+const int __attribute__((sym("@flare"))) unit_flare;
+const int __attribute__((sym("@poly"))) unit_poly;
+const int __attribute__((sym("@mono"))) unit_mono;
+const int __attribute__((sym("@mega"))) unit_mega;
 
 const int __attribute__((sym("null"))) null;
 const int __attribute__((sym("@thisx"))) this_x;
@@ -66,3 +74,18 @@ const int __attribute__((sym("@copper"))) copper;
 const int __attribute__((sym("@silicon"))) silicon;
 const int __attribute__((sym("@titanium"))) titanium;
 const int __attribute__((sym("@metaglass"))) metaglass;
+
+const int __attribute__((sym("@config"))) sense_config;
+const int __attribute__((sym("@configure"))) sense_configure;
+const int __attribute__((sym("totalItems"))) sense_totalitems;
+
+const int __attribute__((sym("@message"))) type_message;
+const int __attribute__((sym("@power-node-large"))) type_power_node_large;
+const int __attribute__((sym("@conveyor"))) type_conveyor;
+const int __attribute__((sym("@core-shard"))) type_shard;
+const int __attribute__((sym("@core-foundation"))) type_foundation;
+const int __attribute__((sym("@core-nucleus"))) type_nucleus;
+const int __attribute__((sym("@logic-processor"))) type_logic_processor;
+const int __attribute__((sym("@air-factory"))) type_air_factory;
+const int __attribute__((sym("@additive-reconstructor"))) type_add_reconstructor;
+const int __attribute__((sym("@multiplicative-reconstructor"))) type_multi_reconstructor;

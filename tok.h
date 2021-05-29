@@ -3,6 +3,7 @@
 #include <stddef.h>
 
 #include "array.h"
+#include "ast.h"
 #include "freevar.h"
 #include "fwd.h"
 #include "pool.h"
@@ -20,6 +21,7 @@ struct RowCol
     int col;
 };
 
+int parser_has_errors();
 int parser_ferror(const struct RowCol* rc, const char* fmt, ...);
 int parser_ice(const struct RowCol* rc);
 
@@ -83,12 +85,14 @@ typedef struct Parser
     struct RegMap* first_active_reg;
 
     // exprs
-    struct Pool sym_pool;
-    struct Pool expr_op_pool;
-    struct Pool expr_sym_pool;
-    struct Pool expr_call_pool;
-    struct Pool expr_lit_pool;
+    struct Pool ast_pools[AST_KIND_END_POOLS];
     struct Array expr_seqs;
+
+    // types
+    struct Pool typeprim_pool;
+    struct Pool typefn_pool;
+    struct Pool typeptr_pool;
+    struct Array type_seqs;
 } Parser;
 
 void parser_init(Parser* p);

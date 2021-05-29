@@ -11,6 +11,9 @@
         "limits": "c",
         "stdarg.h": "c",
         "malloc.h": "c",
-        "mindustry.h": "c"
+        "mindustry.h": "c",
+        "typeinfo": "c",
+        "stddef.h": "c",
+        "ast.h": "c"
     }
 }

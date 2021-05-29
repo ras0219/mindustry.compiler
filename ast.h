@@ -10,8 +10,24 @@ enum AstKind
     EXPR_LIT,
     EXPR_OP,
     EXPR_CALL,
+    AST_DECL,
+    STMT_DECLS,
+    STMT_RETURN,
+    STMT_GOTO,
+    STMT_IF,
+    STMT_LOOP,
+    STMT_BLOCK,
+    STMT_LABEL,
+    STMT_BREAK,
+    STMT_CONTINUE,
+
+    AST_KIND_END_POOLS,
+
+    STMT_NONE = AST_KIND_END_POOLS,
     AST_SYM,
 };
+
+int ast_kind_is_expr(enum AstKind k);
 
 struct Expr
 {
@@ -38,7 +54,9 @@ struct ExprOp
     struct Expr kind;
 
     const struct Token* tok;
-    struct Expr *lhs, *rhs;
+    struct Expr* lhs;
+    // NULL for unary operators
+    struct Expr* rhs;
 };
 
 struct ExprCall

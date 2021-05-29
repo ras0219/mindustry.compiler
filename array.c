@@ -23,5 +23,11 @@ void* array_push(struct Array* arr, const void* src, size_t sz)
     memcpy(dst, src, sz);
     return dst;
 }
+void* array_push_ptr(struct Array* arr, void* data) { array_push(arr, &data, sizeof(data)); }
 void array_pop(struct Array* arr, size_t sz) { arr->sz -= sz; }
+void* array_pop_ptr(struct Array* arr)
+{
+    arr->sz -= sizeof(void*);
+    return ((void**)arr->data)[arr->sz / sizeof(void*)];
+}
 void array_destroy(struct Array* arr) { free(arr->data); }

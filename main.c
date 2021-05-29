@@ -9,6 +9,7 @@
 
 int usage() { printf("Usage: mindustry.compiler <file.mlogp>\n"); }
 
+size_t s_error_buf_used = 0;
 char s_error_buffer[1024];
 
 typedef struct
@@ -26,14 +27,27 @@ struct SubLexer
     FrontEnd* fe;
 };
 
+int parser_has_errors() { return s_error_buf_used > 0; }
+
 int parser_ferror(const struct RowCol* rc, const char* fmt, ...)
 {
     va_list argp;
     va_start(argp, fmt);
-    size_t n = snprintf(s_error_buffer, sizeof(s_error_buffer), "%s:%d:%d: ", rc->file, rc->row, rc->col);
-    if (n < sizeof(s_error_buffer))
+
+    if (s_error_buf_used < sizeof(s_error_buffer))
     {
-        vsnprintf(s_error_buffer + n, sizeof(s_error_buffer) - n, fmt, argp);
+        size_t n = snprintf(s_error_buffer + s_error_buf_used,
+                            sizeof(s_error_buffer) - s_error_buf_used,
+                            "%s:%d:%d: ",
+                            rc->file,
+                            rc->row,
+                            rc->col);
+        s_error_buf_used += n;
+    }
+    if (s_error_buf_used < sizeof(s_error_buffer))
+    {
+        s_error_buf_used +=
+            vsnprintf(s_error_buffer + s_error_buf_used, sizeof(s_error_buffer) - s_error_buf_used, fmt, argp);
     }
     return 1;
 }

@@ -6,6 +6,7 @@
 #include "ast.h"
 #include "lexstate.h"
 #include "parsestate.h"
+#include "pool.h"
 #include "symbol.h"
 #include "tok.h"
 
@@ -14,13 +15,6 @@ struct Token
     struct RowCol rc;
     LexerState type;
     ptrdiff_t sp_offset;
-};
-
-struct Attribute
-{
-    const char* symname;
-    const char* asmstr;
-    int is_nonreentrant : 1;
 };
 
 enum ValDestKind
@@ -48,6 +42,13 @@ static const struct ValDest s_void_destination = {
     .is_const = 0,
 };
 
+struct Decl* decl_get_def(struct Decl* decl)
+{
+    while (decl->def)
+        decl = decl->def;
+    return decl;
+}
+
 static int dest_is_any(struct ValDest* dst) { return dst->kind == DEST_REGMAP && !dst->regmap->rename.buf[0]; }
 
 static struct ValDest dest_literal(const char* ch)
@@ -73,7 +74,7 @@ static struct ValDest dest_sym(struct Symbol* sym)
     struct ValDest ret = {
         .kind = DEST_SYM,
         .sym = sym,
-        .is_const = sym->specs.is_const,
+        .is_const = sym->decl->specs.is_const,
     };
     return ret;
 }
@@ -153,34 +154,146 @@ static struct FreeVar nrfun_param_ret(Parser* p, const char* fun)
 
 static void symbol_init(struct Symbol* ret)
 {
+    memset(ret, 0, sizeof(struct Symbol));
     ret->kind.kind = AST_SYM;
-    memset(&ret->reg, 0, sizeof(ret->reg));
-    ret->incomplete = 0;
-    ret->is_function = 0;
-    ret->is_nonreentrant = 0;
-    memset(&ret->specs, 0, sizeof(ret->specs));
-    ret->arg_count = 0;
-    ret->token = NULL;
-    ret->intrinsic_asm_str = NULL;
 }
 static int symbol_is_equivalent_redecl(struct Symbol* orig, struct Symbol* redecl) { return 1; }
-static struct Symbol* symbol_alloc(struct Parser* p)
+
+struct Binding
 {
-    struct Symbol* ret = pool_alloc(&p->sym_pool, sizeof(struct Symbol));
-    symbol_init(ret);
-    return ret;
+    size_t ident_offset;
+    struct Symbol* sym;
+};
+static void scope_init(struct Scope* s)
+{
+    array_init(&s->binds);
+    array_init(&s->strings);
+}
+static void scope_destroy(struct Scope* s)
+{
+    array_destroy(&s->binds);
+    array_destroy(&s->strings);
+}
+static size_t scope_size(struct Scope* s) { return s->binds.sz / sizeof(struct Binding); }
+static struct Binding* scope_data(struct Scope* s) { return s->binds.data; }
+static void scope_shrink(struct Scope* s, size_t sz)
+{
+    if (sz < scope_size(s))
+    {
+        s->strings.sz = scope_data(s)[sz].ident_offset;
+        s->binds.sz = sz * sizeof(struct Binding);
+    }
+}
+static void scope_pop(struct Scope* s)
+{
+    const size_t sz = scope_size(s) - 1;
+    s->strings.sz = scope_data(s)[sz].ident_offset;
+    s->binds.sz = sz * sizeof(struct Binding);
+}
+static size_t scope_insert(struct Scope* s, const char* ident, struct Symbol* sym)
+{
+    const size_t sz = scope_size(s);
+    struct Binding* const e = array_alloc(&s->binds, sizeof(struct Binding));
+    e->ident_offset = s->strings.sz;
+    e->sym = sym;
+    array_push(&s->strings, ident, strlen(ident) + 1);
+    return sz;
+}
+static struct Binding* scope_find(struct Scope* s, const char* id)
+{
+    struct Binding* const begin = scope_data(s);
+    const size_t sz = scope_size(s);
+    for (size_t i = 0; i < sz; ++i)
+    {
+        struct Binding* const e = begin + sz - i - 1;
+        const char* const e_id = (char*)s->strings.data + e->ident_offset;
+        if (strcmp(e_id, id) == 0)
+        {
+            return e;
+        }
+    }
+    return NULL;
+}
+
+// requires !reg->prev
+static void parser_push_active_reg(struct Parser* p, struct RegMap* reg)
+{
+    if (!reg->rename.buf[0]) abort();
+    if (reg->next = p->first_active_reg)
+    {
+        reg->next->prev = &reg->next;
+    }
+    p->first_active_reg = reg;
+    reg->prev = &p->first_active_reg;
+}
+static void parser_deactivate_reg(struct Parser* p, struct RegMap* reg)
+{
+    if (reg->prev) *reg->prev = reg->next;
+    if (reg->next) reg->next->prev = reg->prev;
+    reg->next = NULL;
+    reg->prev = NULL;
+}
+static int parser_ensure_loaded_reg(struct Parser* p, struct RegMap* reg, const struct RowCol* rc)
+{
+    if (!reg->prev && reg->stack_addr >= 0)
+    {
+        parser_push_active_reg(p, reg);
+
+        if (cg_load(&p->cg, reg->stack_addr, reg->rename.buf, rc)) return 1;
+    }
+    return 0;
+}
+static int parser_ensure_loaded_sym(struct Parser* p, struct Symbol* sym)
+{
+    if (!sym->is_nonreentrant)
+    {
+        return parser_ensure_loaded_reg(p, &sym->reg, &sym->decl->id->rc);
+    }
+    return 0;
+}
+static void parser_ensure_dirty_reg(struct Parser* p, struct RegMap* reg)
+{
+    if (!reg->prev && reg->stack_addr >= 0)
+    {
+        parser_push_active_reg(p, reg);
+    }
+    reg->is_dirty = 1;
+}
+static void parser_ensure_dirty_sym(struct Parser* p, struct Symbol* sym)
+{
+    if (!sym->is_nonreentrant)
+    {
+        parser_ensure_dirty_reg(p, &sym->reg);
+    }
 }
 struct CompoundBlock
 {
     struct Symbol* fn_sym;
     int frame_size;
     int has_returned;
+    size_t scope_sz;
+
+    const char* continue_label;
+    const char* break_label;
 };
-static void cb_init(struct CompoundBlock* cb, struct CompoundBlock* parent)
+static void cb_init(struct CompoundBlock* cb, struct CompoundBlock* parent, struct Parser* p)
 {
     cb->fn_sym = parent ? parent->fn_sym : NULL;
-    cb->frame_size = parent ? cb->frame_size : 1;
+    cb->frame_size = parent ? parent->frame_size : 1;
     cb->has_returned = 0;
+    cb->continue_label = parent ? parent->continue_label : NULL;
+    cb->break_label = parent ? parent->break_label : NULL;
+    cb->scope_sz = scope_size(&p->scope);
+}
+static void cb_destroy(struct CompoundBlock* cb, struct Parser* p)
+{
+    size_t new_scope_sz = scope_size(&p->scope);
+    struct Binding* const bind_begin = scope_data(&p->scope);
+    for (size_t n = cb->scope_sz; n < new_scope_sz; ++n)
+    {
+        parser_deactivate_reg(p, &bind_begin[n].sym->reg);
+    }
+    scope_shrink(&p->scope, cb->scope_sz);
 }
 static struct RowCol s_unknown_rc = {
     .file = "<unknown>",
@@ -205,68 +318,13 @@ static int parser_spill_registers(struct Parser* p)
     }
     return 0;
 }
-
-struct Binding
-{
-    size_t ident_offset;
-    struct Symbol* sym;
-};
-static void scope_init(struct Scope* s)
-{
-    array_init(&s->binds);
-    array_init(&s->strings);
-}
-static void scope_destroy(struct Scope* s)
-{
-    array_destroy(&s->binds);
-    array_destroy(&s->strings);
-}
-static size_t scope_size(struct Scope* s) { return s->binds.sz / sizeof(struct Binding); }
-static struct Binding* scope_data(struct Scope* s) { return (struct Binding*)s->binds.data; }
-static void scope_shrink(struct Scope* s, size_t sz)
-{
-    if (sz < scope_size(s))
-    {
-        s->strings.sz = scope_data(s)[sz].ident_offset;
-        s->binds.sz = sz * sizeof(struct Binding);
-    }
-}
-static void scope_pop(struct Scope* s)
-{
-    const size_t sz = scope_size(s) - 1;
-    s->strings.sz = scope_data(s)[sz].ident_offset;
-    s->binds.sz = sz * sizeof(struct Binding);
-}
-static size_t scope_insert(struct Scope* s, const char* ident, struct Symbol* sym)
-{
-    const size_t sz = scope_size(s);
-    struct Binding* const e = (struct Binding*)array_alloc(&s->binds, sizeof(struct Binding));
-    e->ident_offset = s->strings.sz;
-    e->sym = sym;
-    array_push(&s->strings, ident, strlen(ident) + 1);
-    return sz;
-}
-static struct Binding* scope_find(struct Scope* s, const char* id)
-{
-    struct Binding* const begin = scope_data(s);
-    const size_t sz = scope_size(s);
-    for (size_t i = 0; i < sz; ++i)
-    {
-        struct Binding* const e = begin + sz - i - 1;
-        const char* const e_id = (char*)s->strings.data + e->ident_offset;
-        if (strcmp(e_id, id) == 0)
-        {
-            return e;
-        }
-    }
-    return NULL;
-}
-
 enum Precedence
 {
     PRECEDENCE_ERROR,
     PRECEDENCE_COMMA,
     PRECEDENCE_ASSIGN,
+    PRECEDENCE_OR,
+    PRECEDENCE_AND,
     PRECEDENCE_EQUALITY,
     PRECEDENCE_RELATION,
     PRECEDENCE_ADD,
@@ -275,57 +333,6 @@ enum Precedence
 
 static int compile_expr(Parser* p, struct Expr* expr, struct ValDest* dst, struct CompoundBlock* bb);
 
-// requires !reg->prev
-static void parser_push_active_reg(struct Parser* p, struct RegMap* reg)
-{
-    if (!reg->rename.buf[0]) abort();
-    if (reg->next = p->first_active_reg)
-    {
-        reg->next->prev = &reg->next;
-    }
-    p->first_active_reg = reg;
-    reg->prev = &p->first_active_reg;
-}
-static void parser_deactivate_reg(struct Parser* p, struct RegMap* reg)
-{
-    if (reg->prev) *reg->prev = reg->next;
-    if (reg->next) reg->next->prev = reg->prev;
-    reg->next = NULL;
-    reg->prev = NULL;
-}
-static int parser_ensure_loaded_reg(struct Parser* p, struct RegMap* reg, const struct RowCol* rc)
-{
-    if (!reg->prev)
-    {
-        parser_push_active_reg(p, reg);
-
-        if (cg_load(&p->cg, reg->stack_addr, reg->rename.buf, rc)) return 1;
-    }
-    return 0;
-}
-static int parser_ensure_loaded_sym(struct Parser* p, struct Symbol* sym)
-{
-    if (!sym->is_nonreentrant)
-    {
-        return parser_ensure_loaded_reg(p, &sym->reg, &sym->token->rc);
-    }
-    return 0;
-}
-static void parser_ensure_dirty_reg(struct Parser* p, struct RegMap* reg)
-{
-    if (!reg->prev)
-    {
-        parser_push_active_reg(p, reg);
-    }
-    reg->is_dirty = 1;
-}
-static void parser_ensure_dirty_sym(struct Parser* p, struct Symbol* sym)
-{
-    if (!sym->is_nonreentrant)
-    {
-        parser_ensure_dirty_reg(p, &sym->reg);
-    }
-}
 static char* my_strdup(const char* s) { return strcpy(malloc(strlen(s) + 1), s); }
 
 static const char* parser_prepare_dst_reg(Parser* p, struct ValDest* dst, struct CompoundBlock* bb)
@@ -345,7 +352,10 @@ static const char* parser_prepare_dst_reg(Parser* p, struct ValDest* dst, struct
         if (!dst->regmap->rename.buf[0])
         {
             dst->regmap->rename = free_var(p);
-            dst->regmap->stack_addr = bb->frame_size++;
+            if (!bb->fn_sym || bb->fn_sym->is_nonreentrant)
+                dst->regmap->stack_addr = -1;
+            else
+                dst->regmap->stack_addr = bb->frame_size++;
         }
         parser_ensure_dirty_reg(p, dst->regmap);
         return dst->regmap->rename.buf;
@@ -402,13 +412,10 @@ static int parser_assign_dsts(struct Parser* p, struct ValDest* dst, struct ValD
     {
         if (src->kind == DEST_SYM && dst->sym == src->sym) return 0;
     }
-    else if (dst->kind == DEST_REGMAP)
+    else if (dest_is_any(dst))
     {
-        if (!dst->regmap->rename.buf[0])
-        {
-            *dst = *src;
-            return 0;
-        }
+        *dst = *src;
+        return 0;
     }
 
     const char* src_reg = parser_prepare_src_reg(p, src);
@@ -432,10 +439,23 @@ static enum Precedence op_precedence(const char* op)
                 return PRECEDENCE_EQUALITY;
             else
                 return PRECEDENCE_ERROR;
+        case '|':
+            if (op[1] == '|')
+                return PRECEDENCE_OR;
+            else
+                return PRECEDENCE_ERROR;
+        case '&':
+            if (op[1] == '&')
+                return PRECEDENCE_AND;
+            else
+                return PRECEDENCE_ERROR;
         case '>':
         case '<': return PRECEDENCE_RELATION;
         case '+':
-        case '-': return PRECEDENCE_ADD;
+            if (op[1] == '+') return PRECEDENCE_ERROR;
+        case '-':
+            return PRECEDENCE_ADD;
+            if (op[1] == '-') return PRECEDENCE_ERROR;
         case '*':
         case '/': return PRECEDENCE_MULT;
         default: return PRECEDENCE_ERROR;
@@ -445,7 +465,7 @@ static int op_precedence_assoc_right(enum Precedence p) { return p == PRECEDENCE
 
 static struct ExprOp* parse_alloc_expr_op(Parser* p, struct Token* tok, struct Expr* lhs, struct Expr* rhs)
 {
-    struct ExprOp* e = (struct ExprOp*)pool_alloc(&p->expr_op_pool, sizeof(struct ExprOp));
+    struct ExprOp* e = (struct ExprOp*)pool_alloc(&p->ast_pools[EXPR_OP], sizeof(struct ExprOp));
     e->kind.kind = EXPR_OP;
     e->tok = tok;
     e->lhs = lhs;
@@ -455,7 +475,7 @@ static struct ExprOp* parse_alloc_expr_op(Parser* p, struct Token* tok, struct E
 
 static struct ExprSym* parse_alloc_expr_sym(Parser* p, struct Token* tok, struct Symbol* sym)
 {
-    struct ExprSym* e = (struct ExprSym*)pool_alloc(&p->expr_sym_pool, sizeof(struct ExprSym));
+    struct ExprSym* e = (struct ExprSym*)pool_alloc(&p->ast_pools[EXPR_SYM], sizeof(struct ExprSym));
     e->kind.kind = EXPR_SYM;
     e->tok = tok;
     e->sym = sym;
@@ -463,28 +483,20 @@ static struct ExprSym* parse_alloc_expr_sym(Parser* p, struct Token* tok, struct
 }
 static struct ExprLit* parse_alloc_expr_lit(Parser* p, struct Token* tok)
 {
-    struct ExprLit* e = (struct ExprLit*)pool_alloc(&p->expr_lit_pool, sizeof(struct ExprLit));
+    struct ExprLit* e = (struct ExprLit*)pool_alloc(&p->ast_pools[EXPR_LIT], sizeof(struct ExprLit));
     e->kind.kind = EXPR_LIT;
     e->tok = tok;
     return e;
 }
 static struct ExprCall* parse_alloc_expr_call(Parser* p, struct Token* tok, struct Expr* fn, size_t off, size_t ext)
 {
-    struct ExprCall* e = (struct ExprCall*)pool_alloc(&p->expr_call_pool, sizeof(struct ExprCall));
+    struct ExprCall* e = (struct ExprCall*)pool_alloc(&p->ast_pools[EXPR_CALL], sizeof(struct ExprCall));
     e->kind.kind = EXPR_CALL;
     e->tok = tok;
     e->fn = fn;
     e->offset = off;
     e->extent = ext;
     return e;
-}
-static void parse_clear_exprs(Parser* p)
-{
-    pool_shrink(&p->expr_op_pool, 0);
-    pool_shrink(&p->expr_lit_pool, 0);
-    pool_shrink(&p->expr_call_pool, 0);
-    pool_shrink(&p->expr_sym_pool, 0);
-    p->expr_seqs.sz = 0;
 }
 
 static struct Token* parse_expr(Parser* p, struct Token* cur_tok, struct Expr** ppe, int precedence);
@@ -529,6 +541,18 @@ static struct Token* parse_expr_post_unary(Parser* p, struct Token* cur_tok, str
                 op_expr = parse_alloc_expr_call(p, tok_op, lhs, offset, extent);
             }
             return parse_expr_post_unary(p, cur_tok, (struct Expr*)op_expr, ppe);
+        }
+        else if (op[0] == '+' && op[1] == '+')
+        {
+            char* op = token_str(p, cur_tok);
+            struct ExprOp* e = parse_alloc_expr_op(p, cur_tok, lhs, NULL);
+            return parse_expr_post_unary(p, cur_tok + 1, (struct Expr*)e, ppe);
+        }
+        else if (op[0] == '-' && op[1] == '-')
+        {
+            char* op = token_str(p, cur_tok);
+            struct ExprOp* e = parse_alloc_expr_op(p, cur_tok, lhs, NULL);
+            return parse_expr_post_unary(p, cur_tok + 1, (struct Expr*)e, ppe);
         }
     }
     *ppe = (struct Expr*)lhs;
@@ -581,7 +605,7 @@ static struct Token* parse_expr_continue(
         enum Precedence op_prec = op_precedence(op);
         if (op_prec)
         {
-            if (op_precedence_assoc_right(op_prec))
+            if (precedence <= op_prec && op_precedence_assoc_right(op_prec))
             {
                 if (op[0] == '=' && op[1] == '\0' && precedence <= PRECEDENCE_ASSIGN)
                 {
@@ -614,6 +638,259 @@ static struct Token* parse_expr(Parser* p, struct Token* cur_tok, struct Expr** 
 
     return parse_expr_continue(p, cur_tok, lhs, ppe, precedence);
 }
+enum TypeKind
+{
+    TYPE_UNKNOWN,
+    TYPE_SYM,
+    TYPE_INT,
+    TYPE_VOID,
+    TYPE_CHAR,
+    TYPE_MSTRING,
+    TYPE_FUN,
+    TYPE_PTR,
+    TYPE_ARR,
+};
+enum ValueCategory
+{
+    CAT_UNKNOWN,
+    CAT_LVALUE,
+    CAT_XVALUE,
+    CAT_PRVALUE,
+};
+struct Type
+{
+    enum TypeKind kind;
+    int is_const : 1;
+    int is_volatile : 1;
+};
+struct TypeFn
+{
+    struct Type base;
+    struct Type* ret;
+    size_t offset;
+    size_t extent;
+};
+struct TypePtr
+{
+    struct Type base;
+    struct Type* inner;
+};
+struct TypeCategory
+{
+    enum ValueCategory cat;
+    struct Type* type;
+};
+static struct Type s_type_unknown = {
+    .kind = TYPE_UNKNOWN,
+};
+static struct TypeCategory s_typecat_unknown = {
+    .type = &s_type_unknown,
+    .cat = CAT_UNKNOWN,
+};
+static struct Type s_type_literal_int = {
+    .kind = TYPE_INT,
+    .is_const = 1,
+};
+static struct Type s_type_int = {
+    .kind = TYPE_INT,
+};
+static struct Type s_type_void = {
+    .kind = TYPE_VOID,
+};
+static struct Type s_type_char = {
+    .kind = TYPE_CHAR,
+};
+static struct Type s_type_mstr = {
+    .kind = TYPE_MSTRING,
+};
+static struct Type s_type_literal_str = {
+    .kind = TYPE_MSTRING,
+    .is_const = 1,
+};
+
+static struct Type* tc_decl(Parser* p, struct Decl* decl);
+static struct Type* tc_sym(Parser* p, struct Symbol* sym) { return sym->type; }
+static struct Type* tc_decl(Parser* p, struct Decl* decl)
+{
+    if (decl->is_function)
+    {
+        struct TypeFn ty = {
+            .base.kind = TYPE_FUN,
+            .offset = p->type_seqs.sz / sizeof(struct Type*),
+            .extent = decl->extent,
+        };
+        if (decl->specs.type->type == LEX_INT)
+        {
+            ty.ret = &s_type_int;
+        }
+        else if (decl->specs.type->type == LEX_VOID)
+        {
+            ty.ret = &s_type_void;
+        }
+        else if (decl->specs.type->type == LEX_MSTRING)
+        {
+            ty.ret = &s_type_mstr;
+        }
+        else
+        {
+            parser_ferror(&decl->specs.type->rc, "error: unknown return type\n");
+            return &s_type_unknown;
+        }
+        array_alloc(&p->type_seqs, ty.extent * sizeof(struct Type*));
+        struct Expr** exprs = p->expr_seqs.data;
+        for (size_t i = 0; i < decl->extent; ++i)
+        {
+            struct Expr* arg_expr = exprs[decl->offset + i];
+            struct Type* ty_arg;
+            if (arg_expr->kind == AST_DECL)
+                ty_arg = tc_decl(p, (struct Decl*)arg_expr);
+            else if (arg_expr->kind == EXPR_SYM)
+                ty_arg = tc_sym(p, (struct Symbol*)arg_expr);
+            else
+                abort();
+            struct Type** types = p->type_seqs.data;
+            types[ty.offset + i] = ty_arg;
+        };
+        return pool_push(&p->typefn_pool, &ty, sizeof(ty));
+    }
+    else
+    {
+        if (decl->specs.type->type == LEX_INT)
+        {
+            return &s_type_int;
+        }
+        else if (decl->specs.type->type == LEX_VOID)
+        {
+            return &s_type_void;
+        }
+        else if (decl->specs.type->type == LEX_MSTRING)
+        {
+            return &s_type_mstr;
+        }
+        else
+            abort();
+    }
+}
+
+static const struct RowCol* rc_for_expr(const struct Expr* e)
+{
+    switch (e->kind)
+    {
+        case EXPR_OP: return &((const struct ExprOp*)e)->tok->rc;
+        case EXPR_LIT: return &((const struct ExprLit*)e)->tok->rc;
+        case EXPR_SYM: return &((const struct ExprSym*)e)->tok->rc;
+        case EXPR_CALL: return rc_for_expr(((const struct ExprCall*)e)->fn);
+        default: return &s_unknown_rc;
+    }
+}
+
+static const char* type_to_string(struct Type* t)
+{
+    switch (t->kind)
+    {
+        case TYPE_INT: return "int";
+        case TYPE_CHAR: return "char";
+        case TYPE_MSTRING: return "string literal";
+        case TYPE_VOID: return "void";
+        case TYPE_PTR: return "pointer";
+        case TYPE_FUN: return "function";
+        default: return "unknown";
+    }
+}
+
+static struct TypeCategory tc_expr(Parser* p, struct Expr* e);
+static struct TypeCategory tc_expr_unify(Parser* p, struct Expr* e, struct Type* t2)
+{
+    struct TypeCategory tc = tc_expr(p, e);
+    if (tc.type->kind != t2->kind)
+    {
+        parser_ferror(
+            rc_for_expr(e), "error: expected '%s' but got '%s'\n", type_to_string(t2), type_to_string(tc.type));
+    }
+    tc.type = t2;
+    return tc;
+}
+
+static struct TypeCategory tc_expr_op(Parser* p, struct ExprOp* e)
+{
+    struct TypeCategory tc_lhs = tc_expr(p, e->lhs);
+    const char* str = token_str(p, e->tok);
+    if (!e->rhs) return tc_lhs;
+    struct TypeCategory tc_rhs = tc_expr_unify(p, e->rhs, tc_lhs.type);
+    tc_lhs.cat = CAT_PRVALUE;
+    return tc_lhs;
+}
+static struct TypeCategory tc_expr(Parser* p, struct Expr* e)
+{
+    if (e->kind == EXPR_LIT)
+    {
+        struct ExprLit* f = (struct ExprLit*)e;
+        if (f->tok->type == LEX_STRING)
+        {
+            struct TypeCategory ret = {
+                .cat = CAT_LVALUE,
+                .type = &s_type_literal_str,
+            };
+            return ret;
+        }
+        else if (f->tok->type == LEX_NUMBER)
+        {
+            struct TypeCategory ret = {
+                .cat = CAT_PRVALUE,
+                .type = &s_type_literal_int,
+            };
+            return ret;
+        }
+        else
+        {
+            abort();
+        }
+    }
+    else if (e->kind == EXPR_OP)
+    {
+        return tc_expr_op(p, (struct ExprOp*)e);
+    }
+    else if (e->kind == EXPR_SYM)
+    {
+        struct TypeCategory ret = {
+            .cat = CAT_LVALUE,
+            .type = tc_sym(p, ((struct ExprSym*)e)->sym),
+        };
+        return ret;
+    }
+    else if (e->kind == EXPR_CALL)
+    {
+        struct ExprCall* f = (struct ExprCall*)e;
+        struct TypeCategory tc_fn = tc_expr(p, f->fn);
+        if (tc_fn.type->kind != TYPE_FUN)
+        {
+            parser_ferror(&f->tok->rc, "error: call must be applied to a function type\n");
+            return s_typecat_unknown;
+        }
+        struct TypeFn* ty_fn = (struct TypeFn*)tc_fn.type;
+        if (ty_fn->extent != f->extent)
+        {
+            parser_ferror(&f->tok->rc, "error: called with wrong number of arguments (expected %lu)\n", ty_fn->extent);
+            return s_typecat_unknown;
+        }
+        struct Expr** expr_begin = p->expr_seqs.data;
+        for (size_t i = 0; i < f->extent; ++i)
+        {
+            struct Type** types_begin = p->type_seqs.data;
+            struct TypeCategory tc_arg = tc_expr_unify(p, expr_begin[f->offset + i], types_begin[ty_fn->offset + i]);
+        }
+        struct TypeCategory ret = {
+            .cat = CAT_PRVALUE,
+            .type = ty_fn->ret,
+        };
+        return ret;
+    }
+    else
+    {
+        abort();
+    }
+    return s_typecat_unknown;
+}
 
 static int compile_expr_lit(Parser* p, struct ExprLit* e, struct ValDest* dst, struct CompoundBlock* bb)
 {
@@ -643,6 +920,14 @@ static int compile_expr_lit(Parser* p, struct ExprLit* e, struct ValDest* dst, s
         abort();
 }
 
+enum CondInverted
+{
+    COND_NORMAL,
+    COND_INVERTED,
+};
+static int compile_conditional_expr(
+    Parser* p, struct Expr* cond, struct CompoundBlock* bb, const char* jump_to, enum CondInverted inverted);
+
 static int compile_expr_op(Parser* p, struct ExprOp* e, struct ValDest* dst, struct CompoundBlock* bb)
 {
     if (!e->lhs) return parser_ice(&e->tok->rc);
@@ -650,27 +935,41 @@ static int compile_expr_op(Parser* p, struct ExprOp* e, struct ValDest* dst, str
     const char* const op = token_str(p, e->tok);
     if (op[0] == '!' && op[1] == '\0')
     {
-        if (dest_is_any(dst))
-        {
-            if (compile_expr(p, e->lhs, dst, bb)) return 1;
-            const char* const srcreg = parser_prepare_src_reg(p, dst);
-            if (!srcreg) return 1;
-            const char* const dstreg = parser_prepare_dst_reg(p, dst, bb);
-            if (!dstreg) return 1;
-            cg_write_inst_op(&p->cg, "!=", dstreg, srcreg, "true");
-        }
-        else
-        {
-            struct RegMap regmap = {0};
-            struct ValDest lhs = dest_regmap(&regmap);
-            if (compile_expr(p, e->lhs, &lhs, bb)) return 1;
-            const char* const srcreg = parser_prepare_src_reg(p, &lhs);
-            if (!srcreg) return 1;
-            const char* const dstreg = parser_prepare_dst_reg(p, dst, bb);
-            if (!dstreg) return 1;
-            cg_write_inst_op(&p->cg, "!=", dstreg, srcreg, "true");
-            parser_deactivate_reg(p, &regmap);
-        }
+        struct RegMap regmap = {0};
+        struct ValDest lhs = dest_regmap(&regmap);
+        if (compile_expr(p, e->lhs, &lhs, bb)) return 1;
+        const char* const srcreg = parser_prepare_src_reg(p, &lhs);
+        if (!srcreg) return 1;
+        const char* const dstreg = parser_prepare_dst_reg(p, dst, bb);
+        if (!dstreg) return 1;
+        cg_write_inst_op(&p->cg, "!=", dstreg, srcreg, "true");
+        parser_deactivate_reg(p, &regmap);
+        return 0;
+    }
+    else if (op[0] == '+' && op[1] == '+')
+    {
+        struct RegMap regmap = {0};
+        struct ValDest lhs = dest_regmap(&regmap);
+        if (compile_expr(p, e->lhs, &lhs, bb)) return 1;
+        const char* const srcreg = parser_prepare_src_reg(p, &lhs);
+        if (!srcreg) return 1;
+        const char* const dstreg = parser_prepare_dst_reg(p, &lhs, bb);
+        if (!dstreg) return 1;
+        cg_write_inst_op(&p->cg, "+", dstreg, srcreg, "1");
+        parser_deactivate_reg(p, &regmap);
+        return 0;
+    }
+    else if (op[0] == '-' && op[1] == '-')
+    {
+        struct RegMap regmap = {0};
+        struct ValDest lhs = dest_regmap(&regmap);
+        if (compile_expr(p, e->lhs, &lhs, bb)) return 1;
+        const char* const srcreg = parser_prepare_src_reg(p, &lhs);
+        if (!srcreg) return 1;
+        const char* const dstreg = parser_prepare_dst_reg(p, &lhs, bb);
+        if (!dstreg) return 1;
+        cg_write_inst_op(&p->cg, "-", dstreg, srcreg, "1");
+        parser_deactivate_reg(p, &regmap);
         return 0;
     }
 
@@ -701,6 +1000,104 @@ static int compile_expr_op(Parser* p, struct ExprOp* e, struct ValDest* dst, str
             parser_deactivate_reg(p, &regmap);
             return 0;
         }
+    }
+
+    if (op[0] == '+' && op[1] == '=')
+    {
+        if (dest_is_any(dst))
+        {
+            if (compile_expr(p, e->lhs, dst, bb)) return 1;
+            if (dst->is_const)
+            {
+                return parser_ferror(&e->tok->rc, "error: illegal assignment to constant\n");
+            }
+            return compile_expr(p, e->rhs, dst, bb);
+        }
+        else
+        {
+            struct RegMap regmap = {0};
+            struct ValDest lhs = dest_regmap(&regmap);
+            if (compile_expr(p, e->lhs, &lhs, bb)) return 1;
+            if (lhs.is_const)
+            {
+                return parser_ferror(&e->tok->rc, "error: illegal assignment to constant\n");
+            }
+            if (compile_expr(p, e->rhs, &lhs, bb)) return 1;
+            if (parser_assign_dsts(p, dst, &lhs, bb)) return 1;
+            parser_deactivate_reg(p, &regmap);
+            return 0;
+        }
+    }
+    if (op[0] == '-' && op[1] == '=')
+    {
+        if (dest_is_any(dst))
+        {
+            if (compile_expr(p, e->lhs, dst, bb)) return 1;
+            if (dst->is_const)
+            {
+                return parser_ferror(&e->tok->rc, "error: illegal assignment to constant\n");
+            }
+            return compile_expr(p, e->rhs, dst, bb);
+        }
+        else
+        {
+            struct RegMap regmap = {0};
+            struct ValDest lhs = dest_regmap(&regmap);
+            if (compile_expr(p, e->lhs, &lhs, bb)) return 1;
+            if (lhs.is_const)
+            {
+                return parser_ferror(&e->tok->rc, "error: illegal assignment to constant\n");
+            }
+            if (compile_expr(p, e->rhs, &lhs, bb)) return 1;
+            if (parser_assign_dsts(p, dst, &lhs, bb)) return 1;
+            parser_deactivate_reg(p, &regmap);
+            return 0;
+        }
+    }
+
+    if (op[0] == '|' && op[1] == '|')
+    {
+        struct FreeVar end_lbl = free_var_label(p);
+        struct RegMap regmapl = {0};
+        struct ValDest tmp = dest_regmap(&regmapl);
+        struct ValDest* p_lhs = dest_is_any(dst) ? dst : &tmp;
+
+        const char* lhs_reg = parser_prepare_dst_reg(p, p_lhs, bb);
+        if (!lhs_reg) return 1;
+        cg_write_inst_set(&p->cg, lhs_reg, "1");
+        if (compile_conditional_expr(p, (struct Expr*)e, bb, end_lbl.buf, COND_NORMAL)) return 1;
+        lhs_reg = parser_prepare_dst_reg(p, p_lhs, bb);
+        cg_write_inst_set(&p->cg, lhs_reg, "0");
+        if (parser_spill_registers(p)) return 1;
+        cg_mark_label(&p->cg, end_lbl.buf);
+        if (p_lhs != dst)
+        {
+            if (parser_assign_dsts(p, dst, p_lhs, bb)) return 1;
+            parser_deactivate_reg(p, &regmapl);
+        }
+        return 0;
+    }
+    if (op[0] == '&' && op[1] == '&')
+    {
+        struct FreeVar end_lbl = free_var_label(p);
+        struct RegMap regmapl = {0};
+        struct ValDest tmp = dest_regmap(&regmapl);
+        struct ValDest* p_lhs = dest_is_any(dst) ? dst : &tmp;
+
+        const char* lhs_reg = parser_prepare_dst_reg(p, p_lhs, bb);
+        if (!lhs_reg) return 1;
+        cg_write_inst_set(&p->cg, lhs_reg, "0");
+        if (compile_conditional_expr(p, (struct Expr*)e, bb, end_lbl.buf, COND_INVERTED)) return 1;
+        lhs_reg = parser_prepare_dst_reg(p, p_lhs, bb);
+        cg_write_inst_set(&p->cg, lhs_reg, "1");
+        if (parser_spill_registers(p)) return 1;
+        cg_mark_label(&p->cg, end_lbl.buf);
+        if (p_lhs != dst)
+        {
+            if (parser_assign_dsts(p, dst, p_lhs, bb)) return 1;
+            parser_deactivate_reg(p, &regmapl);
+        }
+        return 0;
     }
 
     struct RegMap regmapl = {0};
@@ -754,7 +1151,7 @@ static int compile_expr_call_intrinsic(
     }
 
     // pseudo-format
-    const char* s = fn->intrinsic_asm_str;
+    const char* s = fn->decl->attr.asmstr;
     char buf[128];
     size_t i = 0;
     while (1)
@@ -782,12 +1179,12 @@ static int compile_expr_call_intrinsic(
             }
             else if (*s >= '0' && *s <= '9')
             {
-                size_t i = *s - '0';
-                if (i >= e->extent)
+                size_t n = *s - '0';
+                if (n >= e->extent)
                 {
-                    return parser_ferror(&fn->token->rc, "error: invalid intrinsic string: wrong arguments\n");
+                    return parser_ferror(&fn->decl->id->rc, "error: invalid intrinsic string: wrong arguments\n");
                 }
-                const char* const reg = parser_prepare_src_reg(p, arg_dsts + i);
+                const char* const reg = parser_prepare_src_reg(p, arg_dsts + n);
                 if (!reg) return 1;
                 size_t len = strlen(reg);
                 if (i + len > 127)
@@ -800,7 +1197,7 @@ static int compile_expr_call_intrinsic(
             }
             else
             {
-                return parser_ferror(&fn->token->rc, "error: invalid intrinsic string: invalid format specifier\n");
+                return parser_ferror(&fn->decl->id->rc, "error: invalid intrinsic string: invalid format specifier\n");
             }
             ++s;
         }
@@ -829,6 +1226,11 @@ static int parser_assign_load(Parser* p, struct ValDest src, const char* tgt)
     struct CodeGen* const cg = &p->cg;
     if (src.kind == DEST_SYM)
     {
+        if (src.sym->is_nonreentrant)
+        {
+            cg_write_inst_set(cg, tgt, src.sym->reg.rename.buf);
+            return 0;
+        }
         src.regmap = &src.sym->reg;
         src.kind = DEST_REGMAP;
     }
@@ -852,7 +1254,7 @@ static int parser_assign_load(Parser* p, struct ValDest src, const char* tgt)
         }
         else
         {
-            return cg_load(&p->cg, src.regmap->stack_addr, tgt, &s_unknown_rc);
+            return cg_load(cg, src.regmap->stack_addr, tgt, &s_unknown_rc);
         }
     }
     else
@@ -867,17 +1269,17 @@ static int compile_expr_call(Parser* p, struct ExprCall* e, struct ValDest* dst,
     struct ValDest fn = dest_regmap(&regmap);
     if (compile_expr(p, e->fn, &fn, bb)) return 1;
 
-    if (fn.kind != DEST_SYM || !fn.sym->is_function)
+    if (fn.kind != DEST_SYM || !fn.sym->decl->is_function)
     {
         return parser_ferror(&e->tok->rc, "error: attempting to call a non-function\n");
     }
 
-    if (fn.sym->arg_count != e->extent)
+    if (fn.sym->decl->extent != e->extent)
     {
         return parser_ferror(
-            &e->tok->rc, "error: function requires %d arguments, %lu provided\n", fn.sym->arg_count, e->extent);
+            &e->tok->rc, "error: function requires %d arguments, %lu provided\n", fn.sym->decl->extent, e->extent);
     }
-    if (fn.sym->intrinsic_asm_str)
+    if (fn.sym->decl->attr.asmstr)
     {
         return compile_expr_call_intrinsic(p, e, dst, fn.sym, bb);
     }
@@ -904,7 +1306,7 @@ static int compile_expr_call(Parser* p, struct ExprCall* e, struct ValDest* dst,
 
         if (fn.sym->is_nonreentrant)
         {
-            const char* const name = token_str(p, fn.sym->token);
+            const char* const name = token_str(p, fn.sym->decl->id);
             struct RegMap arg0_regmap = {
                 .rename = nrfun_param(p, 0, name),
             };
@@ -979,7 +1381,8 @@ static int compile_expr(Parser* p, struct Expr* e, struct ValDest* dst, struct C
         case EXPR_SYM:
         {
             struct ExprSym* esym = (struct ExprSym*)e;
-            struct ValDest sym_dst = dest_sym(esym->sym);
+            struct Symbol* sym = &decl_get_def(esym->sym->decl)->sym;
+            struct ValDest sym_dst = dest_sym(sym);
             return parser_assign_dsts(p, dst, &sym_dst, bb);
         }
         default: return parser_ice(&s_unknown_rc), 1;
@@ -993,7 +1396,7 @@ enum AttrKind
     ATTR_NONREENTRANT,
 };
 
-static struct Token* compile_attribute(Parser* p, struct Token* cur_tok, struct Attribute* attr)
+static struct Token* parse_attribute(Parser* p, struct Token* cur_tok, struct Attribute* attr)
 {
     enum AttrKind kind;
     if (cur_tok->type != LEX_IDENT) goto error;
@@ -1043,7 +1446,7 @@ static struct Token* compile_attribute(Parser* p, struct Token* cur_tok, struct 
 error:
     return parser_ferror(&cur_tok->rc, "error: ill-formed attribute\n"), NULL;
 }
-static struct Token* compile_attribute_plist(Parser* p, struct Token* cur_tok, struct Attribute* attr)
+static struct Token* parse_attribute_plist(Parser* p, struct Token* cur_tok, struct Attribute* attr)
 {
     if (!(cur_tok = token_consume_sym(p, cur_tok, '('))) return NULL;
     if (!(cur_tok = token_consume_sym(p, cur_tok, '('))) return NULL;
@@ -1051,7 +1454,7 @@ static struct Token* compile_attribute_plist(Parser* p, struct Token* cur_tok, s
     {
         do
         {
-            if (!(cur_tok = compile_attribute(p, cur_tok, attr))) return NULL;
+            if (!(cur_tok = parse_attribute(p, cur_tok, attr))) return NULL;
             char ch = token_expect_comma_or_cparen(p, cur_tok);
             if (ch == ')') break;
             if (ch == ',')
@@ -1066,115 +1469,7 @@ static struct Token* compile_attribute_plist(Parser* p, struct Token* cur_tok, s
     return token_consume_sym(p, cur_tok, ')');
 }
 
-static struct Token* compile_decl(Parser* p, struct Token* cur_tok, struct CompoundBlock* bb);
-static struct Token* compile_declspecs(Parser* p, struct Token* cur_tok, struct DeclSpecs* specs);
-static struct Token* compile_declarator(Parser* p, struct Token* cur_tok, struct CompoundBlock* bb, struct Symbol* sym)
-{
-    struct Attribute attr = {0};
-    if (cur_tok->type == LEX_ATTRIBUTE)
-    {
-        ++cur_tok;
-        cur_tok = compile_attribute_plist(p, cur_tok, &attr);
-        if (!cur_tok) return NULL;
-    }
-    if (cur_tok->type != LEX_IDENT)
-    {
-        return parser_ferror(&cur_tok->rc, "error: expected identifier\n"), NULL;
-    }
-    struct Token* id = cur_tok++;
-    const char* const name = token_str(p, id);
-    sym->token = id;
-    if (attr.symname)
-    {
-        if (strlen(attr.symname) >= sizeof(sym->reg.rename.buf))
-        {
-            return parser_ferror(&cur_tok->rc,
-                                 "error: symbol names have a maximum length of %lu characters\n",
-                                 sizeof(sym->reg.rename.buf) - 1),
-                   NULL;
-        }
-        strcpy(sym->reg.rename.buf, attr.symname);
-    }
-    sym->intrinsic_asm_str = attr.asmstr;
-    sym->is_nonreentrant = attr.is_nonreentrant;
-
-    const char ch = cur_tok->type == LEX_SYMBOL ? token_str(p, cur_tok)[0] : '\0';
-    if (ch == '(')
-    {
-        sym->is_function = 1;
-        if (sym->reg.rename.buf[0])
-        {
-            if (sym->reg.rename.buf[0] != '$' || !sym->reg.rename.buf[1] ||
-                sym->reg.rename.buf[strlen(sym->reg.rename.buf) - 1] != '$')
-            {
-                return parser_ferror(&cur_tok->rc,
-                                     "error: external symbol names must be of the form '$foo$' (was '%s')\n",
-                                     sym->reg.rename.buf),
-                       NULL;
-            }
-        }
-        else
-        {
-            sym->reg.rename = extern_var_from(p, name);
-        }
-        ++cur_tok;
-        if (cur_tok->type == LEX_SYMBOL && token_str(p, cur_tok)[0] == ')')
-        {
-            ++cur_tok;
-        }
-        else
-        {
-            struct Symbol* args[REG_COUNT];
-
-            do
-            {
-                if (sym->arg_count == REG_COUNT)
-                    return parser_ferror(&cur_tok->rc, "error: maximum argument count exceeded (%d)\n", REG_COUNT),
-                           NULL;
-
-                struct Symbol* const arg_sym = args[sym->arg_count++] = symbol_alloc(p);
-                if (!(cur_tok = compile_declspecs(p, cur_tok, &arg_sym->specs))) return NULL;
-                if (!(cur_tok = compile_declarator(p, cur_tok, bb, arg_sym))) return NULL;
-
-                if (sym->is_nonreentrant)
-                {
-                    arg_sym->reg.rename = nrfun_param(p, sym->arg_count, name);
-                }
-                else
-                {
-                    arg_sym->reg.rename = free_var(p);
-                }
-                if (cur_tok->type == LEX_SYMBOL)
-                {
-                    const char ch = token_str(p, cur_tok)[0];
-                    if (ch == ',')
-                    {
-                        ++cur_tok;
-                        continue;
-                    }
-                    else if (ch == ')')
-                    {
-                        ++cur_tok;
-                        break;
-                    }
-                }
-                return parser_ferror(&cur_tok->rc, "error: expected ',' and further parameter declarations or ')'\n"),
-                       NULL;
-            } while (1);
-
-            sym->arg_offset = p->expr_seqs.sz / sizeof(struct Symbol*);
-            array_push(&p->expr_seqs, args, sym->arg_count * sizeof(struct Symbol*));
-        }
-    }
-    else
-    {
-        // not a function
-        sym->is_nonreentrant |= !bb->fn_sym || bb->fn_sym->is_nonreentrant;
-        if (!sym->reg.rename.buf[0]) sym->reg.rename = free_var_from(p, name);
-    }
-    return cur_tok;
-}
-static struct Token* compile_declspecs(Parser* p, struct Token* cur_tok, struct DeclSpecs* specs)
+static struct Token* parse_declspecs(Parser* p, struct Token* cur_tok, struct DeclSpecs* specs)
 {
     do
     {
@@ -1229,123 +1524,178 @@ static struct Token* compile_declspecs(Parser* p, struct Token* cur_tok, struct 
         ++cur_tok;
     } while (1);
 }
-static struct Token* compile_compound_body(Parser* p, struct Token* cur_tok, struct CompoundBlock* bb);
-static struct Token* compile_compound_stmt(Parser* p, struct Token* cur_tok, struct CompoundBlock* bb)
+static struct Token* parse_declarator(Parser* p, struct Token* cur_tok, struct DeclSpecs* specs, struct Decl** pdecl)
 {
-    size_t scope_sz = scope_size(&p->scope);
-    if (cur_tok = compile_compound_body(p, cur_tok, bb))
-    {
-        cur_tok = token_consume_sym(p, cur_tok, '}');
-    }
-    scope_shrink(&p->scope, scope_sz);
-    return cur_tok;
-}
-static struct Token* compile_return_stmt(Parser* p, struct Token* cur_tok, struct CompoundBlock* bb) { }
-static struct Token* compile_decl(Parser* p, struct Token* cur_tok, struct CompoundBlock* bb)
-{
-    struct DeclSpecs specs = {0};
-    if (cur_tok = compile_declspecs(p, cur_tok, &specs))
-    {
-        while (1)
-        {
-            struct Symbol* const sym = symbol_alloc(p);
-            sym->specs = specs;
-            if (!(cur_tok = compile_declarator(p, cur_tok, bb, sym))) return NULL;
-            const char* name = token_str(p, sym->token);
-            struct Binding* prev_sym = scope_find(&p->scope, name);
-            if (prev_sym)
-            {
-                // ensure symbols match
-                if (!symbol_is_equivalent_redecl(prev_sym->sym, sym))
-                {
-                    return parser_ferror(&cur_tok->rc, "error: declaration doesn't match previous\n"), NULL;
-                }
-            }
-            scope_insert(&p->scope, name, sym);
-            size_t scope_sz = scope_size(&p->scope);
-            sym->reg.stack_addr = bb->frame_size++;
-            if (cur_tok->type == LEX_SYMBOL)
-            {
-                const char ch = token_str(p, cur_tok)[0];
-                if (ch == '{')
-                {
-                    struct CompoundBlock new_cb;
-                    cb_init(&new_cb, NULL);
-                    new_cb.fn_sym = sym;
-                    // begin compound block
-                    if (sizeof(p->fn_label_prefix) <=
-                        snprintf(p->fn_label_prefix, sizeof(p->fn_label_prefix), "%d_", p->free_var_counter++))
-                    {
-                        fprintf(stderr, "resource exceeded -- too many symbols\n");
-                        abort();
-                    }
-                    cg_mark_label(&p->cg, sym->reg.rename.buf);
-                    struct Symbol* const* const sym_start = p->expr_seqs.data;
-                    for (size_t i = 0; i < sym->arg_count; ++i)
-                    {
-                        struct Symbol* arg_sym = sym_start[sym->arg_offset + i];
-                        if (arg_sym->token) scope_insert(&p->scope, token_str(p, arg_sym->token), arg_sym);
-                    }
-                    if (sym->is_nonreentrant)
-                    {
-                        p->fn_ret_var = nrfun_param_ret(p, token_str(p, sym->token));
-                    }
-                    else
-                    {
-                        if (sym->arg_count > REG_COUNT)
-                        {
-                            return parser_ferror(&cur_tok->rc, "error: exceeded maximum argument count\n"), NULL;
-                        }
-                        for (size_t i = 0; i < sym->arg_count; ++i)
-                        {
-                            struct Symbol* arg_sym = sym_start[sym->arg_offset + i];
-                            arg_sym->reg.stack_addr = new_cb.frame_size++;
-                            cg_write_inst_set(&p->cg, arg_sym->reg.rename.buf, PARAM_NAMES_ARR[i]);
-                        }
-                        cg_write_push_ret(&p->cg, &p->fn_ret_var);
-                    }
-                    if (cur_tok = compile_compound_stmt(p, cur_tok + 1, &new_cb))
-                    {
-                        if (!new_cb.has_returned)
-                        {
-                            if (parser_spill_registers(p)) return NULL;
-                            cg_write_return(&p->cg, &p->fn_ret_var);
-                        }
-                        p->fn_ret_var = s_freevar_zero;
-                        scope_shrink(&p->scope, scope_sz);
-                    }
-                    return cur_tok;
-                }
-                else
-                {
-                    // since we aren't defining a function body, remove any parameters from the scope
-                    if (ch == '=')
-                    {
-                        struct ValDest dst = dest_sym(sym);
+    struct Decl* decl = *pdecl = pool_alloc(&p->ast_pools[AST_DECL], sizeof(struct Decl));
+    memset(decl, 0, sizeof(struct Decl));
+    decl->kind.kind = AST_DECL;
+    decl->specs = *specs;
+    symbol_init(&decl->sym);
+    decl->sym.decl = decl;
 
-                        struct Expr* expr;
-                        if (!(cur_tok = parse_expr(p, cur_tok + 1, &expr, PRECEDENCE_ASSIGN))) return NULL;
-                        if (compile_expr(p, expr, &dst, bb)) return NULL;
-                        parse_clear_exprs(p);
-                    }
-                    if (cur_tok->type != LEX_SYMBOL)
-                        return parser_ferror(&cur_tok->rc, "error: expectedd ',' or ';'\n"), NULL;
-                    const char ch2 = *token_str(p, cur_tok);
-                    if (ch2 == ',')
+    if (cur_tok->type == LEX_ATTRIBUTE)
+    {
+        ++cur_tok;
+        cur_tok = parse_attribute_plist(p, cur_tok, &decl->attr);
+        if (!cur_tok) return NULL;
+    }
+    if (cur_tok->type != LEX_IDENT)
+    {
+        return parser_ferror(&cur_tok->rc, "error: expected identifier\n"), NULL;
+    }
+    decl->id = cur_tok++;
+    const char* const name = token_str(p, decl->id);
+
+    struct Binding* prev_sym = scope_find(&p->scope, name);
+    scope_insert(&p->scope, name, &decl->sym);
+
+    if (token_is_sym(p, cur_tok, '('))
+    {
+        decl->is_function = 1;
+        ++cur_tok;
+        if (cur_tok->type == LEX_SYMBOL && token_str(p, cur_tok)[0] == ')')
+        {
+            ++cur_tok;
+        }
+        else
+        {
+#define MAX_ARG_DECLS 16
+            struct Decl* arg_decls[MAX_ARG_DECLS];
+            while (1)
+            {
+                if (decl->extent == MAX_ARG_DECLS)
+                {
+                    return parser_ferror(
+                               &cur_tok->rc, "error: exceeded maximum function arguments (%lu)\n", MAX_ARG_DECLS),
+                           NULL;
+                }
+                struct DeclSpecs arg_specs = {0};
+                if (!(cur_tok = parse_declspecs(p, cur_tok, &arg_specs))) return NULL;
+                if (!(cur_tok = parse_declarator(p, cur_tok, &arg_specs, arg_decls + decl->extent++))) return NULL;
+
+                if (cur_tok->type == LEX_SYMBOL)
+                {
+                    const char ch = token_str(p, cur_tok)[0];
+                    if (ch == ',')
                     {
                         ++cur_tok;
                         continue;
                     }
-                    else if (ch2 == ';')
+                    else if (ch == ')')
                     {
-                        return cur_tok + 1;
+                        ++cur_tok;
+                        break;
                     }
                 }
+                return parser_ferror(&cur_tok->rc, "error: expected ',' and further parameter declarations or ')'\n"),
+                       NULL;
             }
-            return parser_ferror(&cur_tok->rc, "error: expected ',' or ';'\n"), NULL;
+            decl->offset = p->expr_seqs.sz / sizeof(struct Expr*);
+            array_push(&p->expr_seqs, arg_decls, decl->extent * sizeof(struct Expr*));
+        }
+        if (prev_sym)
+        {
+            // ensure symbols match
+            if (!symbol_is_equivalent_redecl(prev_sym->sym, &decl->sym))
+            {
+                return parser_ferror(&decl->id->rc, "error: declaration doesn't match previous\n"), NULL;
+            }
+            if (prev_sym->sym->decl->init)
+            {
+                decl->def = prev_sym->sym->decl;
+            }
+            else
+            {
+                prev_sym->sym->decl->def = decl;
+            }
         }
     }
     return cur_tok;
+}
+
+static struct Token* parse_decl(Parser* p, struct Token* cur_tok, struct Array* pdecls)
+{
+    struct DeclSpecs specs = {0};
+    if (!(cur_tok = parse_declspecs(p, cur_tok, &specs))) return NULL;
+    while (1)
+    {
+        struct Decl* pdecl;
+        if (!(cur_tok = parse_declarator(p, cur_tok, &specs, &pdecl))) return NULL;
+        array_push(pdecls, &pdecl, sizeof(pdecl));
+        if (cur_tok->type == LEX_SYMBOL)
+        {
+            const char ch = token_str(p, cur_tok)[0];
+            if (ch == '{')
+            {
+                return cur_tok;
+            }
+
+            if (ch == '=')
+            {
+                if (pdecl->is_function)
+                    return parser_ferror(&cur_tok->rc, "error: function cannot be initialized with '='\n"), NULL;
+                if (!(cur_tok = parse_expr(p, cur_tok + 1, &pdecl->init, PRECEDENCE_ASSIGN))) return NULL;
+            }
+
+            if (cur_tok->type != LEX_SYMBOL) return parser_ferror(&cur_tok->rc, "error: expected ',' or ';'\n"), NULL;
+            const char ch2 = *token_str(p, cur_tok);
+            if (ch2 == ',')
+            {
+                ++cur_tok;
+                continue;
+            }
+            else if (ch2 == ';')
+            {
+                return cur_tok;
+            }
+        }
+        return parser_ferror(&cur_tok->rc, "error: expected ',' or ';'\n"), NULL;
+    }
+}
+static int compile_decl_single(Parser* p, struct Decl* decl, struct CompoundBlock* bb)
+{
+    struct Symbol* const sym = &decl->sym;
+    sym->type = tc_decl(p, decl);
+
+    const char* const name = token_str(p, decl->id);
+    if (decl->attr.symname)
+    {
+        if (strlen(decl->attr.symname) >= sizeof(sym->reg.rename.buf))
+        {
+            return parser_ferror(&decl->id->rc,
+                                 "error: symbol names have a maximum length of %lu characters\n",
+                                 sizeof(sym->reg.rename.buf) - 1);
+        }
+        strcpy(sym->reg.rename.buf, decl->attr.symname);
+    }
+
+    if (decl->is_function)
+    {
+        if (sym->reg.rename.buf[0])
+        {
+            if (sym->reg.rename.buf[0] != '$' || !sym->reg.rename.buf[1] ||
+                sym->reg.rename.buf[strlen(sym->reg.rename.buf) - 1] != '$')
+            {
+                return parser_ferror(&decl->id->rc,
+                                     "error: external symbol names must be of the form '$foo$' (was '%s')\n",
+                                     sym->reg.rename.buf);
+            }
+        }
+        else
+        {
+            sym->reg.rename = extern_var_from(p, name);
+        }
+    }
+    else
+    {
+        // not a function
+        sym->is_nonreentrant |= !bb->fn_sym || bb->fn_sym->is_nonreentrant;
+        if (!sym->reg.rename.buf[0]) sym->reg.rename = free_var_from(p, name);
+
+        scope_insert(&p->scope, name, sym);
+        sym->reg.stack_addr = bb->frame_size++;
+    }
+    return 0;
 }
 
 static const char* relation_invert(const char* op)
@@ -1362,19 +1712,9 @@ static const char* relation_invert(const char* op)
 
 static struct Token* compile_stmt(Parser* p, struct Token* cur_tok, struct CompoundBlock* bb);
 
-enum CondInverted
+static int compile_conditional_expr(
+    Parser* p, struct Expr* cond, struct CompoundBlock* bb, const char* jump_to, enum CondInverted inverted)
 {
-    COND_NORMAL,
-    COND_INVERTED,
-};
-static struct Token* compile_conditional(
-    Parser* p, struct Token* cur_tok, struct CompoundBlock* bb, const char* jump_to, enum CondInverted inverted)
-{
-    if (!(cur_tok = token_consume_sym(p, cur_tok, '('))) return NULL;
-
-    struct Expr* cond;
-    if (!(cur_tok = parse_expr(p, cur_tok, &cond, PRECEDENCE_COMMA))) return NULL;
-
     if (cond->kind == EXPR_OP)
     {
         struct ExprOp* cond_op = (struct ExprOp*)cond;
@@ -1384,80 +1724,225 @@ static struct Token* compile_conditional(
         {
             struct RegMap lhs_regmap = {0};
             struct ValDest lhs = dest_regmap(&lhs_regmap);
-            if (compile_expr(p, cond_op->lhs, &lhs, bb)) return NULL;
+            if (compile_expr(p, cond_op->lhs, &lhs, bb)) return 1;
             struct RegMap rhs_regmap = {0};
             struct ValDest rhs = dest_regmap(&rhs_regmap);
-            if (compile_expr(p, cond_op->rhs, &rhs, bb)) return NULL;
-
-            parse_clear_exprs(p);
+            if (compile_expr(p, cond_op->rhs, &rhs, bb)) return 1;
 
             const char* const lhs_reg = parser_prepare_src_reg(p, &lhs);
-            if (!lhs_reg) return NULL;
+            if (!lhs_reg) return 1;
             const char* const rhs_reg = parser_prepare_src_reg(p, &rhs);
-            if (!rhs_reg) return NULL;
+            if (!rhs_reg) return 1;
 
             parser_deactivate_reg(p, &lhs_regmap);
             parser_deactivate_reg(p, &rhs_regmap);
 
             // Do if-stmt fusion
-            if (parser_spill_registers(p)) return NULL;
+            if (parser_spill_registers(p)) return 1;
             cg_write_inst_jump_op(&p->cg, jump_to, inverted ? relation_invert(op) : op, lhs_reg, rhs_reg);
-            return token_consume_sym(p, cur_tok, ')');
+            return 0;
+        }
+        else if (pr == PRECEDENCE_OR)
+        {
+            if (inverted == COND_NORMAL)
+            {
+                if (compile_conditional_expr(p, cond_op->lhs, bb, jump_to, COND_NORMAL)) return 1;
+                return compile_conditional_expr(p, cond_op->rhs, bb, jump_to, COND_NORMAL);
+            }
+            else
+            {
+                struct FreeVar end_lbl = free_var_label(p);
+                if (compile_conditional_expr(p, cond_op->lhs, bb, end_lbl.buf, COND_NORMAL)) return 1;
+                if (compile_conditional_expr(p, cond_op->rhs, bb, jump_to, COND_INVERTED)) return 1;
+                cg_mark_label(&p->cg, end_lbl.buf);
+                return 0;
+            }
+        }
+        else if (pr == PRECEDENCE_AND)
+        {
+            if (inverted == COND_INVERTED)
+            {
+                if (compile_conditional_expr(p, cond_op->lhs, bb, jump_to, COND_INVERTED)) return 1;
+                return compile_conditional_expr(p, cond_op->rhs, bb, jump_to, COND_INVERTED);
+            }
+            else
+            {
+                struct FreeVar end_lbl = free_var_label(p);
+                if (compile_conditional_expr(p, cond_op->lhs, bb, end_lbl.buf, COND_INVERTED)) return 1;
+                if (compile_conditional_expr(p, cond_op->rhs, bb, jump_to, COND_NORMAL)) return 1;
+                cg_mark_label(&p->cg, end_lbl.buf);
+                return 0;
+            }
         }
     }
 
     struct RegMap lhs_regmap = {0};
     struct ValDest lhs = dest_regmap(&lhs_regmap);
-    if (compile_expr(p, cond, &lhs, bb)) return NULL;
-    parse_clear_exprs(p);
+    if (compile_expr(p, cond, &lhs, bb)) return 1;
     const char* const lhs_reg = parser_prepare_src_reg(p, &lhs);
-    if (!lhs_reg) return NULL;
+    if (!lhs_reg) return 1;
     parser_deactivate_reg(p, &lhs_regmap);
-    if (parser_spill_registers(p)) return NULL;
+    if (parser_spill_registers(p)) return 1;
     cg_write_inst_jump_op(&p->cg, jump_to, inverted ? "!=" : "==", lhs_reg, "true");
+    return 0;
+}
+
+static struct Token* parse_conditional(Parser* p, struct Token* cur_tok, struct Expr** p_cond)
+{
+    if (!(cur_tok = token_consume_sym(p, cur_tok, '('))) return NULL;
+
+    if (!(cur_tok = parse_expr(p, cur_tok, p_cond, PRECEDENCE_COMMA))) return NULL;
+
     return token_consume_sym(p, cur_tok, ')');
 }
-static struct Token* compile_if_stmt(Parser* p, struct Token* cur_tok, struct CompoundBlock* bb)
+
+static struct Token* compile_conditional(
+    Parser* p, struct Token* cur_tok, struct CompoundBlock* bb, const char* jump_to, enum CondInverted inverted)
+{
+    struct Expr* cond;
+    if (!(cur_tok = parse_conditional(p, cur_tok, &cond))) return NULL;
+
+    if (compile_conditional_expr(p, cond, bb, jump_to, inverted)) return NULL;
+    return cur_tok;
+}
+
+struct StmtReturn
+{
+    struct Expr kind;
+    struct Token* tok;
+    // may be null
+    struct Expr* expr;
+};
+struct StmtDecls
+{
+    struct Expr kind;
+    size_t offset;
+    size_t extent;
+};
+struct StmtIf
+{
+    struct Expr kind;
+    struct Expr* cond;
+    struct Expr* if_body;
+    // may be null
+    struct Expr* else_body;
+};
+struct StmtGoto
+{
+    struct Expr kind;
+    struct Token* dst;
+};
+struct StmtLoop
+{
+    struct Expr kind;
+    struct Expr* cond;
+    struct Expr* body;
+    // null for while/dowhile
+    struct Expr* init;
+    // null for while/dowhile
+    struct Expr* advance;
+
+    int is_do_while : 1;
+};
+struct StmtBlock
+{
+    struct Expr kind;
+    size_t offset;
+    size_t extent;
+};
+struct StmtLabel
+{
+    struct Expr kind;
+    struct Token* tok;
+    struct Expr* stmt;
+};
+struct StmtBreak
+{
+    struct Expr kind;
+    struct Token* tok;
+};
+struct StmtContinue
+{
+    struct Expr kind;
+    struct Token* tok;
+};
+
+static struct Expr s_stmt_none = {.kind = STMT_NONE};
+
+static int compile_stmt_expr(Parser* p, struct Expr* expr, struct CompoundBlock* bb);
+static int compile_if_stmt(Parser* p, struct StmtIf* stmt, struct CompoundBlock* bb)
 {
     struct FreeVar else_lbl = free_var_label(p);
-    if (!(cur_tok = compile_conditional(p, cur_tok, bb, else_lbl.buf, COND_INVERTED))) return NULL;
-    if (cur_tok = compile_stmt(p, cur_tok, bb))
+    if (compile_conditional_expr(p, stmt->cond, bb, else_lbl.buf, COND_INVERTED)) return 1;
+    struct CompoundBlock new_cb;
+    cb_init(&new_cb, bb, p);
+    if (compile_stmt_expr(p, stmt->if_body, &new_cb)) return 1;
+    int has_returned = new_cb.has_returned;
+    cb_destroy(&new_cb, p);
+    if (parser_spill_registers(p)) return 1;
+    if (stmt->else_body)
     {
-        if (parser_spill_registers(p)) return NULL;
-        if (cur_tok->type == LEX_ELSE)
-        {
-            ++cur_tok;
-            struct FreeVar endif_lbl = free_var_label(p);
-            cg_write_inst_jump(&p->cg, endif_lbl.buf);
-            cg_mark_label(&p->cg, else_lbl.buf);
-            cur_tok = compile_stmt(p, cur_tok, bb);
-            if (parser_spill_registers(p)) return NULL;
-            cg_mark_label(&p->cg, endif_lbl.buf);
-            return cur_tok;
-        }
-        else
-        {
-            cg_mark_label(&p->cg, else_lbl.buf);
-        }
+        struct FreeVar endif_lbl = free_var_label(p);
+        cg_write_inst_jump(&p->cg, endif_lbl.buf);
+        cg_mark_label(&p->cg, else_lbl.buf);
+        cb_init(&new_cb, bb, p);
+        if (compile_stmt_expr(p, stmt->else_body, &new_cb)) return 1;
+        if (has_returned && new_cb.has_returned) bb->has_returned = 1;
+        cb_destroy(&new_cb, p);
+        if (parser_spill_registers(p)) return 1;
+        cg_mark_label(&p->cg, endif_lbl.buf);
     }
-    return cur_tok;
+    else
+    {
+        cg_mark_label(&p->cg, else_lbl.buf);
+    }
+    return 0;
 }
-static struct Token* compile_while_stmt(Parser* p, struct Token* cur_tok, struct CompoundBlock* bb)
+static int compile_loop_stmt(Parser* p, struct StmtLoop* stmt, struct CompoundBlock* bb)
 {
     struct FreeVar continue_lbl = free_var_label(p);
+    struct FreeVar first_lbl = free_var_label(p);
     struct FreeVar break_lbl = free_var_label(p);
-    if (parser_spill_registers(p)) return NULL;
-    cg_mark_label(&p->cg, continue_lbl.buf);
-
-    if (!(cur_tok = compile_conditional(p, cur_tok, bb, break_lbl.buf, COND_INVERTED))) return NULL;
-    if (cur_tok = compile_stmt(p, cur_tok, bb))
+    struct CompoundBlock new_cb;
+    cb_init(&new_cb, bb, p);
+    new_cb.break_label = break_lbl.buf;
+    new_cb.continue_label = continue_lbl.buf;
+    if (stmt->init)
     {
-        if (parser_spill_registers(p)) return NULL;
-        cg_write_inst_jump(&p->cg, continue_lbl.buf);
-        cg_mark_label(&p->cg, break_lbl.buf);
+        if (compile_stmt_expr(p, stmt->init, &new_cb)) return 1;
     }
-    return cur_tok;
+    if (parser_spill_registers(p)) return 1;
+    if (stmt->advance || stmt->is_do_while)
+    {
+        cg_write_inst_jump(&p->cg, first_lbl.buf);
+    }
+    cg_mark_label(&p->cg, continue_lbl.buf);
+    if (stmt->advance)
+        if (compile_stmt_expr(p, stmt->advance, &new_cb)) return 1;
+
+    if (!stmt->is_do_while)
+    {
+        if (parser_spill_registers(p)) return 1;
+        cg_mark_label(&p->cg, first_lbl.buf);
+    }
+    if (stmt->cond)
+    {
+        if (compile_conditional_expr(p, stmt->cond, bb, break_lbl.buf, COND_INVERTED)) return 1;
+    }
+    if (stmt->is_do_while)
+    {
+        if (parser_spill_registers(p)) return 1;
+        cg_mark_label(&p->cg, first_lbl.buf);
+    }
+
+    if (compile_stmt_expr(p, stmt->body, &new_cb)) return 1;
+    cb_destroy(&new_cb, p);
+    if (parser_spill_registers(p)) return 1;
+    cg_write_inst_jump(&p->cg, continue_lbl.buf);
+    cg_mark_label(&p->cg, break_lbl.buf);
+    return 0;
 }
+
 static struct Token* compile_do_while_stmt(Parser* p, struct Token* cur_tok, struct CompoundBlock* bb)
 {
     struct FreeVar top_lbl = free_var_label(p);
@@ -1465,7 +1950,12 @@ static struct Token* compile_do_while_stmt(Parser* p, struct Token* cur_tok, str
     struct FreeVar break_lbl = free_var_label(p);
     if (parser_spill_registers(p)) return NULL;
     cg_mark_label(&p->cg, top_lbl.buf);
-    if (!(cur_tok = compile_stmt(p, cur_tok, bb))) return NULL;
+    struct CompoundBlock new_cb;
+    cb_init(&new_cb, bb, p);
+    new_cb.break_label = break_lbl.buf;
+    new_cb.continue_label = continue_lbl.buf;
+    if (!(cur_tok = compile_stmt(p, cur_tok, &new_cb))) return NULL;
+    cb_destroy(&new_cb, p);
     if (cur_tok->type != LEX_WHILE)
     {
         return parser_ferror(&cur_tok->rc, "error: expected 'while'\n"), NULL;
@@ -1481,87 +1971,247 @@ static struct Token* compile_do_while_stmt(Parser* p, struct Token* cur_tok, str
     return token_consume_sym(p, cur_tok, ';');
 }
 
-static struct Token* compile_stmt(Parser* p, struct Token* cur_tok, struct CompoundBlock* bb)
+static struct Token* parse_stmt(Parser* p, struct Token* cur_tok, struct Expr** p_expr);
+static struct Token* parse_stmts(Parser* p, struct Token* cur_tok, struct Expr** p_expr);
+static struct Token* parse_stmt_decl(Parser* p, struct Token* cur_tok, struct Expr** p_expr)
+{
+    const size_t scope_sz = scope_size(&p->scope);
+    struct Array arr_decls;
+    array_init(&arr_decls);
+    if (!(cur_tok = parse_decl(p, cur_tok, &arr_decls))) return NULL;
+
+    if (token_is_sym(p, cur_tok, '{'))
+    {
+        if (arr_decls.sz != sizeof(struct Decl*))
+        {
+            return parser_ferror(&cur_tok->rc, "error: functions must be declared alone\n"), NULL;
+        }
+        struct Decl* decl = *(struct Decl**)arr_decls.data;
+        if (!decl->is_function)
+        {
+            return parser_ferror(&cur_tok->rc, "error: only functions may be initialized with a code block\n"), NULL;
+        }
+        if (!(cur_tok = parse_stmts(p, cur_tok + 1, &decl->init))) return NULL;
+        if (!(cur_tok = token_consume_sym(p, cur_tok, '}'))) return NULL;
+        // Remove function arguments from the scope
+        scope_shrink(&p->scope, scope_sz + 1);
+    }
+    else
+    {
+        if (!(cur_tok = token_consume_sym(p, cur_tok, ';'))) return NULL;
+    }
+
+    struct StmtDecls ret = {
+        .kind = STMT_DECLS,
+        .offset = p->expr_seqs.sz / sizeof(struct Decl*),
+        .extent = arr_decls.sz / sizeof(struct Decl*),
+    };
+    array_push(&p->expr_seqs, arr_decls.data, arr_decls.sz);
+    array_destroy(&arr_decls);
+    *p_expr = pool_push(&p->ast_pools[ret.kind.kind], &ret, sizeof(ret));
+    return cur_tok;
+}
+
+static struct Token* parse_stmts(Parser* p, struct Token* cur_tok, struct Expr** p_expr)
+{
+    struct Array arr_stmts;
+    array_init(&arr_stmts);
+    do
+    {
+        if (cur_tok->type == LEX_EOF || token_is_sym(p, cur_tok, '}')) break;
+        if (!(cur_tok = parse_stmt(p, cur_tok, array_alloc(&arr_stmts, sizeof(struct Expr*))))) return NULL;
+    } while (1);
+    struct StmtBlock ret = {
+        .kind = STMT_BLOCK,
+        .offset = p->expr_seqs.sz / sizeof(struct Expr*),
+        .extent = arr_stmts.sz / sizeof(struct Expr*),
+    };
+    array_push(&p->expr_seqs, arr_stmts.data, arr_stmts.sz);
+    array_destroy(&arr_stmts);
+    *p_expr = pool_push(&p->ast_pools[ret.kind.kind], &ret, sizeof(ret));
+    return cur_tok;
+}
+
+static struct Token* parse_stmt(Parser* p, struct Token* cur_tok, struct Expr** p_expr)
 {
     switch (cur_tok->type)
     {
+        case LEX_MSTRING:
         case LEX_INT:
         case LEX_VOLATILE:
         case LEX_CONST:
         case LEX_REGISTER:
-        case LEX_VOID: return compile_decl(p, cur_tok, bb);
+        case LEX_VOID:
+        {
+            return parse_stmt_decl(p, cur_tok, p_expr);
+        }
         case LEX_RETURN:
         {
-            bb->has_returned = 1;
-            struct Expr* e;
-            if (cur_tok = parse_expr(p, cur_tok + 1, &e, PRECEDENCE_COMMA))
+            struct StmtReturn ret = {
+                .kind = STMT_RETURN,
+                .tok = cur_tok,
+            };
+            if (token_is_sym(p, cur_tok + 1, ';'))
             {
-                struct RegMap regmap = {
-                    .rename = s_freevar_paramreg0,
-                };
-                struct ValDest dst = dest_regmap(&regmap);
-                if (compile_expr(p, e, &dst, bb)) return NULL;
-                parse_clear_exprs(p);
-                parser_deactivate_reg(p, &regmap);
-                if (parser_spill_registers(p)) return NULL;
-                cg_write_return(&p->cg, &p->fn_ret_var);
+                cur_tok += 2;
             }
+            else if (!(cur_tok = parse_expr(p, cur_tok + 1, &ret.expr, PRECEDENCE_COMMA)))
+                return NULL;
+            *p_expr = pool_push(&p->ast_pools[ret.kind.kind], &ret, sizeof(ret));
             return cur_tok;
         }
         case LEX_IF:
         {
-            return compile_if_stmt(p, cur_tok + 1, bb);
+            struct StmtIf ret = {
+                .kind = STMT_IF,
+            };
+            size_t scope_sz = scope_size(&p->scope);
+            if (!(cur_tok = parse_conditional(p, cur_tok + 1, &ret.cond))) return NULL;
+            if (!(cur_tok = parse_stmt(p, cur_tok, &ret.if_body))) return NULL;
+            scope_shrink(&p->scope, scope_sz);
+
+            if (cur_tok->type == LEX_ELSE)
+            {
+                if (!(cur_tok = parse_stmt(p, cur_tok + 1, &ret.else_body))) return NULL;
+                scope_shrink(&p->scope, scope_sz);
+            }
+            else
+            {
+                ret.else_body = NULL;
+            }
+
+            *p_expr = pool_push(&p->ast_pools[ret.kind.kind], &ret, sizeof(ret));
+            return cur_tok;
+        }
+        case LEX_CONTINUE:
+        {
+            struct StmtContinue ret = {
+                .kind = STMT_CONTINUE,
+                .tok = cur_tok,
+            };
+            *p_expr = pool_push(&p->ast_pools[ret.kind.kind], &ret, sizeof(ret));
+            return token_consume_sym(p, cur_tok + 1, ';');
+        }
+        case LEX_BREAK:
+        {
+            struct StmtBreak ret = {
+                .kind = STMT_BREAK,
+                .tok = cur_tok,
+            };
+            *p_expr = pool_push(&p->ast_pools[ret.kind.kind], &ret, sizeof(ret));
+            return token_consume_sym(p, cur_tok + 1, ';');
+        }
+        case LEX_FOR:
+        {
+            struct StmtLoop ret = {
+                .kind = STMT_LOOP,
+            };
+            size_t scope_sz = scope_size(&p->scope);
+            if (!(cur_tok = token_consume_sym(p, cur_tok + 1, '('))) return NULL;
+            struct Token* init_tk = cur_tok;
+            if (!(cur_tok = parse_stmt(p, cur_tok, &ret.init))) return NULL;
+            if (ret.init->kind == STMT_DECLS)
+            {
+                struct StmtDecls* init = (struct StmtDecls*)ret.init;
+                struct Expr** exprs = p->expr_seqs.data;
+                for (size_t i = 0; i < init->extent; ++i)
+                {
+                    if (exprs[init->offset + i]->kind != AST_DECL) abort();
+                    struct Decl* decl = (struct Decl*)exprs[init->offset + i];
+                    if (decl->is_function)
+                        return parser_ferror(
+                                   &decl->id->rc,
+                                   "error: declaration of non-variable '%s' in 'for' loop initial declaration\n",
+                                   token_str(p, decl->id)),
+                               NULL;
+                }
+            }
+            else if (!ast_kind_is_expr(ret.init->kind))
+            {
+                return parser_ferror(&init_tk->rc, "error: expected expression or declaration in for loop\n"), NULL;
+            }
+            if (!token_is_sym(p, cur_tok, ';'))
+            {
+                if (!(cur_tok = parse_expr(p, cur_tok, &ret.cond, PRECEDENCE_COMMA))) return NULL;
+            }
+            if (!(cur_tok = token_consume_sym(p, cur_tok, ';'))) return NULL;
+            if (!token_is_sym(p, cur_tok, ')'))
+            {
+                if (!(cur_tok = parse_expr(p, cur_tok, &ret.advance, PRECEDENCE_COMMA))) return NULL;
+            }
+            if (!(cur_tok = token_consume_sym(p, cur_tok, ')'))) return NULL;
+            if (!(cur_tok = parse_stmt(p, cur_tok, &ret.body))) return NULL;
+            scope_shrink(&p->scope, scope_sz);
+            *p_expr = pool_push(&p->ast_pools[ret.kind.kind], &ret, sizeof(ret));
+            return cur_tok;
         }
         case LEX_WHILE:
         {
-            return compile_while_stmt(p, cur_tok + 1, bb);
+            struct StmtLoop ret = {
+                .kind = STMT_LOOP,
+            };
+            if (!(cur_tok = parse_conditional(p, cur_tok + 1, &ret.cond))) return NULL;
+            size_t scope_sz = scope_size(&p->scope);
+            if (!(cur_tok = parse_stmt(p, cur_tok, &ret.body))) return NULL;
+            scope_shrink(&p->scope, scope_sz);
+            *p_expr = pool_push(&p->ast_pools[ret.kind.kind], &ret, sizeof(ret));
+            return cur_tok;
         }
         case LEX_DO:
         {
-            return compile_do_while_stmt(p, cur_tok + 1, bb);
+            struct StmtLoop ret = {
+                .kind = STMT_LOOP,
+                .is_do_while = 1,
+            };
+            size_t scope_sz = scope_size(&p->scope);
+            if (!(cur_tok = parse_stmt(p, cur_tok + 1, &ret.body))) return NULL;
+            scope_shrink(&p->scope, scope_sz);
+            if (cur_tok->type != LEX_WHILE)
+            {
+                return parser_ferror(&cur_tok->rc, "error: expected 'while'\n"), NULL;
+            }
+            if (!(cur_tok = parse_conditional(p, cur_tok + 1, &ret.cond))) return NULL;
+            if (!(cur_tok = token_consume_sym(p, cur_tok, ';'))) return NULL;
+            *p_expr = pool_push(&p->ast_pools[ret.kind.kind], &ret, sizeof(ret));
+            return cur_tok;
         }
         case LEX_GOTO:
         {
-            ++cur_tok;
+            struct StmtGoto ret = {
+                .kind = STMT_GOTO,
+                .dst = ++cur_tok,
+            };
             if (cur_tok->type != LEX_IDENT)
             {
                 return parser_ferror(&cur_tok->rc, "error: expected label to go to\n"), NULL;
             }
-            char buf[64];
-            const char* const cur_tok_str = token_str(p, cur_tok);
-            if (sizeof(buf) <= snprintf(buf, sizeof(buf), "$%s%s$", p->fn_label_prefix, cur_tok_str))
-            {
-                fprintf(stderr, "resource exceeded: label too long: '%s'\n", cur_tok_str);
-                abort();
-            }
-            cg_write_inst_jump(&p->cg, buf);
-            ++cur_tok;
-            if (cur_tok->type == LEX_SYMBOL && token_str(p, cur_tok)[0] == ';')
-            {
-                ++cur_tok;
-            }
-            else
-            {
-                return parser_ferror(&cur_tok->rc, "error: expected semicolon\n"), NULL;
-            }
+            if (!(cur_tok = token_consume_sym(p, cur_tok + 1, ';'))) return NULL;
+            *p_expr = pool_push(&p->ast_pools[ret.kind.kind], &ret, sizeof(ret));
             return cur_tok;
         }
         case LEX_IDENT:
         {
+            if (token_is_sym(p, cur_tok + 1, ':'))
+            {
+                struct StmtLabel ret = {
+                    .kind = STMT_LABEL,
+                    .tok = cur_tok,
+                };
+                if (!(cur_tok = parse_stmt(p, cur_tok + 2, &ret.stmt))) return NULL;
+                *p_expr = pool_push(&p->ast_pools[ret.kind.kind], &ret, sizeof(ret));
+                return cur_tok;
+            }
+
             struct Binding* const cur_bind = scope_find(&p->type_scope, token_str(p, cur_tok));
             if (cur_bind)
             {
                 // this is a declaration
-                return compile_decl(p, cur_tok, bb);
+                return parse_stmt_decl(p, cur_tok, p_expr);
             }
         }
         case LEX_NUMBER:
         {
-            struct Expr* e;
-            if (!(cur_tok = parse_expr(p, cur_tok, &e, PRECEDENCE_COMMA))) return NULL;
-            struct ValDest dst = s_void_destination;
-            if (compile_expr(p, e, &dst, bb)) return NULL;
-            parse_clear_exprs(p);
+            if (!(cur_tok = parse_expr(p, cur_tok, p_expr, PRECEDENCE_COMMA))) return NULL;
             return token_consume_sym(p, cur_tok, ';');
         }
         case LEX_SYMBOL:
@@ -1569,23 +2219,15 @@ static struct Token* compile_stmt(Parser* p, struct Token* cur_tok, struct Compo
             const char ch = token_str(p, cur_tok)[0];
             if (ch == ';')
             {
+                *p_expr = &s_stmt_none;
                 return cur_tok + 1;
             }
             else if (ch == '{')
             {
-                const size_t scope_sz = scope_size(&p->scope);
-                struct CompoundBlock new_cb;
-                cb_init(&new_cb, bb);
-                if (cur_tok = compile_compound_body(p, cur_tok + 1, &new_cb))
-                {
-                    if (cur_tok->type != LEX_SYMBOL || token_str(p, cur_tok)[0] != '}')
-                    {
-                        return parser_ferror(&cur_tok->rc, "error: expected '}'\n"), NULL;
-                    }
-                    ++cur_tok;
-                }
+                size_t scope_sz = scope_size(&p->scope);
+                if (!(cur_tok = parse_stmts(p, cur_tok + 1, p_expr))) return NULL;
                 scope_shrink(&p->scope, scope_sz);
-                return cur_tok;
+                return token_consume_sym(p, cur_tok, '}');
             }
             else
             {
@@ -1596,31 +2238,225 @@ static struct Token* compile_stmt(Parser* p, struct Token* cur_tok, struct Compo
     }
 }
 
-static struct Token* compile_compound_body(Parser* p, struct Token* cur_tok, struct CompoundBlock* cb)
+static struct Token* compile_stmt(Parser* p, struct Token* cur_tok, struct CompoundBlock* bb)
 {
-    do
-    {
-        if (cur_tok->type == LEX_EOF) return cur_tok;
-        if (cur_tok->type == LEX_SYMBOL && token_str(p, cur_tok)[0] == '}') return cur_tok;
+    struct Expr* expr;
+    if (!(cur_tok = parse_stmt(p, cur_tok, &expr))) return NULL;
+    if (compile_stmt_expr(p, expr, bb)) return NULL;
+    return cur_tok;
+}
+static int compile_decl_expr(Parser* p, struct Decl* decl, struct CompoundBlock* bb)
+{
+    if (compile_decl_single(p, decl, bb)) return 1;
 
-        // check for label
-        if (cur_tok->type == LEX_IDENT && cur_tok[1].type == LEX_SYMBOL && token_str(p, cur_tok + 1)[0] == ':')
+    if (decl->init)
+    {
+        if (decl->is_function)
         {
-            const char* const str = token_str(p, cur_tok);
+            struct CompoundBlock new_cb;
+            cb_init(&new_cb, NULL, p);
+
+            new_cb.fn_sym = &decl->sym;
+            // begin compound block
+            if (sizeof(p->fn_label_prefix) <=
+                snprintf(p->fn_label_prefix, sizeof(p->fn_label_prefix), "%d_", p->free_var_counter++))
+            {
+                fprintf(stderr, "resource exceeded -- too many symbols\n");
+                abort();
+            }
+            cg_mark_label(&p->cg, decl->sym.reg.rename.buf);
+            const char* const name = token_str(p, decl->id);
+            for (size_t i = 0; i < decl->extent; ++i)
+            {
+                struct Decl* arg_decl = ((struct Decl**)p->expr_seqs.data)[decl->offset + i];
+                if (compile_decl_single(p, arg_decl, &new_cb)) return 1;
+                if (arg_decl->sym.is_nonreentrant)
+                {
+                    arg_decl->sym.reg.rename = nrfun_param(p, i, name);
+                }
+            }
+            if (decl->sym.is_nonreentrant)
+            {
+                p->fn_ret_var = nrfun_param_ret(p, token_str(p, decl->id));
+            }
+            else
+            {
+                if (decl->extent > REG_COUNT)
+                {
+                    return parser_ferror(&decl->id->rc, "error: exceeded maximum argument count (%d)\n", REG_COUNT);
+                }
+                for (size_t i = 0; i < decl->extent; ++i)
+                {
+                    struct Decl* arg_decl = ((struct Decl**)p->expr_seqs.data)[decl->offset + i];
+                    cg_write_inst_set(&p->cg, arg_decl->sym.reg.rename.buf, PARAM_NAMES_ARR[i]);
+                }
+                cg_write_push_ret(&p->cg, &p->fn_ret_var);
+            }
+            if (compile_stmt_expr(p, decl->init, &new_cb)) return 1;
+            int has_returned = new_cb.has_returned;
+            cb_destroy(&new_cb, p);
+            if (!has_returned)
+            {
+                if (parser_spill_registers(p)) return 1;
+                cg_write_return(&p->cg, &p->fn_ret_var);
+            }
+            p->fn_ret_var = s_freevar_zero;
+        }
+        else
+        {
+            tc_expr_unify(p, decl->init, decl->sym.type);
+            if (parser_has_errors()) return 1;
+            struct ValDest vd = dest_sym(&decl->sym);
+            if (compile_expr(p, decl->init, &vd, bb)) return 1;
+        }
+    }
+    return 0;
+}
+
+int ast_kind_is_expr(enum AstKind k)
+{
+    switch (k)
+    {
+        case EXPR_SYM:
+        case EXPR_LIT:
+        case EXPR_OP:
+        case EXPR_CALL: return 1;
+        default: return 0;
+    }
+}
+static int compile_stmt_expr(Parser* p, struct Expr* expr, struct CompoundBlock* bb)
+{
+    switch (expr->kind)
+    {
+        case STMT_DECLS:
+        {
+            struct StmtDecls* stmt = (struct StmtDecls*)expr;
+            for (size_t i = 0; i < stmt->extent; ++i)
+            {
+                struct Decl* arg_decl = ((struct Decl**)p->expr_seqs.data)[stmt->offset + i];
+                if (compile_decl_expr(p, arg_decl, bb)) return 1;
+            }
+            return 0;
+        }
+        case STMT_RETURN:
+        {
+            bb->has_returned = 1;
+            struct StmtReturn* stmt = (struct StmtReturn*)expr;
+            struct Type* ty_fn_ret = ((struct TypeFn*)bb->fn_sym->type)->ret;
+            if (ty_fn_ret->kind == TYPE_VOID)
+            {
+                if (stmt->expr)
+                {
+                    return parser_ferror(&stmt->tok->rc,
+                                         "error: unexpected return expression in function of type 'void'\n");
+                }
+            }
+            else
+            {
+                if (!stmt->expr)
+                {
+                    return parser_ferror(&stmt->tok->rc, "error: expected return expression in non-void function\n");
+                }
+                tc_expr_unify(p, stmt->expr, ty_fn_ret);
+                if (parser_has_errors()) return 1;
+                struct RegMap regmap = {
+                    .rename = s_freevar_paramreg0,
+                };
+                struct ValDest dst = dest_regmap(&regmap);
+                if (compile_expr(p, stmt->expr, &dst, bb)) return 1;
+                parser_deactivate_reg(p, &regmap);
+            }
+            if (parser_spill_registers(p)) return 1;
+            cg_write_return(&p->cg, &p->fn_ret_var);
+            return 0;
+        }
+        case STMT_IF:
+        {
+            return compile_if_stmt(p, (struct StmtIf*)expr, bb);
+        }
+        case STMT_CONTINUE:
+        {
+            if (!bb->continue_label)
+            {
+                return parser_ferror(&((struct StmtContinue*)expr)->tok->rc, "error: not inside a loop\n");
+            }
+
+            if (parser_spill_registers(p)) return 1;
+            cg_write_inst_jump(&p->cg, bb->continue_label);
+            return 0;
+        }
+        case STMT_BREAK:
+        {
+            if (!bb->break_label)
+            {
+                return parser_ferror(&((struct StmtBreak*)expr)->tok->rc, "error: not inside a loop\n");
+            }
+
+            if (parser_spill_registers(p)) return 1;
+            cg_write_inst_jump(&p->cg, bb->break_label);
+            return 0;
+        }
+        case STMT_LOOP:
+        {
+            return compile_loop_stmt(p, (struct StmtLoop*)expr, bb);
+        }
+        case STMT_LABEL:
+        {
+            struct StmtLabel* label = (struct StmtLabel*)expr;
+            const char* const str = token_str(p, label->tok);
             char buf[64];
             if (sizeof(buf) <= snprintf(buf, sizeof(buf), "$%s%s$", p->fn_label_prefix, str))
             {
-                fprintf(stderr, "resource exceeded: label too long: '%s'\n", str);
+                return parser_ferror(&label->tok->rc, "error: resource exceeded: label too long: '%s'\n", str);
+            }
+            if (parser_spill_registers(p)) return 1;
+            cg_mark_label(&p->cg, buf);
+            bb->has_returned = 0;
+            return 0;
+        }
+        case STMT_GOTO:
+        {
+            struct StmtGoto* stmt = (struct StmtGoto*)expr;
+            char buf[64];
+            const char* const cur_tok_str = token_str(p, stmt->dst);
+            if (sizeof(buf) <= snprintf(buf, sizeof(buf), "$%s%s$", p->fn_label_prefix, cur_tok_str))
+            {
+                fprintf(stderr, "resource exceeded: label too long: '%s'\n", cur_tok_str);
                 abort();
             }
-            if (parser_spill_registers(p)) return NULL;
-            cg_mark_label(&p->cg, buf);
-            cur_tok += 2;
-            cb->has_returned = 0;
+            if (parser_spill_registers(p)) return 1;
+            cg_write_inst_jump(&p->cg, buf);
+            bb->has_returned = 1;
+            return 0;
         }
-        cur_tok = compile_stmt(p, cur_tok, cb);
-        if (!cur_tok) return NULL;
-    } while (1);
+        case STMT_BLOCK:
+        {
+            struct StmtBlock* stmt = (struct StmtBlock*)expr;
+            struct CompoundBlock new_cb;
+            cb_init(&new_cb, bb, p);
+            for (size_t i = stmt->offset; i < stmt->offset + stmt->extent; ++i)
+            {
+                struct Expr** expr_seqs = p->expr_seqs.data;
+                struct Expr* inner_stmt = expr_seqs[i];
+                if (compile_stmt_expr(p, inner_stmt, bb)) return 1;
+            }
+            bb->has_returned |= new_cb.has_returned;
+            cb_destroy(&new_cb, p);
+            return 0;
+        }
+        case STMT_NONE: return 0;
+        default:
+            if (ast_kind_is_expr(expr->kind))
+            {
+                tc_expr(p, expr);
+                if (parser_has_errors()) return 1;
+                struct ValDest dst = s_void_destination;
+                if (compile_expr(p, expr, &dst, bb)) return 1;
+                return 0;
+            }
+            abort();
+            break;
+    }
 }
 
 void parser_init(Parser* p)
@@ -1636,12 +2472,17 @@ void parser_init(Parser* p)
     p->first_active_reg = NULL;
     memset(p->fn_label_prefix, 0, sizeof(p->fn_label_prefix));
 
-    pool_init(&p->sym_pool);
-    pool_init(&p->expr_op_pool);
-    pool_init(&p->expr_sym_pool);
-    pool_init(&p->expr_call_pool);
-    pool_init(&p->expr_lit_pool);
+    for (size_t i = 0; i < AST_KIND_END_POOLS; ++i)
+    {
+        pool_init(&p->ast_pools[i]);
+    }
     array_init(&p->expr_seqs);
+
+    pool_init(&p->typeprim_pool);
+    pool_init(&p->typefn_pool);
+    pool_init(&p->typeprim_pool);
+    pool_init(&p->typeptr_pool);
+    array_init(&p->type_seqs);
 }
 void parser_destroy(Parser* p)
 {
@@ -1656,12 +2497,159 @@ void parser_destroy(Parser* p)
     scope_destroy(&p->type_scope);
     cg_destroy(&p->cg);
 
-    pool_destroy(&p->sym_pool);
-    pool_destroy(&p->expr_op_pool);
-    pool_destroy(&p->expr_sym_pool);
-    pool_destroy(&p->expr_call_pool);
-    pool_destroy(&p->expr_lit_pool);
+    for (size_t i = 0; i < AST_KIND_END_POOLS; ++i)
+    {
+        pool_destroy(&p->ast_pools[i]);
+    }
     array_destroy(&p->expr_seqs);
+
+    pool_destroy(&p->typeprim_pool);
+    pool_destroy(&p->typefn_pool);
+    pool_destroy(&p->typeprim_pool);
+    pool_destroy(&p->typeptr_pool);
+    array_destroy(&p->type_seqs);
+}
+
+static int is_builtin_fn_expr(struct Expr* fn)
+{
+    if (fn->kind != EXPR_SYM) return 0;
+    struct ExprSym* sym = (struct ExprSym*)fn;
+    if (sym->sym->decl->attr.asmstr) return 1;
+    return 0;
+}
+
+static void* find_with_stride(void* arr_start, size_t arr_size, void* key, size_t stride)
+{
+    for (size_t i = 0; i < arr_size; i += stride)
+    {
+        void* elem = arr_start + i;
+        if (*(void**)elem == key) return elem;
+    }
+    return NULL;
+}
+
+struct Elaborator
+{
+    Parser* p;
+    struct Array callees_seqs;
+};
+static void elaborator_destroy(struct Elaborator* elab) { array_destroy(&elab->callees_seqs); }
+
+static int elaborate_local_decl(struct Elaborator* elab, struct Decl* decl)
+{
+    if (!decl->is_function || !decl->init) return 0;
+
+    int calls_non_builtins = 0;
+
+    struct Array stk = {0};
+    array_push_ptr(&stk, decl->init);
+    while (stk.sz)
+    {
+        void* top = array_pop_ptr(&stk);
+        struct Expr* top_expr = top;
+        switch (top_expr->kind)
+        {
+            case STMT_NONE:
+            case STMT_BREAK:
+            case STMT_CONTINUE:
+            case STMT_GOTO:
+            case STMT_LABEL:
+            case EXPR_LIT:
+            case EXPR_SYM: break;
+            case STMT_RETURN:
+            {
+                struct StmtReturn* stmt = top;
+                array_push_ptr(&stk, stmt->expr);
+                break;
+            }
+            case STMT_IF:
+            {
+                struct StmtIf* stmt = top;
+                if (stmt->else_body) array_push_ptr(&stk, stmt->else_body);
+                array_push_ptr(&stk, stmt->if_body);
+                array_push_ptr(&stk, stmt->cond);
+                break;
+            }
+            case EXPR_CALL:
+            {
+                struct ExprCall* expr = top;
+                if (!is_builtin_fn_expr(expr->fn))
+                {
+                    calls_non_builtins = 1;
+                }
+                array_push_ptr(&stk, expr->fn);
+                array_push(&stk,
+                           elab->p->expr_seqs.data + expr->offset * sizeof(struct Expr*),
+                           expr->extent * sizeof(struct Expr*));
+                break;
+            }
+            case EXPR_OP:
+            {
+                struct ExprOp* e = top;
+                if (e->lhs) array_push_ptr(&stk, e->lhs);
+                if (e->rhs) array_push_ptr(&stk, e->rhs);
+                break;
+            }
+            case STMT_LOOP:
+            {
+                struct StmtLoop* e = top;
+                if (e->body) array_push_ptr(&stk, e->body);
+                if (e->advance) array_push_ptr(&stk, e->advance);
+                if (e->cond) array_push_ptr(&stk, e->cond);
+                if (e->init) array_push_ptr(&stk, e->init);
+                break;
+            }
+            case AST_DECL:
+            {
+                struct Decl* d = top;
+                if (d->is_function) break;
+                if (d->init) array_push_ptr(&stk, d->init);
+                break;
+            }
+            case STMT_DECLS:
+            {
+                struct StmtDecls* stmt = top;
+                array_push(&stk,
+                           elab->p->expr_seqs.data + stmt->offset * sizeof(struct Expr*),
+                           stmt->extent * sizeof(struct Expr*));
+                break;
+            }
+            case STMT_BLOCK:
+            {
+                struct StmtBlock* stmt = top;
+                array_push(&stk,
+                           elab->p->expr_seqs.data + stmt->offset * sizeof(struct Expr*),
+                           stmt->extent * sizeof(struct Expr*));
+                break;
+            }
+            default: fprintf(stderr, "unknown ast kind: %d\n", top_expr->kind); abort();
+        }
+    }
+
+    if (!calls_non_builtins || decl->attr.is_nonreentrant)
+    {
+        decl->sym.is_nonreentrant = 1;
+    }
+    array_destroy(&stk);
+    return 0;
+}
+
+static int elaborate_declstmts(struct Elaborator* elab, struct Expr** declstmts, size_t count)
+{
+    struct Expr** const seqs = elab->p->expr_seqs.data;
+    size_t const seqs_sz = elab->p->expr_seqs.sz / sizeof(struct Expr*);
+    for (size_t i = 0; i < count; ++i)
+    {
+        if (declstmts[i]->kind != STMT_DECLS) abort();
+        struct StmtDecls* decls = (struct StmtDecls*)declstmts[i];
+        for (size_t j = 0; j < decls->extent; ++j)
+        {
+            if (seqs[decls->offset + j]->kind != AST_DECL) abort();
+            struct Decl* decl = (struct Decl*)seqs[decls->offset + j];
+            if (elaborate_local_decl(elab, decl)) return 1;
+        }
+    }
+    return 0;
 }
 
 int parse(Parser* p, Lexer* l)
@@ -1675,26 +2663,40 @@ int parse(Parser* p, Lexer* l)
             tk->rc = l->rc;
         }
 
-        struct CompoundBlock new_cb;
-        cb_init(&new_cb, NULL);
         // actually parse
         const size_t num_toks = p->toks.sz / sizeof(struct Token);
-        struct Token* const arr_toks = (struct Token*)p->toks.data;
+        struct Token* cur_tok = (struct Token*)p->toks.data;
         cg_write_bin_entry(&p->cg);
-        struct Token* tk = compile_compound_body(p, arr_toks, &new_cb);
-        if (!tk) return 1;
-        if (tk->type != LEX_EOF)
+
+        struct Array arr_exprs;
+        array_init(&arr_exprs);
+
+        do
         {
-            return parser_ferror(&tk->rc, "error: expected eof\n"), 1;
+            if (cur_tok->type == LEX_EOF) break;
+            struct Expr* e;
+            if (!(cur_tok = parse_stmt_decl(p, cur_tok, &e))) return 1;
+            array_push(&arr_exprs, &e, sizeof(e));
+        } while (1);
+        scope_shrink(&p->scope, 0);
+        struct Elaborator elab = {.p = p};
+        if (elaborate_declstmts(&elab, arr_exprs.data, arr_exprs.sz / sizeof(struct Expr*))) return 1;
+
+        struct CompoundBlock new_cb;
+        cb_init(&new_cb, NULL, p);
+        for (size_t i = 0; i < arr_exprs.sz / sizeof(struct Expr*); ++i)
+        {
+            if (compile_stmt_expr(p, ((struct Expr**)arr_exprs.data)[i], &new_cb)) return 1;
         }
+        array_destroy(&arr_exprs);
 
         cg_emit(&p->cg);
         return 0;
     }
     else
     {
-        char* const s = (char*)array_push(&p->stringpool, l->tok, l->sz + 1);
-        struct Token* const tk = (struct Token*)array_alloc(&p->toks, sizeof(struct Token));
+        char* const s = array_push(&p->stringpool, l->tok, l->sz + 1);
+        struct Token* const tk = array_alloc(&p->toks, sizeof(struct Token));
         tk->type = l->state;
         tk->sp_offset = s - (char*)p->stringpool.data;
         tk->rc = l->tok_rc;

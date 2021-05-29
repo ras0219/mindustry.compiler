@@ -11,7 +11,7 @@ static int is_ascii_symbol(int ch)
 {
     return ch == '/' || ch == '(' || ch == ')' || ch == '=' || ch == ',' || ch == ';' || ch == '[' || ch == ']' ||
            ch == '*' || ch == '%' || ch == '&' || ch == '+' || ch == '-' || ch == '<' || ch == '>' || ch == '{' ||
-           ch == '}' || ch == ':' || ch == '!';
+           ch == '}' || ch == ':' || ch == '!' || ch == '|' || ch == '&';
 }
 
 static int emit_token(Lexer* l)
@@ -61,6 +61,28 @@ static int push_tok_char(Lexer* l, char ch)
         return parser_ferror(&l->rc, "error: overflowed identifier buffer\n"), 1;
     }
     l->tok[l->sz++] = ch;
+    return 0;
+}
+
+static int symbol_is_compound(char c1, char c2)
+{
+    if (c1 == '+') return c2 == '+' || c2 == '=';
+    if (c1 == '-') return c2 == '-' || c2 == '=';
+    if (c1 == '|' && c2 == '|')
+    {
+        return 1;
+    }
+    if (c1 == '&' && c2 == '&')
+    {
+        return 1;
+    }
+    if (c1 == '=' || c1 == '!' || c1 == '>' || c1 == '<')
+    {
+        if (c2 == '=')
+        {
+            return 1;
+        }
+    }
     return 0;
 }
 
@@ -154,14 +176,11 @@ int lex(Lexer* l, Buffer* buf)
                     l->state = LEX_COMMENT;
                     goto LEX_COMMENT;
                 }
-                if (l->sz == 1 && ch == '=')
+                if (l->sz == 1 && symbol_is_compound(l->tok[0], ch))
                 {
-                    if (l->tok[0] == '=' || l->tok[0] == '!' || l->tok[0] == '>' || l->tok[0] == '<')
-                    {
-                        l->tok[1] = '=';
-                        l->sz = 2;
-                        continue;
-                    }
+                    l->tok[1] = ch;
+                    l->sz = 2;
+                    continue;
                 }
                 if (rc = emit_token(l)) return rc;
                 l->state = LEX_START;
@@ -288,6 +307,18 @@ int lex(Lexer* l, Buffer* buf)
                     else if (l->sz == sizeof("return") - 1 && memcmp("return", l->tok, l->sz) == 0)
                     {
                         l->state = LEX_RETURN;
+                    }
+                    else if (l->sz == sizeof("break") - 1 && memcmp("break", l->tok, l->sz) == 0)
+                    {
+                        l->state = LEX_BREAK;
+                    }
+                    else if (l->sz == sizeof("continue") - 1 && memcmp("continue", l->tok, l->sz) == 0)
+                    {
+                        l->state = LEX_CONTINUE;
+                    }
+                    else if (l->sz == sizeof("switch") - 1 && memcmp("switch", l->tok, l->sz) == 0)
+                    {
+                        l->state = LEX_SWITCH;
                     }
                     else if (l->sz == sizeof("if") - 1 && memcmp("if", l->tok, l->sz) == 0)
                     {

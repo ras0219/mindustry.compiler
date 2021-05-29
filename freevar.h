@@ -2,5 +2,5 @@
 
 struct FreeVar
 {
-    char buf[24];
+    char buf[32];
 };

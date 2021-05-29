@@ -91,6 +91,10 @@ static const char* str_for_op(const char* op)
         str_op = "mul";
     else if (op[0] == '/' && op[1] == '\0')
         str_op = "idiv";
+    else if (op[0] == '|' && op[1] == '|')
+        str_op = "or";
+    else if (op[0] == '&' && op[1] == '&')
+        str_op = "land";
     else
         abort();
     return str_op;
@@ -134,7 +138,7 @@ int cg_write_mem(struct CodeGen* cg, const char* addr, const char* val, const st
     if (!val || !*val) abort();
     if (!cg->memory.buf[0])
     {
-        return parser_ferror(rc, "error: no memory bank configured yet -- use #pragma memory <memory1>"), 1;
+        return parser_ferror(rc, "error: no memory bank configured yet -- use #pragma memory <memory1>\n"), 1;
     }
     char buf[128];
     snprintf(buf, sizeof(buf), "write %s %s %s", val, cg->memory.buf, addr);
@@ -145,7 +149,7 @@ int cg_read_mem(struct CodeGen* cg, const char* addr, const char* reg, const str
 {
     if (!cg->memory.buf[0])
     {
-        return parser_ferror(rc, "error: no memory bank configured yet -- use #pragma memory <memory1>"), 1;
+        return parser_ferror(rc, "error: no memory bank configured yet -- use #pragma memory <memory1>\n"), 1;
     }
     char buf[128];
     snprintf(buf, sizeof(buf), "read %s %s %s", reg, cg->memory.buf, addr);
