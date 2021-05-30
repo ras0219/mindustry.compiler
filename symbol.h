@@ -49,7 +49,7 @@ struct Symbol
 struct ArrSpan
 {
     size_t offset;
-    size_t stride;
+    size_t extent;
 };
 
 struct Decl
@@ -69,7 +69,7 @@ struct Decl
     struct Symbol sym;
 
     // elaboration information
-    struct ArrSpan callees;
+    int elab_index;
 };
 
 struct Decl* decl_get_def(struct Decl*);

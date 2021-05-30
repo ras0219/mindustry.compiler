@@ -1,3 +1,4 @@
+#include <limits.h>
 #include <malloc.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -2527,17 +2528,36 @@ static void* find_with_stride(void* arr_start, size_t arr_size, void* key, size_
     }
     return NULL;
 }
+static void* array_find_ptr(void* arr_start, size_t arr_size, void* key)
+{
+    for (size_t i = 0; i < arr_size; i += sizeof(void*))
+    {
+        void* elem = arr_start + i;
+        if (*(void**)elem == key) return elem;
+    }
+    return NULL;
+}
 
 struct Elaborator
 {
     Parser* p;
+    struct Array fns;
+    struct Array callees_spans;
     struct Array callees_seqs;
 };
-static void elaborator_destroy(struct Elaborator* elab) { array_destroy(&elab->callees_seqs); }
+static void elaborator_destroy(struct Elaborator* elab)
+{
+    array_destroy(&elab->fns);
+    array_destroy(&elab->callees_spans);
+    array_destroy(&elab->callees_seqs);
+}
 
 static int elaborate_local_decl(struct Elaborator* elab, struct Decl* decl)
 {
     if (!decl->is_function || !decl->init) return 0;
+    decl->elab_index = elab->fns.sz / sizeof(void*);
+    array_push_ptr(&elab->fns, decl);
+    struct ArrSpan callees_span = {.offset = elab->callees_seqs.sz / sizeof(struct Decl*)};
 
     int calls_non_builtins = 0;
 
@@ -2554,8 +2574,24 @@ static int elaborate_local_decl(struct Elaborator* elab, struct Decl* decl)
             case STMT_CONTINUE:
             case STMT_GOTO:
             case STMT_LABEL:
-            case EXPR_LIT:
-            case EXPR_SYM: break;
+            case EXPR_LIT: break;
+            case EXPR_SYM:
+            {
+                struct ExprSym* esym = top;
+                struct Decl* callee = decl_get_def(esym->sym->decl);
+                if (callee->is_function && !callee->attr.asmstr)
+                {
+                    // reference non-builtin function
+                    struct Decl** decls_arr = elab->callees_seqs.data;
+                    decls_arr += callees_span.offset;
+                    if (!array_find_ptr(decls_arr, callees_span.extent * sizeof(struct Decl*), callee))
+                    {
+                        callees_span.extent++;
+                        array_push_ptr(&elab->callees_seqs, callee);
+                    }
+                }
+                break;
+            }
             case STMT_RETURN:
             {
                 struct StmtReturn* stmt = top;
@@ -2626,12 +2662,28 @@ static int elaborate_local_decl(struct Elaborator* elab, struct Decl* decl)
         }
     }
 
+    array_push(&elab->callees_spans, &callees_span, sizeof(callees_span));
+
     if (!calls_non_builtins || decl->attr.is_nonreentrant)
     {
         decl->sym.is_nonreentrant = 1;
     }
     array_destroy(&stk);
     return 0;
+}
+
+static int dfs_emit(const struct ArrSpan* edgespans, const int* edges, int* out_indexes, char* visited, int root)
+{
+    if (visited[root]) return 0;
+    int emitted = 0;
+    visited[root] = 1;
+    const struct ArrSpan span = edgespans[root];
+    for (size_t i = 0; i < span.extent; ++i)
+    {
+        emitted += dfs_emit(edgespans, edges, out_indexes + emitted, visited, edges[span.offset + i]);
+    }
+    out_indexes[emitted++] = root;
+    return emitted;
 }
 
 static int elaborate_declstmts(struct Elaborator* elab, struct Expr** declstmts, size_t count)
@@ -2649,6 +2701,87 @@ static int elaborate_declstmts(struct Elaborator* elab, struct Expr** declstmts,
             if (elaborate_local_decl(elab, decl)) return 1;
         }
     }
+
+    // walk callee graph to determine reentrancy
+    // https://en.wikipedia.org/wiki/Kosaraju%27s_algorithm
+    struct Decl** const fns = elab->fns.data;
+    const size_t n_fns = elab->fns.sz / sizeof(void*);
+    const size_t n_edges = elab->callees_seqs.sz / sizeof(void*);
+    if (n_fns > 0)
+    {
+        struct ArrSpan* edgespans = elab->callees_spans.data;
+        struct ArrSpan* rev_edgespans = malloc(sizeof(struct ArrSpan) * n_fns);
+        memset(rev_edgespans, 0, sizeof(struct ArrSpan) * n_fns);
+        int* edges = malloc(n_edges * sizeof(int));
+        {
+            struct Decl** edges_decls = elab->callees_seqs.data;
+            for (size_t i = 0; i < n_edges; ++i)
+            {
+                // convert decls to indexes
+                edges[i] = edges_decls[i]->elab_index;
+                // count 'in' edges
+                rev_edgespans[edges[i]].extent++;
+            }
+        }
+        for (size_t i = 1; i < n_fns; ++i)
+        {
+            rev_edgespans[i].offset = rev_edgespans[i - 1].offset + rev_edgespans[i - 1].extent;
+            rev_edgespans[i - 1].extent = 0;
+        }
+        rev_edgespans[n_fns - 1].extent = 0;
+        int* rev_edges = malloc(n_edges * sizeof(int));
+        char* is_reentrant = malloc(n_fns);
+        memset(is_reentrant, 0, n_fns);
+        for (size_t i = 0; i < n_fns; ++i)
+        {
+            const struct ArrSpan span = edgespans[i];
+            for (size_t j = 0; j < span.extent; ++j)
+            {
+                int k = edges[span.offset + j];
+                if (k == i) is_reentrant[i] = 1; // recursive
+                struct ArrSpan* rev_span = rev_edgespans + k;
+                rev_edges[rev_span->offset + rev_span->extent++] = i;
+            }
+        }
+
+        char* arr_visited = malloc(n_fns);
+        memset(arr_visited, 0, n_fns);
+        int* arr_toposort = malloc(sizeof(int) * n_fns);
+        int arr_toposort_offset = 0;
+        for (size_t i = 0; i < n_fns; ++i)
+        {
+            arr_toposort_offset += dfs_emit(edgespans, edges, arr_toposort + arr_toposort_offset, arr_visited, i);
+        }
+        if (arr_toposort_offset != n_fns) abort();
+
+        // dfs with reverse edges in reverse toposort order to find connected components
+        memset(arr_visited, 0, n_fns);
+        int* arr_rev_toposort = malloc(sizeof(int) * n_fns);
+        for (size_t i = n_fns; i > 0; --i)
+        {
+            int emitted = dfs_emit(rev_edgespans, rev_edges, arr_rev_toposort, arr_visited, arr_toposort[i - 1]);
+            if (emitted > 1)
+            {
+                for (size_t j = 0; j < emitted; ++j)
+                {
+                    is_reentrant[arr_rev_toposort[j]] = 1;
+                }
+            }
+        }
+        for (size_t i = 0; i < n_fns; ++i)
+        {
+            if (!is_reentrant[i]) fns[i]->sym.is_nonreentrant = 1;
+        }
+
+        free(arr_visited);
+        free(arr_rev_toposort);
+        free(arr_toposort);
+        free(is_reentrant);
+        free(rev_edges);
+        free(edges);
+        free(rev_edgespans);
+    }
+
     return 0;
 }
 

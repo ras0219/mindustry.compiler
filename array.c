@@ -23,6 +23,21 @@ void* array_push(struct Array* arr, const void* src, size_t sz)
     memcpy(dst, src, sz);
     return dst;
 }
+void* array_push_zeroes(struct Array* arr, size_t sz)
+{
+    void* dst = array_alloc(arr, sz);
+    memset(dst, 0, sz);
+    return dst;
+}
+void array_clear(struct Array* arr) { arr->sz = 0; }
+void array_reserve(struct Array* arr, size_t sz)
+{
+    if (sz > arr->cap)
+    {
+        arr->cap = sz;
+        arr->data = realloc(arr->data, arr->cap);
+    }
+}
 void* array_push_ptr(struct Array* arr, void* data) { array_push(arr, &data, sizeof(data)); }
 void array_pop(struct Array* arr, size_t sz) { arr->sz -= sz; }
 void* array_pop_ptr(struct Array* arr)

@@ -19,6 +19,7 @@ int async_unit_approach(int x, int y, int dist)
     }
     return d;
 }
+
 int async_purge_inventory()
 {
     int r = sensor(bound_unit, sense_totalitems) > 0;
@@ -29,7 +30,7 @@ int async_purge_inventory()
     return r;
 }
 
-int __attribute__((nonreentrant)) fill(int bld, int mat, int minlvl)
+int fill(int bld, int mat, int minlvl)
 {
     while (1)
     {
@@ -61,7 +62,7 @@ void config_base(int b)
     base_y = sensor_y(base);
 }
 
-void __attribute__((nonreentrant)) main()
+void main()
 {
     while (1)
     {
