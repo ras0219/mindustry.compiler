@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stddef.h>
+#include <stdio.h>
 
 #include "array.h"
 #include "ast.h"
@@ -24,6 +25,8 @@ struct RowCol
 int parser_has_errors();
 int parser_ferror(const struct RowCol* rc, const char* fmt, ...);
 int parser_ice(const struct RowCol* rc);
+void parser_print_errors(FILE* f);
+void parser_clear_errors();
 
 #define MAX_TOKEN_SIZE 128
 
@@ -65,6 +68,7 @@ struct CodeGen
     struct Array labels;
     struct Array label_strs;
     struct FreeVar memory;
+    FILE* fdebug;
 };
 
 typedef struct Parser
@@ -77,6 +81,7 @@ typedef struct Parser
     char fn_label_prefix[16];
     // set if fn is non-reentrant
     struct FreeVar fn_ret_var;
+    struct Decl* fn;
 
     struct Scope scope;
     struct Scope type_scope;
@@ -89,31 +94,10 @@ typedef struct Parser
     struct Array expr_seqs;
 
     // types
-    struct Pool typeprim_pool;
-    struct Pool typefn_pool;
-    struct Pool typeptr_pool;
+    struct Pool type_pool;
     struct Array type_seqs;
 } Parser;
 
 void parser_init(Parser* p);
 void parser_destroy(Parser* p);
 int parse(Parser* p, Lexer* l);
-
-void cg_init(struct CodeGen* cg);
-void cg_destroy(struct CodeGen* cg);
-void cg_write_bin_entry(struct CodeGen* cg);
-void cg_write_push_ret(struct CodeGen* cg, struct FreeVar* ret_addr);
-void cg_write_return(struct CodeGen* cg, struct FreeVar* ret_addr);
-void cg_write_inst_jump(struct CodeGen* cg, const char* dst);
-void cg_write_inst_jump_op(struct CodeGen* cg, const char* tgt, const char* op, const char* a, const char* b);
-void cg_write_inst_set(struct CodeGen* cg, const char* dst, const char* src);
-void cg_write_inst_op(struct CodeGen* cg, const char* op, const char* dst, const char* a, const char* b);
-void cg_write_inst_add(struct CodeGen* cg, const char* dst, const char* a, int n);
-void cg_write_inst(struct CodeGen* cg, const char* inst);
-void cg_emit(struct CodeGen* cg);
-void cg_mark_label(struct CodeGen* cg, const char* sym);
-int cg_set_memory_bank(struct CodeGen* cg, const struct RowCol* rc, const char* mem);
-int cg_read_mem(struct CodeGen* cg, const char* addr, const char* reg, const struct RowCol* rc);
-int cg_write_mem(struct CodeGen* cg, const char* addr, const char* val, const struct RowCol* rc);
-int cg_store(struct CodeGen* cg, int offset, const char* val, const struct RowCol* rc);
-int cg_load(struct CodeGen* cg, int offset, const char* dst, const struct RowCol* rc);

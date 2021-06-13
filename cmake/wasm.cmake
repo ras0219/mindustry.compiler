@@ -1,0 +1,40 @@
+set(CMAKE_CROSSCOMPILING ON)
+
+set(CMAKE_SYSTEM_NAME Webassembly)
+set(CMAKE_SYSTEM_VERSION 1)
+set(CMAKE_SYSTEM_PROCESSOR x86)
+
+if(CMAKE_HOST_WIN32)
+if(DEFINED ENV{WASM_TOOLCHAIN})
+    file(TO_CMAKE_PATH "$ENV{WASM_TOOLCHAIN}" CLANG_ROOT)
+elseif(EXISTS ${CMAKE_CURRENT_LIST_DIR}/../clang/bin/clang.exe)
+    set(CLANG_ROOT "${CMAKE_CURRENT_LIST_DIR}/../clang")
+elseif(EXISTS "$ENV{VCINSTALLDIR}Tools/Llvm/bin/clang++.exe")
+    file(TO_CMAKE_PATH "$ENV{VCINSTALLDIR}Tools/Llvm" CLANG_ROOT)
+else()
+    message(FATAL_ERROR "Can't locate clang compiler.
+
+Download http://releases.llvm.org/8.0.0/LLVM-8.0.0-win64.exe and unzip with 7zip, then set %WASM_TOOLCHAIN%")
+endif()
+
+set(CMAKE_CXX_COMPILER "${CLANG_ROOT}/bin/clang++.exe" CACHE FILEPATH "" FORCE)
+set(CMAKE_C_COMPILER "${CLANG_ROOT}/bin/clang.exe" CACHE FILEPATH "" FORCE)
+set(CMAKE_AR "${CLANG_ROOT}/bin/llvm-ar.exe" CACHE FILEPATH "")
+else()
+  set(CMAKE_CXX_COMPILER clang++ CACHE STRING "" FORCE)
+  set(CMAKE_C_COMPILER clang CACHE STRING "" FORCE)
+  set(CMAKE_AR llvm-ar CACHE STRING "" FORCE)
+endif()
+
+set(CMAKE_CXX_FLAGS "--target=wasm32 -nostdlib -m32 -fdiagnostics-absolute-paths -D__wasm -fno-exceptions -fno-threadsafe-statics -fno-rtti" CACHE STRING "" FORCE)
+set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g -flto=thin" CACHE STRING "" FORCE)
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-Os -g -DNDEBUG -flto=thin" CACHE STRING "" FORCE)
+set(CMAKE_CXX_FLAGS_RELEASE "-Os -DNDEBUG -flto=thin" CACHE STRING "" FORCE)
+set(CMAKE_C_FLAGS "--target=wasm32 -nostdlib -m32 -fdiagnostics-absolute-paths -D__wasm -fno-exceptions -fno-threadsafe-statics -fno-rtti" CACHE STRING "" FORCE)
+set(CMAKE_C_FLAGS_DEBUG "-O0 -g -flto=thin" CACHE STRING "" FORCE)
+set(CMAKE_C_FLAGS_RELWITHDEBINFO "-Os -g -DNDEBUG -flto=thin" CACHE STRING "" FORCE)
+set(CMAKE_C_FLAGS_RELEASE "-Os -DNDEBUG -flto=thin" CACHE STRING "" FORCE)
+set(CMAKE_SHARED_LINKER_FLAGS "-Xlinker --import-memory -Xlinker --merge-data-segments -Xlinker --gc-sections" CACHE STRING "" FORCE)
+set(CMAKE_SHARED_LINKER_FLAGS_RELEASE "-Xlinker --strip-all" CACHE STRING "" FORCE)
+
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}")

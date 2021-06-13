@@ -35,6 +35,7 @@ enum LexerState_t
     // extensions
     LEX_ATTRIBUTE,
     LEX_MSTRING,
+    LEX_UNIT,
 };
 
 const char* lexstate_to_string(enum LexerState_t s);

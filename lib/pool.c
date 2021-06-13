@@ -1,6 +1,6 @@
 #include "pool.h"
 
-#include <malloc.h>
+#include <stdlib.h>
 #include <string.h>
 
 void pool_init(struct Pool* p)

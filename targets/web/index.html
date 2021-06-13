@@ -1,0 +1,175 @@
+﻿<!DOCTYPE html>
+<html manifest="./cache.manifest">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black">
+    <meta name="apple-mobile-web-app-title" content="TODO">
+    <link rel="apple-touch-icon" href="./favicon.png">
+    <meta content="width=device-width, initial-scale=1.0" name="viewport">
+    <title>Mindustry C Compiler</title>
+    <style>
+        * {
+            padding: 0;
+            margin: 0;
+        }
+
+        html,
+        body {
+            height: 100%;
+            background: #2F3129;
+            color: #F8F8F2;
+            overscroll-behavior-y: none;
+        }
+
+        textarea {
+            background: #272822;
+            color: #F8F8F2;
+            resize: none;
+        }
+
+        #code {
+            flex-grow: 1;
+            width: 100%;
+        }
+
+        ::-webkit-scrollbar {
+            width: 0.5em;
+        }
+
+        ::-webkit-scrollbar-track {
+            box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.3);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: rgba(100, 100, 100, 0.8);
+        }
+
+        ::-webkit-scrollbar-corner,
+        ::-webkit-scrollbar-thumb:window-inactive {
+            background: rgba(100, 100, 100, 0.4);
+        }
+    </style>
+</head>
+
+<body id="body">
+    <div style="display: flex; flex-direction: column; height: 100%;">
+        <div>
+            <input type="button" id="compile-button" value="Compile (Ctrl+B)">
+            <input type="checkbox" id="debugmode"><label for="debugmode"> Debug Output</label>
+            <input type="radio" id="file-radio-main" name="file-radio" value="main" checked><label
+                for="file-radio-main">
+                main.c</label>
+            <input type="radio" id="file-radio-prelude" name="file-radio" value="prelude"><label
+                for="file-radio-prelude">
+                mindustry.h</label>
+
+            <input type="button" id="save-button" value="Save (Ctrl+s)">
+
+            <label for="examples">Examples:</label>
+            <select name="examples" id="examples">
+                <option value="">Select One ...</option>
+                <option value="hello-world.c">Hello, world!</option>
+                <option value="spaceport2.c">Unloader Management</option>
+                <option value="flare-hauler.c">Flare Hauler</option>
+                <option value="flare-circle.c">Flare Circle</option>
+            </select>
+        </div>
+        <div style="display: flex; flex-direction: row; min-height: 100px; flex-grow: 1;">
+            <div style="display: flex; min-width: 300px; flex-grow: 1; height: 100%; flex-direction: column;">
+                <div name="code" id="code"></div>
+            </div>
+            <div style="display: flex; width: 200px; height: 100%; flex-direction: column;">
+                <textarea name="output" id="stdout" spellcheck="false" rows="40" cols="40" readonly
+                    style="flex-grow: 1;"></textarea>
+                <textarea name="binoutput" id="stderr" spellcheck="false" rows="40" cols="40" readonly
+                    style="flex-grow: 1;"></textarea>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.12/ace.min.js"
+        integrity="sha512-GoORoNnxst42zE3rYPj4bNBm0Q6ZRXKNH2D9nEmNvVF/z24ywVnijAWVi/09iBiVDQVf3UlZHpzhAJIdd9BXqw=="
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.12/mode-c_cpp.min.js"
+        integrity="sha512-0OZmNbvdTUAXjS/gE+K7ytccKZGonVz82m6zzAZ5kbByRTC0WlO2BL3BjSvpzn4mCnpr3gFSRmqUVPrzJLVEwg=="
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.12/theme-monokai.min.js"
+        integrity="sha512-S4i/WUGRs22+8rjUVu4kBjfNuBNp8GVsgcK2lbaFdws4q6TF3Nd00LxqnHhuxS9iVDfNcUh0h6OxFUMP5DBD+g=="
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.12/ext-searchbox.min.js"
+        integrity="sha512-8Fi8c1NzYiQIbq5f99bgDetUeHJfGx1lfZtmKMudttZjHMujjQYEJ9WAXZMrFmnoRGzijqyRRaGp2H8NR/TDaQ=="
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script>
+        var prelude_session = ace.createEditSession("", "ace/mode/c_cpp");
+        prelude_session.setOption("useSoftTabs", true);
+        var main_session = ace.createEditSession("", "ace/mode/c_cpp");
+        main_session.setOption("useSoftTabs", true);
+        main_session.setValue(localStorage.savedValue || `#include "mindustry.h"
+
+struct unit __attribute__((sym("message1")))* message1;
+
+int main() {
+    print("hello, world!");
+    print_flush(message1);
+    return 1;
+}
+`)
+        var editor = ace.edit("code");
+        editor.setTheme("ace/theme/monokai");
+        editor.setSession(main_session);
+        editor.renderer.setOption("showInvisibles", true);
+        editor.renderer.setOption("showPrintMargin", false);
+        editor.renderer.setOption("fontSize", 14);
+        function save() {
+            localStorage.savedValue = editor.getValue();
+        }
+        editor.commands.addCommand({
+            name: "save",
+            exec: save,
+            bindKey: { win: "ctrl-s", mac: "cmd-s" }
+        });
+        editor.commands.addCommand({
+            name: 'build',
+            bindKey: { win: 'Ctrl-B', mac: 'Command-B' },
+            exec: function (editor) {
+                document.getElementById("compile-button").click();
+            },
+            readOnly: true // false if this command should not apply in readOnly mode
+        });
+        function file_radio_onclick() {
+            if (this.value == "main") {
+                editor.setSession(main_session);
+            }
+            else if (this.value == "prelude") {
+                editor.setSession(prelude_session);
+            }
+        };
+
+        function set_example(e) {
+            if (e.target.value == "") {
+                return;
+            }
+            fetch(e.target.value).then(response => {
+                if (!response.ok) {
+                    throw new Error('Network response was not ok');
+                }
+                return response.blob();
+            }).then((blob) => {
+                return blob.text();
+            }).then((blob) => {
+                main_session.setValue(blob);
+            });
+            e.target.value = "";
+        }
+
+        document.getElementById("file-radio-main").addEventListener("click", file_radio_onclick);
+        document.getElementById("file-radio-prelude").addEventListener("click", file_radio_onclick);
+        document.getElementById("save-button").addEventListener("click", save);
+        document.getElementById("examples").addEventListener("change", set_example);
+    </script>
+    <script type="text/javascript" src="index.js"></script>
+</body>
+
+</html>

@@ -1,16 +1,13 @@
-#include <stdarg.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 
+#include "cg.h"
 #include "lexstate.h"
 #include "malloc.h"
 #include "tok.h"
 
-int usage() { printf("Usage: mindustry.compiler <file.mlogp>\n"); }
-
-size_t s_error_buf_used = 0;
-char s_error_buffer[1024];
+int usage() { fprintf(stderr, "Usage: mindustry.compiler <file.mlogp>\n"); }
 
 typedef struct
 {
@@ -26,36 +23,6 @@ struct SubLexer
     Lexer lexer;
     FrontEnd* fe;
 };
-
-int parser_has_errors() { return s_error_buf_used > 0; }
-
-int parser_ferror(const struct RowCol* rc, const char* fmt, ...)
-{
-    va_list argp;
-    va_start(argp, fmt);
-
-    if (s_error_buf_used < sizeof(s_error_buffer))
-    {
-        size_t n = snprintf(s_error_buffer + s_error_buf_used,
-                            sizeof(s_error_buffer) - s_error_buf_used,
-                            "%s:%d:%d: ",
-                            rc->file,
-                            rc->row,
-                            rc->col);
-        s_error_buf_used += n;
-    }
-    if (s_error_buf_used < sizeof(s_error_buffer))
-    {
-        s_error_buf_used +=
-            vsnprintf(s_error_buffer + s_error_buf_used, sizeof(s_error_buffer) - s_error_buf_used, fmt, argp);
-    }
-    return 1;
-}
-int parser_ice(const struct RowCol* rc)
-{
-    parser_ferror(rc, "error: an internal compiler error has occurred.\n");
-    return 1;
-}
 static int fe_handle_directive(FrontEnd* fe, Lexer* l);
 static int sublex_on_token(Lexer* l)
 {
@@ -87,7 +54,6 @@ static int sublex_on_token(Lexer* l)
 
 static int lex_file(FILE* f, Lexer* l)
 {
-    s_error_buffer[0] = 0;
     int rc = 0;
     Buffer buf;
     while (1)
@@ -272,7 +238,7 @@ int main(int argc, const char* const* argv)
     fe_destroy(&fe);
     if (rc)
     {
-        fprintf(stderr, "%s", s_error_buffer);
+        parser_print_errors(stderr);
     }
     return rc;
 }

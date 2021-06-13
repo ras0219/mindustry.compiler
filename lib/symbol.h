@@ -27,20 +27,31 @@ struct Attribute
 struct RegMap
 {
     int is_dirty : 1;
+    int is_const : 1;
     int stack_addr;
     struct RegMap* next;
     struct RegMap** prev;
     struct FreeVar rename;
+    struct FreeVar mem_loc;
 };
 
+struct TypeStr
+{
+    char buf[31];
+#ifndef NDEBUG
+    char buf_zero_pad;
+#endif
+    unsigned char used : 5;
+};
 struct Symbol
 {
     struct Expr kind;
     struct Decl* decl;
-    struct Type* type;
+    struct TypeStr type;
 
     int incomplete : 1;
-    int is_nonreentrant : 1;
+    int is_register : 1;
+    int address_taken : 1;
 
     // register mapping
     struct RegMap reg;
@@ -52,6 +63,8 @@ struct ArrSpan
     size_t extent;
 };
 
+#define ARRAY_ARITY_NONE (-1)
+
 struct Decl
 {
     struct Expr kind;
@@ -62,7 +75,13 @@ struct Decl
     struct Decl* def;
     struct Expr* init;
 
+    int pointer_levels;
+    int array_arity;
+    int is_array : 1;
     int is_function : 1;
+    int takes_addresses : 1;
+    int is_nonreentrant : 1;
+    int is_stackless : 1;
     size_t offset;
     size_t extent;
 

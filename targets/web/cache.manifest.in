@@ -1,0 +1,13 @@
+CACHE MANIFEST
+
+# Version: @VERSION@
+
+CACHE:
+index.html
+gofish.css
+spades.css
+index.js
+native.js
+native-opt.wasm
+favicon.ico
+favicon.png

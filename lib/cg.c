@@ -1,3 +1,5 @@
+#include "cg.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,6 +13,7 @@ void cg_init(struct CodeGen* cg)
     array_init(&cg->labels);
     array_init(&cg->label_strs);
     memset(&cg->memory, 0, sizeof(cg->memory));
+    cg->fdebug = NULL;
 }
 void cg_destroy(struct CodeGen* cg)
 {
@@ -27,6 +30,7 @@ void cg_write_bin_entry(struct CodeGen* cg)
 {
     cg_write_inst(cg, "set __stk__ 0");
     cg_write_inst(cg, "set ret 0");
+    cg_write_inst(cg, "set _r_main 0");
     cg_write_inst(cg, "jump $main$ always");
 }
 void cg_write_push_ret(struct CodeGen* cg, struct FreeVar* ret_addr)
@@ -39,20 +43,30 @@ void cg_write_push_ret(struct CodeGen* cg, struct FreeVar* ret_addr)
     {
         cg_write_mem(cg, "__stk__", "ret", &s_unknown_rc);
         cg_write_inst_op(cg, "+", "__stk__", "__stk__", "1");
-        cg_write_mem(cg, "__stk__", "__ebp__", &s_unknown_rc);
-        cg_write_inst_set(cg, "__ebp__", "__stk__");
     }
+}
+void cg_write_prepare_stack(struct CodeGen* cg)
+{
+    cg_write_mem(cg, "__stk__", "__ebp__", &s_unknown_rc);
+    cg_write_inst_set(cg, "__ebp__", "__stk__");
+}
+void cg_write_epilog(struct CodeGen* cg)
+{
+    cg_write_inst_op(cg, "-", "__stk__", "__ebp__", "1");
+    cg_read_mem(cg, "__ebp__", "__ebp__", &s_unknown_rc);
 }
 void cg_write_return(struct CodeGen* cg, struct FreeVar* ret_addr)
 {
-    if (ret_addr->buf[0])
+    if (strcmp(ret_addr->buf, "_r_main") == 0)
+    {
+        cg_write_inst_jump(cg, "0");
+    }
+    else if (ret_addr->buf[0])
     {
         cg_write_inst_set(cg, "@counter", ret_addr->buf);
     }
     else
     {
-        cg_write_inst_op(cg, "-", "__stk__", "__ebp__", "1");
-        cg_read_mem(cg, "__ebp__", "__ebp__", &s_unknown_rc);
         cg_read_mem(cg, "__stk__", "@counter", &s_unknown_rc);
     }
 }
@@ -72,7 +86,7 @@ static const char* str_for_op(const char* op)
 {
     const char* str_op;
     if (op[0] == '=' && op[1] == '=')
-        str_op = "equals";
+        str_op = "equal";
     else if (op[0] == '!' && op[1] == '=')
         str_op = "notEqual";
     else if (op[0] == '>' && op[1] == '\0')
@@ -89,6 +103,8 @@ static const char* str_for_op(const char* op)
         str_op = "sub";
     else if (op[0] == '*' && op[1] == '\0')
         str_op = "mul";
+    else if (op[0] == '%' && op[1] == '\0')
+        str_op = "mod";
     else if (op[0] == '/' && op[1] == '\0')
         str_op = "idiv";
     else if (op[0] == '|' && op[1] == '|')
@@ -123,19 +139,10 @@ void cg_write_inst_op(struct CodeGen* cg, const char* op, const char* dst, const
     snprintf(buf, sizeof(buf), "op %s %s %s %s", str_op, dst, a, b);
     cg_write_inst(cg, buf);
 }
-int cg_store(struct CodeGen* cg, int offset, const char* val, const struct RowCol* rc)
-{
-    cg_write_inst_add(cg, "_", "__ebp__", offset);
-    return cg_write_mem(cg, "_", val, rc);
-}
-int cg_load(struct CodeGen* cg, int offset, const char* dst, const struct RowCol* rc)
-{
-    cg_write_inst_add(cg, "_", "__ebp__", offset);
-    return cg_read_mem(cg, "_", dst, rc);
-}
 int cg_write_mem(struct CodeGen* cg, const char* addr, const char* val, const struct RowCol* rc)
 {
     if (!val || !*val) abort();
+    if (!addr || !*addr) abort();
     if (!cg->memory.buf[0])
     {
         return parser_ferror(rc, "error: no memory bank configured yet -- use #pragma memory <memory1>\n"), 1;
@@ -158,7 +165,7 @@ int cg_read_mem(struct CodeGen* cg, const char* addr, const char* reg, const str
 }
 void cg_write_inst(struct CodeGen* cg, const char* inst)
 {
-    printf("%03lu: %s\n", cg->lines, inst);
+    if (cg->fdebug) fprintf(cg->fdebug, "%03zu: %s\n", cg->lines, inst);
     static const char s_nl = '\n';
     array_push(&cg->text, inst, strlen(inst));
     array_push(&cg->text, &s_nl, 1);
@@ -166,7 +173,7 @@ void cg_write_inst(struct CodeGen* cg, const char* inst)
 }
 void cg_mark_label(struct CodeGen* cg, const char* sym)
 {
-    printf("   : %s\n", sym);
+    if (cg->fdebug) fprintf(cg->fdebug, "   : %s\n", sym);
     const size_t sym_len = strlen(sym);
     if (sym[0] != '$' || sym_len < 2 || sym[sym_len - 1] != '$')
     {
@@ -196,7 +203,8 @@ static const struct CodeGenLabel* cg_lookup(struct CodeGen* cg, const char* sym,
 
 void cg_emit(struct CodeGen* cg)
 {
-    printf("\nCode Gen\n--------\n");
+    if (cg->fdebug) fprintf(cg->fdebug, "\nCode Gen\n--------\n");
+    fflush(NULL);
 
     const char* const text = (const char*)cg->text.data;
     size_t last_emit_point = 0;
@@ -227,7 +235,7 @@ void cg_emit(struct CodeGen* cg)
                 fprintf(stderr, "error: unresolved symbol: '%.*s'\n", (int)(i - sym_begin), text + sym_begin);
                 abort();
             }
-            fprintf(stdout, "%lu", label->line);
+            fprintf(stdout, "%zu", label->line);
             last_emit_point = ++i;
         }
     }

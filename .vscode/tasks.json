@@ -14,9 +14,55 @@
                 "${env:BUILD_DIR}/main",
                 "${workspaceFolder}/examples/test.c"
             ],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": true,
+                "clear": true
+            },
+            "problemMatcher": "$gcc"
+        },
+        {
+            "label": "buildwasm",
+            "type": "shell",
+            "command": "ninja",
+            "args": [
+                "-C",
+                "${env:BUILD_DIR}/../mindustry.compiler.wasm"
+            ],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": true,
+                "clear": true
+            },
+            "problemMatcher": "$gcc"
+        },
+        {
+            "label": "buildwasmdebug",
+            "type": "shell",
+            "command": "ninja",
+            "args": [
+                "-C",
+                "${env:BUILD_DIR}/../mindustry.compiler.wasm.debug"
+            ],
             "group": {
                 "kind": "build",
                 "isDefault": true
+            },
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": true,
+                "clear": true
             },
             "problemMatcher": "$gcc"
         }

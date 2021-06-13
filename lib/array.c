@@ -1,6 +1,6 @@
 #include "array.h"
 
-#include <malloc.h>
+#include <stdlib.h>
 #include <string.h>
 
 void array_init(struct Array* arr) { memset(arr, 0, sizeof(struct Array)); }
@@ -38,7 +38,7 @@ void array_reserve(struct Array* arr, size_t sz)
         arr->data = realloc(arr->data, arr->cap);
     }
 }
-void* array_push_ptr(struct Array* arr, void* data) { array_push(arr, &data, sizeof(data)); }
+void* array_push_ptr(struct Array* arr, void* data) { return array_push(arr, &data, sizeof(data)); }
 void array_pop(struct Array* arr, size_t sz) { arr->sz -= sz; }
 void* array_pop_ptr(struct Array* arr)
 {
