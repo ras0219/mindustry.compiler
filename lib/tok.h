@@ -54,13 +54,6 @@ struct Scope
     struct Array binds;
 };
 
-struct CodeGenLabel
-{
-    ptrdiff_t str_offset;
-    ptrdiff_t str_len;
-    size_t line;
-};
-
 struct CodeGen
 {
     size_t lines;

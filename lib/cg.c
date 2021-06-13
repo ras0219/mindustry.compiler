@@ -29,7 +29,7 @@ static struct RowCol s_unknown_rc = {
 };
 void cg_write_bin_entry(struct CodeGen* cg)
 {
-    cg_write_inst(cg, "set __stk__ 0");
+    cg_write_inst(cg, "set __stk__ $__stk__$");
     cg_write_inst(cg, "set ret 0");
     cg_write_inst(cg, "set _r_main 0");
     cg_write_inst(cg, "jump $main$ always");
@@ -73,6 +73,7 @@ void cg_write_return(struct CodeGen* cg, struct FreeVar* ret_addr)
 }
 void cg_write_inst_set(struct CodeGen* cg, const char* dst, const char* src)
 {
+    if (strcmp(dst, src) == 0) return;
     char buf[64];
     snprintf(buf, sizeof(buf), "set %s %s", dst, src);
     cg_write_inst(cg, buf);
@@ -172,6 +173,14 @@ void cg_write_inst(struct CodeGen* cg, const char* inst)
     array_push(&cg->text, &s_nl, 1);
     ++cg->lines;
 }
+
+struct CodeGenLabel
+{
+    ptrdiff_t str_offset;
+    ptrdiff_t str_len;
+    size_t line;
+};
+
 void cg_mark_label(struct CodeGen* cg, const char* sym)
 {
     if (cg->fdebug) fprintf(cg->fdebug, "   : %s\n", sym);
@@ -202,8 +211,16 @@ static const struct CodeGenLabel* cg_lookup(struct CodeGen* cg, const char* sym,
     return NULL;
 }
 
-void cg_emit(struct CodeGen* cg)
+void cg_emit(struct CodeGen* cg, int globals_size)
 {
+    const struct CodeGenLabel lab = {
+        .line = globals_size,
+        .str_len = strlen("__stk__"),
+        .str_offset = cg->label_strs.sz,
+    };
+    array_push(&cg->label_strs, "__stk__", lab.str_len);
+    array_push(&cg->labels, &lab, sizeof(struct CodeGenLabel));
+
     if (cg->fdebug) fprintf(cg->fdebug, "\nCode Gen\n--------\n");
     fflush(NULL);
 

@@ -111,9 +111,9 @@ static struct Token* token_consume_sym(Parser* p, struct Token* tk, char sym)
 
 #define REG_COUNT 6
 
-static const char* PARAM_NAMES_ARR[REG_COUNT] = {"eax", "ebx", "ecx", "edx", "eex", "efx"};
+static const char* PARAM_NAMES_ARR[REG_COUNT] = {"reg1", "reg2", "reg3", "reg4", "reg5", "reg6"};
 static struct FreeVar s_freevar_paramreg0 = {
-    .buf = {'e', 'a', 'x', '\0'},
+    .buf = "reg1",
 };
 
 static struct FreeVar s_freevar_zero = {0};
@@ -2714,6 +2714,18 @@ static int compile_decl_expr(Parser* p, struct Decl* decl, struct CompoundBlock*
             }
             cg_mark_label(&p->cg, decl->sym.reg.rename.buf);
             const char* const name = token_str(p, decl->id);
+            if (decl->is_nonreentrant)
+            {
+                p->fn_ret_var = nrfun_param_ret(p, token_str(p, decl->id));
+            }
+            else
+            {
+                cg_write_push_ret(&p->cg, &p->fn_ret_var);
+            }
+            if (!decl->is_stackless)
+            {
+                cg_write_prepare_stack(&p->cg);
+            }
             for (size_t i = 0; i < decl->extent; ++i)
             {
                 struct Decl* arg_decl = ((struct Decl**)p->expr_seqs.data)[decl->offset + i];
@@ -2723,11 +2735,7 @@ static int compile_decl_expr(Parser* p, struct Decl* decl, struct CompoundBlock*
                     arg_decl->sym.reg.rename = nrfun_param(p, i, name);
                 }
             }
-            if (decl->is_nonreentrant)
-            {
-                p->fn_ret_var = nrfun_param_ret(p, token_str(p, decl->id));
-            }
-            else
+            if (!decl->is_nonreentrant)
             {
                 if (decl->extent > REG_COUNT)
                 {
@@ -2740,18 +2748,16 @@ static int compile_decl_expr(Parser* p, struct Decl* decl, struct CompoundBlock*
                     const char* dst_reg = parser_prepare_dst_reg(p, &dst, &new_cb);
                     cg_write_inst_set(&p->cg, dst_reg, PARAM_NAMES_ARR[i]);
                 }
-                cg_write_push_ret(&p->cg, &p->fn_ret_var);
-            }
-            if (!decl->is_stackless)
-            {
-                cg_write_prepare_stack(&p->cg);
             }
             if (compile_stmt_expr(p, decl->init, &new_cb)) return 1;
             int has_returned = new_cb.has_returned;
             cb_destroy(&new_cb, p);
             if (!has_returned)
             {
-                if (!decl->is_nonreentrant || strcmp(token_str(p, decl->id), "main") != 0)
+                if (decl->is_nonreentrant && strcmp(token_str(p, decl->id), "main") == 0)
+                {
+                }
+                else
                 {
                     if (parser_spill_registers(p)) return 1;
                     if (!decl->is_stackless) cg_write_epilog(&p->cg);
@@ -3683,7 +3689,7 @@ int parse(Parser* p, Lexer* l)
         }
         array_destroy(&arr_exprs);
 
-        cg_emit(&p->cg);
+        cg_emit(&p->cg, p->globals_size);
         return 0;
     }
     else
