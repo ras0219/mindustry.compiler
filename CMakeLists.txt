@@ -54,9 +54,21 @@ else()
 endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Webassembly")
+    set(OUT_WEB_FILES)
+
+    option(GENERATE_DOCS "" ON)
+    if(GENERATE_DOCS)
+        find_program(PANDOC pandoc REQUIRED)
+        add_custom_command(
+            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/web/extensions.html"
+            COMMAND "${PANDOC}" "${CMAKE_CURRENT_SOURCE_DIR}/docs/extensions.md" -o "${CMAKE_CURRENT_BINARY_DIR}/web/extensions.html"
+            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/docs/extensions.md"
+        )
+        list(APPEND OUT_WEB_FILES "${CMAKE_CURRENT_BINARY_DIR}/web/extensions.html")
+    endif()
+
     file(GLOB_RECURSE WEB_FILES RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}/targets/web" targets/web/*)
     list(FILTER WEB_FILES EXCLUDE REGEX "^cache\\.manifest\\.in$")
-    set(OUT_WEB_FILES)
     foreach(WEB_FILE IN LISTS WEB_FILES)
         list(APPEND OUT_WEB_FILES "${CMAKE_CURRENT_BINARY_DIR}/web/${WEB_FILE}")
         add_custom_command(

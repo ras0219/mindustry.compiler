@@ -7,7 +7,7 @@ int level;
 struct material* check_send(struct material* mat)
 {
     int n = sensor_mat(base, mat);
-    if (n > 11000)
+    if (n > level)
     {
         return mat;
     }

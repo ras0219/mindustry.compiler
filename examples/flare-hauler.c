@@ -193,8 +193,7 @@ void main()
         }
         if (!have_unit)
         {
-            int flag = sensor(bound_unit, sense_flag);
-            if (flag != 0)
+            if (sensor(bound_unit, sense_flag) != 0 && sensor_ctrl(bound_unit) == ctrl_processor)
             {
                 print("ERROR: Flare in use...");
                 print_flush(message);
@@ -231,5 +230,7 @@ void main()
             else if (type == scatter)
                 help_scatter(block);
         }
+        if (bound_unit == null) continue;
+        async_unit_approach(this_x, this_y, 5)
     }
 }

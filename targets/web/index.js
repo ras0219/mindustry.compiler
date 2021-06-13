@@ -439,6 +439,17 @@ fetch('mindustry.h').then(response => {
     prelude_session.setValue(blob);
 });
 
+fetch('extensions.html').then(response => {
+    if (!response.ok) {
+        throw new Error('Network response was not ok');
+    }
+    return response.blob();
+}).then((blob) => {
+    return blob.text();
+}).then((blob) => {
+    document.getElementById("help").innerHTML = blob;
+});
+
 if (typeof WebAssembly === "object") {
     if (typeof WebAssembly.instantiateStreaming !== "function") {
         WebAssembly.instantiateStreaming = (p, importObject) =>

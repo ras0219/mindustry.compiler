@@ -75,6 +75,7 @@ void __attribute__((asmstr("printflush %0"))) print_flush(struct unit* device);
 int __attribute__((asmstr("sensor %r %0 %1"))) sensor(struct unit* dst, struct sense* sense);
 int __attribute__((asmstr("sensor %r %0 %1"))) sensor_mat(struct unit* dst, struct material* sense);
 struct unittype __attribute__((asmstr("sensor %r %0 @config"))) * sensor_config_unittype(struct unit* dst);
+struct ctrl __attribute__((asmstr("sensor %r %0 @controlled"))) * sensor_ctrl(struct unit* dst);
 int __attribute__((asmstr("sensor %r %0 @x"))) sensor_x(struct unit* dst);
 int __attribute__((asmstr("sensor %r %0 @y"))) sensor_y(struct unit* dst);
 struct unittype __attribute__((asmstr("sensor %r %0 @type"))) * sensor_type(struct unit* dst);
@@ -88,6 +89,9 @@ struct unit __attribute__((asmstr("getlink %r %0"))) * get_link(int index);
 
 /* Gets the number of linked tiles */
 const int __attribute__((sym("@links"))) num_links;
+
+/* Ticks since map began */
+volatile int __attribute__((sym("@ticks"))) cur_ticks;
 
 struct unit __attribute__((sym("@unit"))) * bound_unit;
 struct unittype __attribute__((sym("@nova")))* const unit_nova;
@@ -130,6 +134,9 @@ struct sense __attribute__((sym("@enabled")))* const sense_enabled;
 struct sense __attribute__((sym("@dead")))* const sense_dead;
 struct sense __attribute__((sym("@ammo")))* const sense_ammo;
 
+struct ctrl __attribute__((sym("@ctrlProcessor")))* const ctrl_processor;
+struct ctrl __attribute__((sym("0")))* const ctrl_none;
+
 struct filter __attribute__((sym("enemy")))* const radar_filter_enemy;
 struct filter __attribute__((sym("ground")))* const radar_filter_ground;
 struct filter __attribute__((sym("flying")))* const radar_filter_flying;
@@ -151,6 +158,7 @@ struct unittype __attribute__((sym("@air-factory")))* const type_air_factory;
 struct unittype __attribute__((sym("@ground-factory")))* const type_ground_factory;
 struct unittype __attribute__((sym("@additive-reconstructor")))* const type_add_reconstructor;
 struct unittype __attribute__((sym("@multiplicative-reconstructor")))* const type_multi_reconstructor;
+struct unittype __attribute__((sym("@overdrive-projector")))* const type_overdrive_projector;
 struct unittype __attribute__((sym("@switch")))* const type_switch;
 
 struct unittype __attribute__((sym("@foreshadow")))* const foreshadow;

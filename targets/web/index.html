@@ -23,6 +23,18 @@
             overscroll-behavior-y: none;
         }
 
+        #help h1,h2,h3,p,ul {
+            margin: 14pt 5pt;
+        }
+        #help li {
+            margin: 0 18pt;
+        }
+
+        div.sourceCode {
+            margin: 14pt 20pt;
+        }
+
+
         textarea {
             background: #272822;
             color: #F8F8F2;
@@ -50,6 +62,10 @@
         ::-webkit-scrollbar-thumb:window-inactive {
             background: rgba(100, 100, 100, 0.4);
         }
+
+        .hidden {
+            display: none;
+        }
     </style>
 </head>
 
@@ -64,6 +80,8 @@
             <input type="radio" id="file-radio-prelude" name="file-radio" value="prelude"><label
                 for="file-radio-prelude">
                 mindustry.h</label>
+            <input type="radio" id="file-radio-help" name="file-radio" value="help"><label for="file-radio-help">
+                Help Docs</label>
 
             <input type="button" id="save-button" value="Save (Ctrl+s)">
 
@@ -74,11 +92,14 @@
                 <option value="spaceport2.c">Unloader Management</option>
                 <option value="flare-hauler.c">Flare Hauler</option>
                 <option value="flare-circle.c">Flare Circle</option>
+                <option value="fortress.c">Fortress Skirmisher</option>
             </select>
         </div>
         <div style="display: flex; flex-direction: row; min-height: 100px; flex-grow: 1;">
-            <div style="display: flex; min-width: 300px; flex-grow: 1; height: 100%; flex-direction: column;">
+            <div id="code-container"
+                style="display: flex; min-width: 300px; flex-grow: 1; height: 100%; flex-direction: column;">
                 <div name="code" id="code"></div>
+                <div id="help" class="hidden"></div>
             </div>
             <div style="display: flex; width: 200px; height: 100%; flex-direction: column;">
                 <textarea name="output" id="stdout" spellcheck="false" rows="40" cols="40" readonly
@@ -140,10 +161,18 @@ int main() {
         });
         function file_radio_onclick() {
             if (this.value == "main") {
+                document.getElementById("code").classList.remove("hidden");
+                document.getElementById("help").classList.add("hidden");
                 editor.setSession(main_session);
             }
             else if (this.value == "prelude") {
+                document.getElementById("code").classList.remove("hidden");
+                document.getElementById("help").classList.add("hidden");
                 editor.setSession(prelude_session);
+            }
+            else if (this.value == "help") {
+                document.getElementById("help").classList.remove("hidden");
+                document.getElementById("code").classList.add("hidden");
             }
         };
 
@@ -166,6 +195,7 @@ int main() {
 
         document.getElementById("file-radio-main").addEventListener("click", file_radio_onclick);
         document.getElementById("file-radio-prelude").addEventListener("click", file_radio_onclick);
+        document.getElementById("file-radio-help").addEventListener("click", file_radio_onclick);
         document.getElementById("save-button").addEventListener("click", save);
         document.getElementById("examples").addEventListener("change", set_example);
     </script>
