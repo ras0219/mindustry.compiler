@@ -22,6 +22,7 @@
         "cstdlib": "c",
         "stdlib.h": "c",
         "cstdio": "c",
-        "imports.h": "c"
+        "imports.h": "c",
+        "fe.h": "c"
     }
 }

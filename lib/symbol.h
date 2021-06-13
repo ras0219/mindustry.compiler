@@ -28,6 +28,7 @@ struct RegMap
 {
     int is_dirty : 1;
     int is_const : 1;
+    int is_global : 1;
     int stack_addr;
     struct RegMap* next;
     struct RegMap** prev;
@@ -74,6 +75,7 @@ struct Decl
     struct DeclSpecs specs;
     struct Decl* def;
     struct Expr* init;
+    struct Decl* parent_decl;
 
     int pointer_levels;
     int array_arity;

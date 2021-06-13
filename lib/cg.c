@@ -14,6 +14,7 @@ void cg_init(struct CodeGen* cg)
     array_init(&cg->label_strs);
     memset(&cg->memory, 0, sizeof(cg->memory));
     cg->fdebug = NULL;
+    cg->fout = stdout;
 }
 void cg_destroy(struct CodeGen* cg)
 {
@@ -213,7 +214,7 @@ void cg_emit(struct CodeGen* cg)
     {
         if (text[i] == '$')
         {
-            if (fwrite(text + last_emit_point, 1, i - last_emit_point, stdout) != i - last_emit_point)
+            if (fwrite(text + last_emit_point, 1, i - last_emit_point, cg->fout) != i - last_emit_point)
             {
                 perror("error: failed to write output");
                 abort();
@@ -235,11 +236,11 @@ void cg_emit(struct CodeGen* cg)
                 fprintf(stderr, "error: unresolved symbol: '%.*s'\n", (int)(i - sym_begin), text + sym_begin);
                 abort();
             }
-            fprintf(stdout, "%zu", label->line);
+            fprintf(cg->fout, "%zu", label->line);
             last_emit_point = ++i;
         }
     }
-    if (fwrite(text + last_emit_point, 1, i - last_emit_point, stdout) != i - last_emit_point)
+    if (fwrite(text + last_emit_point, 1, i - last_emit_point, cg->fout) != i - last_emit_point)
     {
         perror("error: failed to write output");
         abort();

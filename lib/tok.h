@@ -69,6 +69,7 @@ struct CodeGen
     struct Array label_strs;
     struct FreeVar memory;
     FILE* fdebug;
+    FILE* fout;
 };
 
 typedef struct Parser
@@ -82,6 +83,7 @@ typedef struct Parser
     // set if fn is non-reentrant
     struct FreeVar fn_ret_var;
     struct Decl* fn;
+    int globals_size;
 
     struct Scope scope;
     struct Scope type_scope;

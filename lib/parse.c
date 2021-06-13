@@ -226,7 +226,7 @@ static struct Binding* scope_find(struct Scope* s, const char* id)
 static void parser_push_active_reg(struct Parser* p, struct RegMap* reg)
 {
     if (!reg->rename.buf[0]) abort();
-    if (reg->stack_addr > 0)
+    if (reg->stack_addr > 0 && !reg->is_global)
     {
         if (!reg->mem_loc.buf[0]) abort();
         cg_write_inst_add(&p->cg, reg->mem_loc.buf, "__ebp__", reg->stack_addr);
@@ -310,7 +310,7 @@ static int parser_ensure_loaded_sym(struct Parser* p, struct Symbol* sym)
     {
         if (typestr_is_array(&sym->type))
         {
-            if (!sym->reg.prev)
+            if (!sym->reg.prev && !sym->reg.is_global)
             {
                 parser_push_active_reg(p, &sym->reg);
                 cg_write_inst_add(&p->cg, sym->reg.rename.buf, "__ebp__", sym->reg.stack_addr);
@@ -524,7 +524,14 @@ static int parser_assign_dsts(
 
     if (src->kind == DEST_SYM && typestr_is_array(&src->sym->type))
     {
-        cg_write_inst_add(&p->cg, dst_reg, "__ebp__", src->sym->reg.stack_addr);
+        if (!src->sym->reg.is_global)
+        {
+            cg_write_inst_add(&p->cg, dst_reg, "__ebp__", src->sym->reg.stack_addr);
+        }
+        else
+        {
+            cg_write_inst_set(&p->cg, dst_reg, src->sym->reg.rename.buf);
+        }
     }
     else
     {
@@ -1016,10 +1023,21 @@ static int compile_expr_op_add(Parser* p,
         struct ExprSym* s = (struct ExprSym*)elhs;
         if (typestr_is_array(&s->sym->type) && s->sym->reg.stack_addr >= 0 && l->tok->type == LEX_NUMBER)
         {
-            const char* dst_reg = parser_prepare_dst_reg(p, dst, bb);
-            if (!dst_reg) return 1;
-            int offset = atoi(token_str(p, l->tok));
-            cg_write_inst_add(&p->cg, dst_reg, "__ebp__", s->sym->reg.stack_addr + offset);
+            if (s->sym->reg.is_global)
+            {
+                int offset = atoi(token_str(p, l->tok));
+                char buf[16];
+                snprintf(buf, 16, "%d", s->sym->reg.stack_addr + offset);
+                struct ValDest vd = dest_literal(buf);
+                return parser_assign_dsts(p, dst, &vd, bb, rc);
+            }
+            else
+            {
+                const char* dst_reg = parser_prepare_dst_reg(p, dst, bb);
+                if (!dst_reg) return 1;
+                int offset = atoi(token_str(p, l->tok));
+                cg_write_inst_add(&p->cg, dst_reg, "__ebp__", s->sym->reg.stack_addr + offset);
+            }
             return 0;
         }
     }
@@ -1098,6 +1116,7 @@ static int compile_expr_op(Parser* p, struct ExprOp* e, struct ValDest* dst, str
                     *dst = tmp;
                 }
             }
+            dst->is_const = 0;
             dst->is_reference = 1;
             return 0;
         }
@@ -1121,6 +1140,7 @@ static int compile_expr_op(Parser* p, struct ExprOp* e, struct ValDest* dst, str
                 }
             }
             lhs.is_reference = 1;
+            lhs.is_const = 0;
             if (parser_assign_dsts(p, dst, &lhs, bb, &e->tok->rc)) return 1;
             parser_deactivate_reg(p, &regmap);
         }
@@ -1284,12 +1304,14 @@ static int compile_expr_op(Parser* p, struct ExprOp* e, struct ValDest* dst, str
         {
             if (compile_expr_op_add(p, e->lhs, e->rhs, dst, bb, &e->tok->rc)) return 1;
             dst->is_reference = 1;
+            dst->is_const = 0;
             return 0;
         }
         struct RegMap regmapl = {0};
         struct ValDest lhs = dest_regmap(&regmapl);
         if (compile_expr_op_add(p, e->lhs, e->rhs, &lhs, bb, &e->tok->rc)) return 1;
         lhs.is_reference = 1;
+        dst->is_const = 0;
         if (parser_assign_dsts(p, dst, &lhs, bb, &e->tok->rc)) return 1;
         parser_deactivate_reg(p, &regmapl);
         return 0;
@@ -2029,8 +2051,20 @@ static int compile_decl_single(Parser* p, struct Decl* decl, struct CompoundBloc
 
         if (!sym->address_taken && (!bb->fn_sym || bb->fn_sym->decl->is_nonreentrant))
             sym->reg.stack_addr = -1;
+        else if (!bb->fn_sym || decl->specs.is_static)
+        {
+            sym->reg.stack_addr = p->globals_size;
+            sym->reg.is_global = 1;
+            snprintf(sym->reg.mem_loc.buf, sizeof(sym->reg.mem_loc.buf), "%d", sym->reg.stack_addr);
+            if (typestr_is_array(&sym->type))
+            {
+                sym->reg.rename = sym->reg.mem_loc;
+            }
+            p->globals_size += sizeof_typestr(&sym->type, &decl->id->rc);
+        }
         else
         {
+            sym->decl->parent_decl = bb->fn_sym->decl;
             sym->reg.stack_addr = bb->frame_size;
             sym->reg.mem_loc = free_var(p);
             bb->frame_size += sizeof_typestr(&sym->type, &decl->id->rc);
@@ -2630,7 +2664,7 @@ static struct Token* parse_stmt(Parser* p, struct Token* cur_tok, struct Expr** 
                 *p_expr = &s_stmt_none;
                 return cur_tok + 1;
             }
-            else if (ch == '*' || ch == '(')
+            else if (ch == '*' || ch == '(' || ch == '&')
             {
                 if (!(cur_tok = parse_expr(p, cur_tok, p_expr, PRECEDENCE_COMMA))) return NULL;
                 return token_consume_sym(p, cur_tok, ';');
@@ -2906,13 +2940,15 @@ void parser_init(Parser* p)
     array_init(&p->stringpool);
     array_init(&p->toks);
     array_init(&p->strings_to_free);
-    p->fn_ret_var = s_freevar_zero;
     scope_init(&p->scope);
     scope_init(&p->type_scope);
     cg_init(&p->cg);
     p->free_var_counter = 0;
     p->first_active_reg = NULL;
     memset(p->fn_label_prefix, 0, sizeof(p->fn_label_prefix));
+    p->fn_ret_var = s_freevar_zero;
+    p->fn = NULL;
+    p->globals_size = 0;
 
     for (size_t i = 0; i < AST_KIND_END_POOLS; ++i)
     {
@@ -3231,7 +3267,15 @@ static void elaborate_expr(struct Elaborator* elab,
             else if (typestr_is_array(&callee->sym.type))
             {
                 callee->sym.address_taken = 1;
-                ctx->decl->takes_addresses = 1;
+                if (callee->sym.decl->parent_decl)
+                {
+                    if (callee->sym.decl->parent_decl != ctx->decl)
+                    {
+                        parser_ice(&s_unknown_rc);
+                        return abort();
+                    }
+                    ctx->decl->takes_addresses = 1;
+                }
             }
             *rty = callee->sym.type;
             return;
@@ -3450,7 +3494,16 @@ static int elaborate_local_decl(struct Elaborator* elab, struct Decl* decl)
                 decl->sym.type.used,
                 decl->sym.type.buf);
 
-    if (!decl->is_function || !decl->init) return 0;
+    if (!decl->is_function)
+    {
+        if (decl->init)
+        {
+            return parser_ferror(&decl->id->rc, "error: global initializers are not supported\n");
+        }
+        return 0;
+    }
+
+    if (!decl->init) return 0;
     decl->elab_index = elab->fns.sz / sizeof(void*);
     array_push_ptr(&elab->fns, decl);
 
@@ -3486,7 +3539,7 @@ static int dfs_emit(const struct ArrSpan* edgespans, const int* edges, int* out_
     return emitted;
 }
 
-static int elaborate_declstmts(struct Elaborator* elab, struct Expr** declstmts, size_t count)
+static int elaborate_decls(struct Elaborator* elab, struct Expr** declstmts, size_t count)
 {
     struct Expr** const seqs = elab->p->expr_seqs.data;
     size_t const seqs_sz = elab->p->expr_seqs.sz / sizeof(struct Expr*);
@@ -3620,7 +3673,7 @@ int parse(Parser* p, Lexer* l)
         } while (1);
         scope_shrink(&p->scope, 0);
         struct Elaborator elab = {.p = p};
-        if (elaborate_declstmts(&elab, arr_exprs.data, arr_exprs.sz / sizeof(struct Expr*))) return 1;
+        if (elaborate_decls(&elab, arr_exprs.data, arr_exprs.sz / sizeof(struct Expr*))) return 1;
 
         struct CompoundBlock new_cb;
         cb_init(&new_cb, NULL, p);
