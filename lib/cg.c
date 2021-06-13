@@ -27,13 +27,7 @@ static struct RowCol s_unknown_rc = {
     .row = 1,
     .col = 1,
 };
-void cg_write_bin_entry(struct CodeGen* cg)
-{
-    cg_write_inst(cg, "set __stk__ $__stk__$");
-    cg_write_inst(cg, "set ret 0");
-    cg_write_inst(cg, "set _r_main 0");
-    cg_write_inst(cg, "jump $main$ always");
-}
+
 void cg_write_push_ret(struct CodeGen* cg, struct FreeVar* ret_addr)
 {
     if (ret_addr->buf[0])

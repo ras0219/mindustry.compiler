@@ -4,7 +4,6 @@
 
 void cg_init(struct CodeGen* cg);
 void cg_destroy(struct CodeGen* cg);
-void cg_write_bin_entry(struct CodeGen* cg);
 void cg_write_push_ret(struct CodeGen* cg, struct FreeVar* ret_addr);
 void cg_write_return(struct CodeGen* cg, struct FreeVar* ret_addr);
 void cg_write_prepare_stack(struct CodeGen* cg);

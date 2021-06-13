@@ -81,7 +81,7 @@ struct Decl
     int array_arity;
     int is_array : 1;
     int is_function : 1;
-    int takes_addresses : 1;
+    int takes_local_addresses : 1;
     int is_nonreentrant : 1;
     int is_stackless : 1;
     size_t offset;

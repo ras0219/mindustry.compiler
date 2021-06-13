@@ -1088,12 +1088,20 @@ static int compile_expr_op(Parser* p, struct ExprOp* e, struct ValDest* dst, str
         {
             return parser_ferror(&e->tok->rc, "error: attempting to take address of register\n");
         }
-        const char* const dstreg = parser_prepare_dst_reg(p, dst, bb);
-        if (!dstreg) return 1;
-        char buf[16];
-        snprintf(buf, 16, "%d", lhs_sym->sym->reg.stack_addr);
+        if (lhs_sym->sym->reg.is_global)
+        {
+            char buf[16];
+            snprintf(buf, 16, "%d", lhs_sym->sym->reg.stack_addr);
+            struct ValDest vd = dest_literal(buf);
+            return parser_assign_dsts(p, dst, &vd, bb, &e->tok->rc);
+        }
+        else
+        {
+            const char* const dstreg = parser_prepare_dst_reg(p, dst, bb);
+            if (!dstreg) return 1;
 
-        cg_write_inst_op(&p->cg, "+", dstreg, "__ebp__", buf);
+            cg_write_inst_add(&p->cg, dstreg, "__ebp__", lhs_sym->sym->reg.stack_addr);
+        }
         return 0;
     }
     else if (op[0] == '*' && op[1] == '\0' && !e->rhs)
@@ -1940,6 +1948,10 @@ static struct Token* parse_decl(Parser* p, struct Token* cur_tok, struct Array* 
         struct Decl* pdecl;
         if (!(cur_tok = parse_declarator(p, cur_tok, &specs, &pdecl))) return NULL;
         array_push(pdecls, &pdecl, sizeof(pdecl));
+        if (!specs.is_static)
+        {
+            pdecl->sym.decl->parent_decl = p->fn;
+        }
         if (cur_tok->type == LEX_SYMBOL)
         {
             const char ch = token_str(p, cur_tok)[0];
@@ -1950,6 +1962,11 @@ static struct Token* parse_decl(Parser* p, struct Token* cur_tok, struct Array* 
 
             if (ch == '=')
             {
+                if (specs.is_static)
+                {
+                    return parser_ferror(&cur_tok->rc, "error: static initializers are not currently supported\n"),
+                           NULL;
+                }
                 if (pdecl->is_function)
                     return parser_ferror(&cur_tok->rc, "error: function cannot be initialized with '='\n"), NULL;
                 if (!(cur_tok = parse_expr(p, cur_tok + 1, &pdecl->init, PRECEDENCE_ASSIGN))) return NULL;
@@ -2050,7 +2067,9 @@ static int compile_decl_single(Parser* p, struct Decl* decl, struct CompoundBloc
         if (!sym->reg.rename.buf[0]) sym->reg.rename = free_var_from(p, name);
 
         if (!sym->address_taken && (!bb->fn_sym || bb->fn_sym->decl->is_nonreentrant))
+        {
             sym->reg.stack_addr = -1;
+        }
         else if (!bb->fn_sym || decl->specs.is_static)
         {
             sym->reg.stack_addr = p->globals_size;
@@ -2064,7 +2083,6 @@ static int compile_decl_single(Parser* p, struct Decl* decl, struct CompoundBloc
         }
         else
         {
-            sym->decl->parent_decl = bb->fn_sym->decl;
             sym->reg.stack_addr = bb->frame_size;
             sym->reg.mem_loc = free_var(p);
             bb->frame_size += sizeof_typestr(&sym->type, &decl->id->rc);
@@ -2422,6 +2440,10 @@ static struct Token* parse_stmt_decl(Parser* p, struct Token* cur_tok, struct Ex
 
     if (token_is_sym(p, cur_tok, '{'))
     {
+        if (p->fn)
+        {
+            return parser_ferror(&cur_tok->rc, "error: cannot define function inside another function\n"), NULL;
+        }
         if (arr_decls.sz != sizeof(struct Decl*))
         {
             return parser_ferror(&cur_tok->rc, "error: functions must be declared alone\n"), NULL;
@@ -2431,9 +2453,11 @@ static struct Token* parse_stmt_decl(Parser* p, struct Token* cur_tok, struct Ex
         {
             return parser_ferror(&cur_tok->rc, "error: only functions may be initialized with a code block\n"), NULL;
         }
+        p->fn = decl;
         if (!(cur_tok = parse_stmts(p, cur_tok + 1, &decl->init))) return NULL;
         if (!(cur_tok = token_consume_sym(p, cur_tok, '}'))) return NULL;
         // Remove function arguments from the scope
+        p->fn = NULL;
         scope_shrink(&p->scope, scope_sz + 1);
     }
     else
@@ -2692,10 +2716,8 @@ static struct Token* compile_stmt(Parser* p, struct Token* cur_tok, struct Compo
     if (compile_stmt_expr(p, expr, bb)) return NULL;
     return cur_tok;
 }
-static int compile_decl_expr(Parser* p, struct Decl* decl, struct CompoundBlock* bb)
+static int compile_decl_init(Parser* p, struct Decl* decl, struct CompoundBlock* bb)
 {
-    if (compile_decl_single(p, decl, bb)) return 1;
-
     if (decl->init)
     {
         if (decl->is_function)
@@ -2775,6 +2797,11 @@ static int compile_decl_expr(Parser* p, struct Decl* decl, struct CompoundBlock*
         }
     }
     return 0;
+}
+static int compile_decl_expr(Parser* p, struct Decl* decl, struct CompoundBlock* bb)
+{
+    if (compile_decl_single(p, decl, bb)) return 1;
+    return compile_decl_init(p, decl, bb);
 }
 
 int ast_kind_is_expr(enum AstKind k)
@@ -3018,6 +3045,8 @@ static void* array_find_ptr(void* arr_start, size_t arr_size, void* key)
 struct Elaborator
 {
     Parser* p;
+    int all_stackless : 1;
+    struct Decl* main;
     struct Array fns;
     struct Array callees_spans;
     struct Array callees_seqs;
@@ -3280,7 +3309,7 @@ static void elaborate_expr(struct Elaborator* elab,
                         parser_ice(&s_unknown_rc);
                         return abort();
                     }
-                    ctx->decl->takes_addresses = 1;
+                    ctx->decl->takes_local_addresses = 1;
                 }
             }
             *rty = callee->sym.type;
@@ -3433,7 +3462,15 @@ static void elaborate_expr(struct Elaborator* elab,
                 }
                 struct ExprSym* lhs_sym = (struct ExprSym*)e->lhs;
                 lhs_sym->sym->address_taken = 1;
-                ctx->decl->takes_addresses = 1;
+                if (lhs_sym->sym->decl->parent_decl)
+                {
+                    if (lhs_sym->sym->decl->parent_decl != ctx->decl)
+                    {
+                        parser_ice(&s_unknown_rc);
+                        return abort();
+                    }
+                    ctx->decl->takes_local_addresses = 1;
+                }
             }
             else if (op[0] == '[' && op[1] == '\0')
             {
@@ -3558,6 +3595,10 @@ static int elaborate_decls(struct Elaborator* elab, struct Expr** declstmts, siz
             if (seqs[decls->offset + j]->kind != AST_DECL) abort();
             struct Decl* decl = (struct Decl*)seqs[decls->offset + j];
             if (elaborate_local_decl(elab, decl)) return 1;
+            if (!elab->main && 0 == strcmp(token_str(elab->p, decl->id), "main"))
+            {
+                elab->main = decl_get_def(decl);
+            }
         }
     }
 
@@ -3627,15 +3668,20 @@ static int elaborate_decls(struct Elaborator* elab, struct Expr** declstmts, siz
                 }
             }
         }
+        elab->all_stackless = 1;
         for (size_t i = 0; i < n_fns; ++i)
         {
             if (!is_reentrant[i])
             {
                 fns[i]->is_nonreentrant = 1;
             }
-            if (fns[i]->is_nonreentrant && !fns[i]->takes_addresses)
+            if (fns[i]->is_nonreentrant && !fns[i]->takes_local_addresses)
             {
                 fns[i]->is_stackless = 1;
+            }
+            else
+            {
+                elab->all_stackless = 0;
             }
         }
 
@@ -3665,7 +3711,6 @@ int parse(Parser* p, Lexer* l)
         // actually parse
         const size_t num_toks = p->toks.sz / sizeof(struct Token);
         struct Token* cur_tok = (struct Token*)p->toks.data;
-        cg_write_bin_entry(&p->cg);
 
         struct Array arr_exprs;
         array_init(&arr_exprs);
@@ -3681,11 +3726,53 @@ int parse(Parser* p, Lexer* l)
         struct Elaborator elab = {.p = p};
         if (elaborate_decls(&elab, arr_exprs.data, arr_exprs.sz / sizeof(struct Expr*))) return 1;
 
+        if (!elab.main)
+        {
+            return parser_ferror(&s_unknown_rc, "error: a main function is required\n");
+        }
+
+        if (!elab.all_stackless)
+        {
+            cg_write_inst(&p->cg, "set __stk__ $__stk__$");
+        }
+        if (!elab.main->is_nonreentrant)
+        {
+            cg_write_inst(&p->cg, "set ret 0");
+        }
+
         struct CompoundBlock new_cb;
         cb_init(&new_cb, NULL, p);
+        struct Expr** const seqs = p->expr_seqs.data;
+        // first compile all global variables
         for (size_t i = 0; i < arr_exprs.sz / sizeof(struct Expr*); ++i)
         {
-            if (compile_stmt_expr(p, ((struct Expr**)arr_exprs.data)[i], &new_cb)) return 1;
+            struct Expr* expr = ((struct Expr**)arr_exprs.data)[i];
+            if (expr->kind != STMT_DECLS) abort();
+            struct StmtDecls* decls = (struct StmtDecls*)expr;
+            for (size_t j = 0; j < decls->extent; ++j)
+            {
+                if (seqs[decls->offset + j]->kind != AST_DECL) abort();
+                struct Decl* decl = (struct Decl*)seqs[decls->offset + j];
+                if (compile_decl_single(p, decl, &new_cb)) return 1;
+                if (decl->is_function) continue;
+                if (compile_decl_init(p, decl, &new_cb)) return 1;
+            }
+        }
+        // then compile all functions
+        if (compile_decl_expr(p, elab.main, &new_cb)) return 1;
+        for (size_t i = 0; i < arr_exprs.sz / sizeof(struct Expr*); ++i)
+        {
+            struct Expr* expr = ((struct Expr**)arr_exprs.data)[i];
+            if (expr->kind != STMT_DECLS) abort();
+            struct StmtDecls* decls = (struct StmtDecls*)expr;
+            for (size_t j = 0; j < decls->extent; ++j)
+            {
+                if (seqs[decls->offset + j]->kind != AST_DECL) abort();
+                struct Decl* decl = (struct Decl*)seqs[decls->offset + j];
+                if (!decl->is_function) continue;
+                if (decl == elab.main) continue;
+                if (compile_decl_init(p, decl, &new_cb)) return 1;
+            }
         }
         array_destroy(&arr_exprs);
 
