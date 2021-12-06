@@ -94,10 +94,39 @@ int lex(Lexer* l, Buffer* buf)
     {
         case LEX_START:
         LEX_START:
+        {
+            l->in_directive = 0;
+
             for (; i < buf->sz; advance_rowcol(&l->rc, buf->buf[i++]))
             {
                 const char ch = buf->buf[i];
                 if (ch == ' ' || ch == '\n' || ch == '\r') continue;
+                if (ch == '#')
+                {
+                    // Todo: support preprocessor directives with preceeding spaces
+                    advance_rowcol(&l->rc, buf->buf[i++]);
+                    l->in_directive = 1;
+                    l->in_include = 0;
+                    l->tok_rc = l->rc;
+                    l->state = LEX_DIRECTIVE;
+                    if (rc = emit_token(l)) return rc;
+                }
+                l->state = LEX_START2;
+                goto LEX_START2;
+            }
+            break;
+        }
+        case LEX_START2:
+        LEX_START2:
+            for (; i < buf->sz; advance_rowcol(&l->rc, buf->buf[i++]))
+            {
+                const char ch = buf->buf[i];
+                if (ch == ' ') continue;
+                if (ch == '\n' || ch == '\r')
+                {
+                    l->state = LEX_START;
+                    goto LEX_START;
+                }
                 if (is_ascii_alphu(ch))
                 {
                     l->tok_rc = l->rc;
@@ -126,33 +155,10 @@ int lex(Lexer* l, Buffer* buf)
                     advance_rowcol(&l->rc, buf->buf[i++]);
                     goto LEX_STRING;
                 }
-                else if (ch == '#' && l->rc.col == 1)
-                {
-                    // Todo: support preprocessor directives with preceeding spaces
-                    advance_rowcol(&l->rc, buf->buf[i++]);
-                    l->tok_rc = l->rc;
-                    l->state = LEX_DIRECTIVE;
-                    goto LEX_DIRECTIVE;
-                }
                 else
                 {
-                    return parser_ferror(&l->rc, "error: unrecognized character: '%c'\n", ch), 1;
+                    return parser_ferror(&l->rc, "error: unexpected character: '%c'\n", ch), 1;
                 }
-            }
-            break;
-        case LEX_DIRECTIVE:
-        LEX_DIRECTIVE:
-            for (; i < buf->sz; advance_rowcol(&l->rc, buf->buf[i++]))
-            {
-                int rc;
-                const char ch = buf->buf[i];
-                if (ch == '\n' || ch == '\r')
-                {
-                    if (rc = emit_token(l)) return rc;
-                    l->state = LEX_START;
-                    goto LEX_START;
-                }
-                if (rc = push_tok_char(l, ch)) return rc;
             }
             break;
         case LEX_SYMBOL:
@@ -183,8 +189,8 @@ int lex(Lexer* l, Buffer* buf)
                     continue;
                 }
                 if (rc = emit_token(l)) return rc;
-                l->state = LEX_START;
-                goto LEX_START;
+                l->state = LEX_START2;
+                goto LEX_START2;
             }
             break;
         case LEX_STRING:
@@ -197,8 +203,8 @@ int lex(Lexer* l, Buffer* buf)
                     // finish string
                     if (rc = emit_token(l)) return rc;
                     advance_rowcol(&l->rc, buf->buf[i++]);
-                    l->state = LEX_START;
-                    goto LEX_START;
+                    l->state = LEX_START2;
+                    goto LEX_START2;
                 }
                 else if (ch == '\\')
                 {
@@ -225,7 +231,7 @@ int lex(Lexer* l, Buffer* buf)
                 const char ch = buf->buf[i];
                 if (ch == '\n')
                 {
-                    return parser_ferror(&l->rc, "error: unexpected end of line in string literal\n"), 1;
+                    advance_rowcol(&l->rc, buf->buf[i++]);
                 }
                 else
                 {
@@ -252,8 +258,8 @@ int lex(Lexer* l, Buffer* buf)
                     l->sz = 0;
                     if (rc = emit_token(l)) return rc;
                     advance_rowcol(&l->rc, buf->buf[i++]);
-                    l->state = LEX_START;
-                    goto LEX_START;
+                    l->state = LEX_START2;
+                    goto LEX_START2;
                 }
                 else
                 {
@@ -381,8 +387,8 @@ int lex(Lexer* l, Buffer* buf)
                         l->state = LEX_ELSE;
                     }
                     if (rc = emit_token(l)) return rc;
-                    l->state = LEX_START;
-                    goto LEX_START;
+                    l->state = LEX_START2;
+                    goto LEX_START2;
                 }
             }
             break;
@@ -403,8 +409,8 @@ int lex(Lexer* l, Buffer* buf)
                 else
                 {
                     if (rc = emit_token(l)) return rc;
-                    l->state = LEX_START;
-                    goto LEX_START;
+                    l->state = LEX_START2;
+                    goto LEX_START2;
                 }
             }
             break;

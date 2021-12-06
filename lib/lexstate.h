@@ -5,6 +5,7 @@
 enum LexerState_t
 {
     LEX_START,
+    LEX_START2,
     LEX_IDENT,
     LEX_NUMBER,
     LEX_STRING,

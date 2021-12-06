@@ -11,10 +11,12 @@
                 "-C",
                 "${env:BUILD_DIR}",
                 "&&",
-                "${env:BUILD_DIR}/main",
-                "${workspaceFolder}/examples/test.c"
+                "${env:BUILD_DIR}/runall-test"
             ],
-            "group": "build",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
             "presentation": {
                 "echo": true,
                 "reveal": "always",
@@ -52,10 +54,7 @@
                 "-C",
                 "${env:BUILD_DIR}/../mindustry.compiler.wasm.debug"
             ],
-            "group": {
-                "kind": "build",
-                "isDefault": true
-            },
+            "group": "build",
             "presentation": {
                 "echo": true,
                 "reveal": "always",

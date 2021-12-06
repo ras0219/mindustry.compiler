@@ -8,6 +8,7 @@ enum AstKind
 {
     EXPR_SYM,
     EXPR_LIT,
+    EXPR_CAST,
     EXPR_OP,
     EXPR_CALL,
     AST_DECL,
@@ -39,6 +40,14 @@ struct ExprLit
     struct Expr kind;
 
     const struct Token* tok;
+};
+
+struct ExprCast
+{
+    struct Expr kind;
+
+    struct Expr* expr;
+    struct Decl* type;
 };
 
 struct ExprSym

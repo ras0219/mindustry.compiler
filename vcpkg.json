@@ -1,0 +1,10 @@
+{
+  "name": "todo",
+  "version": "1",
+  "dependencies": [
+    {
+      "name": "gtest",
+      "platform": "windows"
+    }
+  ]
+}

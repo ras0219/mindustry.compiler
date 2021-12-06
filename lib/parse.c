@@ -603,6 +603,14 @@ static struct ExprLit* parse_alloc_expr_lit(Parser* p, struct Token* tok)
     e->tok = tok;
     return e;
 }
+static struct ExprCast* parse_alloc_expr_cast(Parser* p, struct Decl* type, struct Expr* expr)
+{
+    struct ExprCast* e = (struct ExprCast*)pool_alloc(&p->ast_pools[EXPR_CAST], sizeof(struct ExprCast));
+    e->kind.kind = EXPR_CAST;
+    e->expr = expr;
+    e->type = type;
+    return e;
+}
 static struct ExprCall* parse_alloc_expr_call(Parser* p, struct Token* tok, struct Expr* fn, size_t off, size_t ext)
 {
     struct ExprCall* e = (struct ExprCall*)pool_alloc(&p->ast_pools[EXPR_CALL], sizeof(struct ExprCall));
@@ -679,6 +687,22 @@ static struct Token* parse_expr_post_unary(Parser* p, struct Token* cur_tok, str
     *ppe = (struct Expr*)lhs;
     return cur_tok;
 }
+static _Bool parse_is_token_a_type(Parser* p, struct Token* tok)
+{
+    switch (tok->type)
+    {
+        case LEX_MSTRING:
+        case LEX_INT:
+        case LEX_UNIT:
+        case LEX_VOLATILE:
+        case LEX_CONST:
+        case LEX_STRUCT:
+        case LEX_VOID: return 1;
+        default: return 0;
+    }
+}
+
+static struct Token* parse_type(Parser* p, struct Token* cur_tok, struct Decl** pdecl);
 static struct Token* parse_expr_unary_atom(Parser* p, struct Token* cur_tok, struct Expr** ppe)
 {
     switch (cur_tok->type)
@@ -694,7 +718,20 @@ static struct Token* parse_expr_unary_atom(Parser* p, struct Token* cur_tok, str
             }
             else if (op[0] == '(' && op[1] == '\0')
             {
-                if (!(cur_tok = parse_expr(p, cur_tok + 1, ppe, PRECEDENCE_COMMA))) return NULL;
+                if (parse_is_token_a_type(p, cur_tok + 1))
+                {
+                    // cast expression
+                    struct Decl* decl;
+                    if (!(cur_tok = parse_type(p, cur_tok + 1, &decl))) return NULL;
+                    struct ExprCast* e = parse_alloc_expr_cast(p, decl, NULL);
+                    *ppe = (struct Expr*)e;
+                    if (!(cur_tok = token_consume_sym(p, cur_tok, ')'))) return NULL;
+                    return parse_expr_unary_atom(p, cur_tok, &e->expr);
+                }
+                else if (!(cur_tok = parse_expr(p, cur_tok + 1, ppe, PRECEDENCE_COMMA)))
+                {
+                    return NULL;
+                }
                 return token_consume_sym(p, cur_tok, ')');
             }
             break;
@@ -764,6 +801,7 @@ static struct Token* parse_expr(Parser* p, struct Token* cur_tok, struct Expr** 
 
     return parse_expr_continue(p, cur_tok, lhs, ppe, precedence);
 }
+
 enum TypeKind
 {
     TYPE_UNKNOWN,
@@ -1606,6 +1644,7 @@ static int compile_expr(Parser* p, struct Expr* e, struct ValDest* dst, struct C
             struct ValDest sym_dst = dest_sym(sym);
             return parser_assign_dsts(p, dst, &sym_dst, bb, &esym->tok->rc);
         }
+        case EXPR_CAST: return compile_expr(p, ((struct ExprCast*)e)->expr, dst, bb);
         default: return parser_ice(&s_unknown_rc), 1;
     }
 }
@@ -1796,49 +1835,42 @@ static struct TypeStr declspecs_to_type(Parser* p, struct DeclSpecs* specs)
     return ty;
 }
 
-static struct Token* parse_declarator(Parser* p, struct Token* cur_tok, struct DeclSpecs* specs, struct Decl** pdecl)
+enum ExpectIdentifier
 {
-    struct Decl* decl = *pdecl = pool_alloc(&p->ast_pools[AST_DECL], sizeof(struct Decl));
-    memset(decl, 0, sizeof(struct Decl));
-    decl->kind.kind = AST_DECL;
-    decl->specs = *specs;
-    symbol_init(&decl->sym);
-    decl->sym.decl = decl;
-    decl->sym.type = declspecs_to_type(p, specs);
+    EXPECT_IDENTIFIER,
+    EXPECT_NO_IDENTIFIER,
+    EXPECT_ANY,
+};
 
-    if (cur_tok->type == LEX_ATTRIBUTE)
+static struct Token* parse_declarator(
+    Parser* p, struct Token* cur_tok, struct DeclSpecs* specs, struct Decl** pdecl, enum ExpectIdentifier);
+static struct Token* parse_declarator1(Parser* p,
+                                       struct Token* cur_tok,
+                                       struct Decl* decl,
+                                       enum ExpectIdentifier expect_identifier);
+static struct Token* parse_declarator_inner(Parser* p,
+                                            struct Token* cur_tok,
+                                            struct Decl* decl,
+                                            enum ExpectIdentifier expect_identifier)
+{
+    struct Binding* prev_sym = NULL;
+    if (token_is_sym(p, cur_tok, '('))
     {
-        ++cur_tok;
-        cur_tok = parse_attribute_plist(p, cur_tok, &decl->attr);
-        if (!cur_tok) return NULL;
+        if (!(cur_tok = parse_declarator1(p, cur_tok, decl, expect_identifier))) return NULL;
+        if (!(cur_tok = token_consume_sym(p, cur_tok, ')'))) return NULL;
     }
-    while (1)
+    else if (expect_identifier != EXPECT_NO_IDENTIFIER)
     {
-        if (token_is_sym(p, cur_tok, '*'))
+        if (cur_tok->type != LEX_IDENT && expect_identifier == EXPECT_IDENTIFIER)
         {
-            typestr_add_pointer(&decl->sym.type);
-            decl->specs.is_const = 0;
-            decl->specs.is_volatile = 0;
-            ++cur_tok;
+            return parser_ferror(&cur_tok->rc, "error: expected identifier\n"), NULL;
         }
-        else if (cur_tok->type == LEX_CONST)
-        {
-            typestr_add_const(&decl->sym.type);
-            decl->specs.is_const = 1;
-            ++cur_tok;
-        }
-        else
-            break;
-    }
-    if (cur_tok->type != LEX_IDENT)
-    {
-        return parser_ferror(&cur_tok->rc, "error: expected identifier\n"), NULL;
-    }
-    decl->id = cur_tok++;
-    const char* const name = token_str(p, decl->id);
+        decl->id = cur_tok++;
 
-    struct Binding* prev_sym = scope_find(&p->scope, name);
-    scope_insert(&p->scope, name, &decl->sym);
+        const char* const name = token_str(p, decl->id);
+        prev_sym = scope_find(&p->scope, name);
+        scope_insert(&p->scope, name, &decl->sym);
+    }
 
     if (token_is_sym(p, cur_tok, '('))
     {
@@ -1868,7 +1900,7 @@ static struct Token* parse_declarator(Parser* p, struct Token* cur_tok, struct D
                 struct DeclSpecs arg_specs = {0};
                 if (!(cur_tok = parse_declspecs(p, cur_tok, &arg_specs))) return NULL;
                 struct Decl** arg_decl = arg_decls + decl->extent++;
-                if (!(cur_tok = parse_declarator(p, cur_tok, &arg_specs, arg_decl))) return NULL;
+                if (!(cur_tok = parse_declarator(p, cur_tok, &arg_specs, arg_decl, EXPECT_ANY))) return NULL;
 
                 typestr_add_arg(&decl->sym.type, &(*arg_decl)->sym.type);
 
@@ -1937,6 +1969,63 @@ static struct Token* parse_declarator(Parser* p, struct Token* cur_tok, struct D
     }
     return cur_tok;
 }
+static struct Token* parse_declarator1(Parser* p,
+                                       struct Token* cur_tok,
+                                       struct Decl* decl,
+                                       enum ExpectIdentifier expect_identifier)
+{
+    if (cur_tok->type == LEX_ATTRIBUTE)
+    {
+        ++cur_tok;
+        cur_tok = parse_attribute_plist(p, cur_tok, &decl->attr);
+        if (!cur_tok) return NULL;
+    }
+    while (1)
+    {
+        if (token_is_sym(p, cur_tok, '*'))
+        {
+            typestr_add_pointer(&decl->sym.type);
+            decl->specs.is_const = 0;
+            decl->specs.is_volatile = 0;
+            ++cur_tok;
+        }
+        else if (cur_tok->type == LEX_CONST)
+        {
+            typestr_add_const(&decl->sym.type);
+            decl->specs.is_const = 1;
+            ++cur_tok;
+        }
+        else
+            break;
+    }
+    return parse_declarator_inner(p, cur_tok, decl, expect_identifier);
+}
+static struct Token* parse_declarator(Parser* p,
+                                      struct Token* cur_tok,
+                                      struct DeclSpecs* specs,
+                                      struct Decl** pdecl,
+                                      enum ExpectIdentifier expect_identifier)
+{
+    struct Decl* decl = *pdecl = pool_alloc(&p->ast_pools[AST_DECL], sizeof(struct Decl));
+    memset(decl, 0, sizeof(struct Decl));
+    decl->kind.kind = AST_DECL;
+    decl->specs = *specs;
+    symbol_init(&decl->sym);
+    decl->sym.decl = decl;
+    decl->sym.type = declspecs_to_type(p, specs);
+
+    return parse_declarator1(p, cur_tok, decl, expect_identifier);
+}
+
+static struct Token* parse_type(Parser* p, struct Token* cur_tok, struct Decl** pdecl)
+{
+    const size_t scope_sz = scope_size(&p->scope);
+    struct DeclSpecs specs = {0};
+    if (!(cur_tok = parse_declspecs(p, cur_tok, &specs))) return NULL;
+    if (!(cur_tok = parse_declarator(p, cur_tok, &specs, pdecl, EXPECT_NO_IDENTIFIER))) return NULL;
+    scope_shrink(&p->scope, scope_sz);
+    return cur_tok;
+}
 
 static struct Token* parse_decl(Parser* p, struct Token* cur_tok, struct Array* pdecls)
 {
@@ -1946,7 +2035,7 @@ static struct Token* parse_decl(Parser* p, struct Token* cur_tok, struct Array* 
     {
         const size_t scope_sz = scope_size(&p->scope);
         struct Decl* pdecl;
-        if (!(cur_tok = parse_declarator(p, cur_tok, &specs, &pdecl))) return NULL;
+        if (!(cur_tok = parse_declarator(p, cur_tok, &specs, &pdecl, EXPECT_IDENTIFIER))) return NULL;
         array_push(pdecls, &pdecl, sizeof(pdecl));
         if (!specs.is_static)
         {
@@ -2032,6 +2121,7 @@ static int compile_decl_single(Parser* p, struct Decl* decl, struct CompoundBloc
 {
     struct Symbol* const sym = &decl->sym;
 
+    if (!decl->id) abort();
     const char* const name = token_str(p, decl->id);
     if (decl->attr.symname)
     {
@@ -2498,16 +2588,13 @@ static struct Token* parse_stmts(Parser* p, struct Token* cur_tok, struct Expr**
 
 static struct Token* parse_stmt(Parser* p, struct Token* cur_tok, struct Expr** p_expr)
 {
+    if (parse_is_token_a_type(p, cur_tok))
+    {
+        return parse_stmt_decl(p, cur_tok, p_expr);
+    }
     switch (cur_tok->type)
     {
-        case LEX_MSTRING:
-        case LEX_INT:
-        case LEX_UNIT:
-        case LEX_VOLATILE:
-        case LEX_CONST:
         case LEX_REGISTER:
-        case LEX_STRUCT:
-        case LEX_VOID:
         {
             return parse_stmt_decl(p, cur_tok, p_expr);
         }
@@ -2798,6 +2885,7 @@ static int compile_decl_init(Parser* p, struct Decl* decl, struct CompoundBlock*
     }
     return 0;
 }
+
 static int compile_decl_expr(Parser* p, struct Decl* decl, struct CompoundBlock* bb)
 {
     if (compile_decl_single(p, decl, bb)) return 1;
@@ -3270,8 +3358,12 @@ static void elaborate_expr(struct Elaborator* elab,
         case STMT_NONE:
         case STMT_BREAK:
         case STMT_CONTINUE:
-        case STMT_GOTO:
-        case STMT_LABEL: *rty = s_type_unknown; return;
+        case STMT_GOTO: *rty = s_type_unknown; return;
+        case STMT_LABEL:
+        {
+            struct StmtLabel* expr = top;
+            return elaborate_expr(elab, ctx, expr->stmt, rty);
+        }
         case EXPR_LIT:
         {
             struct ExprLit* expr = top;
@@ -3313,6 +3405,13 @@ static void elaborate_expr(struct Elaborator* elab,
                 }
             }
             *rty = callee->sym.type;
+            return;
+        }
+        case EXPR_CAST:
+        {
+            struct ExprCast* expr = top;
+            elaborate_expr(elab, ctx, expr->expr, rty);
+            *rty = expr->type->sym.type;
             return;
         }
         case STMT_RETURN:
@@ -3541,7 +3640,10 @@ static int elaborate_local_decl(struct Elaborator* elab, struct Decl* decl)
     {
         if (decl->init)
         {
-            return parser_ferror(&decl->id->rc, "error: global initializers are not supported\n");
+            if (decl->init->kind != EXPR_LIT)
+            {
+                return parser_ferror(&decl->id->rc, "error: global initializers must be constant literals\n");
+            }
         }
         return 0;
     }
