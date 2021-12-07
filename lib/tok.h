@@ -33,7 +33,9 @@ void parser_clear_errors();
 struct Lexer
 {
     int (*f_on_token)(struct Lexer*);
-    int state;
+    unsigned int in_directive : 1;
+    unsigned int in_include : 1;
+    unsigned int state : 8;
     struct RowCol tok_rc;
     struct RowCol rc;
     size_t sz;
@@ -43,10 +45,6 @@ struct Lexer
 void init_lexer(Lexer* l, const char* file, int (*f_on_token)(struct Lexer*));
 int lex(Lexer* l, Buffer* buf);
 int end_lex(Lexer* l);
-
-#define PARSER_STACK_SIZE 16
-#define TREE_NODES_SIZE 128
-#define STRING_POOL_SIZE 1024
 
 struct Scope
 {

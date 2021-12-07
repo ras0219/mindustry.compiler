@@ -165,5 +165,75 @@ int main()
                  "op sub __stk__ __ebp__ 1\n"
                  "read __ebp__ memory1 __ebp__\n"
                  "read @counter memory1 __stk__\n");
+
+    test_compile("tests/test5.c",
+
+                 "int y = 5;\n"
+                 "int main() { return 1; }\n"
+                 "int x = 5;\n",
+
+                 "set _0_y 5\n"
+                 "set _1_x 5\n"
+                 "set reg1 1\n"
+                 "jump 0 always\n");
+
+    test_compile("tests/test6.c",
+
+                 "#pragma memory memory1\n"
+                 "int y = 5;\n"
+                 "int* main() { return &y; }\n",
+
+                 "set _0_y 5\n"
+                 "set reg1 0\n"
+                 "write _0_y memory1 0\n"
+                 "jump 0 always\n");
+
+    test_compile("tests/test7.c",
+
+                 "#pragma memory memory1\n"
+                 "int y = 5;\n"
+                 "int* f() { return &y; }"
+                 "int main() { return *f(); }\n",
+
+                 "set _0_y 5\n"
+                 "write _0_y memory1 0\n"
+                 "op add _r_f 1 @counter\n"
+                 "jump 7 always\n"
+                 "set _2 reg1\n"
+                 "read reg1 memory1 _2\n"
+                 "jump 0 always\n"
+                 "set reg1 0\n"
+                 "set @counter _r_f\n");
+
+    test_compile("tests/test8.c",
+
+                 "#pragma memory memory1\n"
+                 "int y = 5;\n"
+                 "int main() { return (int)&y; }\n",
+
+                 "set _0_y 5\n"
+                 "set reg1 0\n"
+                 "write _0_y memory1 0\n"
+                 "jump 0 always\n");
+
+    test_compile("tests/test9.c",
+
+                 "#pragma memory memory1\n"
+                 "int y = 5;\n"
+                 "int main() { label: return (int)&y; }\n",
+
+                 "set _0_y 5\n"
+                 "write _0_y memory1 0\n"
+                 "set reg1 0\n"
+                 "jump 0 always\n");
+
+    test_compile("tests/test9.c",
+
+                 "#define X 100\n"
+                 "int main() { return X; }\n",
+
+                 "set reg1 100\n"
+                 "jump 0 always\n");
+
     return 0;
 }
