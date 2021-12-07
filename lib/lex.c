@@ -432,7 +432,7 @@ int end_lex(Lexer* l)
     return emit_token(l);
 }
 
-const char* lexstate_to_string(enum LexerState_t s)
+const char* lexstate_to_string(enum LexerState s)
 {
     switch (s)
     {

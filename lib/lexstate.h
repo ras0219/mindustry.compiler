@@ -2,9 +2,10 @@
 
 #include "fwd.h"
 
-enum LexerState_t
+enum LexerState
 {
     LEX_START,
+    LEX_START2,
     LEX_IDENT,
     LEX_NUMBER,
     LEX_STRING,
@@ -38,4 +39,4 @@ enum LexerState_t
     LEX_UNIT,
 };
 
-const char* lexstate_to_string(enum LexerState_t s);
+const char* lexstate_to_string(enum LexerState s);

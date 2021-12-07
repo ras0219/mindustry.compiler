@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package >
+  <metadata>
+    <id>Binaryen-x64-windows</id>
+    <version>0.0.97</version>
+    <authors>ras02</authors>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <license type="expression">Apache-2.0</license>
+    <projectUrl>https://github.com/WebAssembly/binaryen/</projectUrl>
+    <description>Compiler infrastructure and toolchain library for WebAssembly</description>
+    <copyright>Copyright 2020</copyright>
+    <tags></tags>
+  </metadata>
+  <files>
+    <file src="*" target="" />
+  </files>
+</package>

@@ -14,7 +14,7 @@
 struct Token
 {
     struct RowCol rc;
-    LexerState type;
+    enum LexerState type;
     ptrdiff_t sp_offset;
 };
 

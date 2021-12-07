@@ -8,6 +8,8 @@ endif()
 
 project(mindustry.compiler C)
 
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+
 add_compile_options(-Werror -Wno-parentheses -std=c11)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Webassembly")
@@ -19,6 +21,14 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Webassembly")
     add_library(mindcc-crt OBJECT ${CRT_SRC})
     target_include_directories(mindcc-crt PUBLIC wasm/crt wasm/ffi)
     link_libraries(mindcc-crt)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    add_compile_options(-D_CRT_SECURE_NO_WARNINGS)
+
+    # Extend uCRT with additional posix functions
+    file(GLOB CRT_SRC windows/*.c)
+    add_library(mindcc-crt OBJECT ${CRT_SRC})
+    target_include_directories(mindcc-crt PUBLIC windows)
+    link_libraries(mindcc-crt)
 endif()
 
 file(GLOB LIB lib/*.c)
@@ -29,8 +39,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Webassembly")
     file(GLOB SRC wasm/*.c)
     add_library(mindcc-wasmlib SHARED ${SRC})
     target_link_libraries(mindcc-wasmlib PRIVATE mindcc-lib)
-
-    set_target_properties(mindcc-wasmlib PROPERTIES LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/wasm/ffi/symbols.txt)
+    set_target_properties(mindcc-wasmlib PROPERTIES
+        LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/wasm/ffi/symbols.txt"
+    )
     target_link_options(mindcc-wasmlib PRIVATE
         "LINKER:--allow-undefined-file=${CMAKE_CURRENT_SOURCE_DIR}/wasm/ffi/symbols.txt"
         "LINKER:--no-entry"
@@ -43,95 +54,23 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Webassembly")
         "LINKER:--export=memset"
         "LINKER:--export=get_callback_buffer"
     )
+
+    file(GLOB web_files "targets/web/*" "examples/*")
+    option(GENERATE_DOCS "" ON)
+    if(GENERATE_DOCS)
+        list(APPEND web_files "docs/extensions.md")
+    endif()
+
+    add_wasmjs_target(mindcc-asmjs mindcc-wasmlib "web/mindcc-wasm.js")
+    add_website_target(website DIR web SOURCES ${web_files})
+    add_dependencies(website mindcc-asmjs mindcc-wasmlib)
+
+    install(TARGETS mindcc-wasmlib mindcc-asmjs website DESTINATION "var/run")
 else()
     file(GLOB SRC cli/*.c)
     add_executable(main ${SRC})
     target_link_libraries(main PRIVATE mindcc-lib)
 
-    file(GLOB TEST_SRC tests/*.c)
-    add_executable(minc-tests ${TEST_SRC})
-    target_link_libraries(minc-tests PRIVATE mindcc-lib)
-endif()
-
-if(CMAKE_SYSTEM_NAME STREQUAL "Webassembly")
-    set(OUT_WEB_FILES)
-
-    option(GENERATE_DOCS "" ON)
-    if(GENERATE_DOCS)
-        find_program(PANDOC pandoc REQUIRED)
-        add_custom_command(
-            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/web/extensions.html"
-            COMMAND "${PANDOC}" "${CMAKE_CURRENT_SOURCE_DIR}/docs/extensions.md" -o "${CMAKE_CURRENT_BINARY_DIR}/web/extensions.html"
-            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/docs/extensions.md"
-        )
-        list(APPEND OUT_WEB_FILES "${CMAKE_CURRENT_BINARY_DIR}/web/extensions.html")
-    endif()
-
-    file(GLOB_RECURSE WEB_FILES RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}/targets/web" targets/web/*)
-    list(FILTER WEB_FILES EXCLUDE REGEX "^cache\\.manifest\\.in$")
-    foreach(WEB_FILE IN LISTS WEB_FILES)
-        list(APPEND OUT_WEB_FILES "${CMAKE_CURRENT_BINARY_DIR}/web/${WEB_FILE}")
-        add_custom_command(
-            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/web/${WEB_FILE}"
-            COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_CURRENT_SOURCE_DIR}/targets/web/${WEB_FILE}" "${CMAKE_CURRENT_BINARY_DIR}/web/"
-            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/targets/web/${WEB_FILE}"
-        )
-        install(FILES "targets/web/${WEB_FILE}" DESTINATION "var/run")
-    endforeach()
-    file(GLOB_RECURSE examples RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}/examples" "examples/*")
-    foreach(example IN LISTS examples)
-        list(APPEND OUT_WEB_FILES "${CMAKE_CURRENT_BINARY_DIR}/web/${example}")
-        add_custom_command(
-            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/web/${example}"
-            COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_CURRENT_SOURCE_DIR}/examples/${example}" "${CMAKE_CURRENT_BINARY_DIR}/web/"
-            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/examples/${example}"
-        )
-        install(FILES "examples/${example}" DESTINATION "var/run")
-    endforeach()
-    add_custom_target(copy-web-assets ALL DEPENDS ${OUT_WEB_FILES})
-    string(TIMESTAMP VERSION UTC)
-    configure_file(targets/web/cache.manifest.in cache.manifest.inactive @ONLY)
-
-    find_program(WASMOPT wasm-opt PATHS ${CMAKE_CURRENT_SOURCE_DIR}/binaryen)
-    find_program(WASM2JS wasm2js PATHS ${CMAKE_CURRENT_SOURCE_DIR}/binaryen)
-
-    if(NOT WASM2JS OR NOT WASMOPT)
-        message(FATAL_ERROR "Needs wasm2js and wasm-opt from Binaryen to compile for asm.js. Please download https://github.com/WebAssembly/binaryen/releases/download/1.38.32/binaryen-1.38.32-x86_64-windows.tar.gz and unpack to either `${CMAKE_CURRENT_SOURCE_DIR}/binaryen` or add it to your path.")
-    endif()
-
-    add_custom_command(
-        OUTPUT web/mindcc-wasm.js
-        COMMAND "${WASM2JS}" "$<TARGET_FILE:mindcc-wasmlib>" --emscripten ">" "${CMAKE_CURRENT_BINARY_DIR}/web/mindcc-wasm.js"
-        DEPENDS mindcc-wasmlib
-        VERBATIM
-    )
-    add_custom_target(
-        mindcc_asmjs ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/web/mindcc-wasm.js
-    )
-
-    add_custom_target(dev-server
-        COMMAND docker run -it --rm
-            --mount type=bind,src=${CMAKE_CURRENT_BINARY_DIR},dst=/usr/share/nginx/html,readonly
-            -p 8080:80
-            nginx:latest
-            nginx -c /usr/share/nginx/html/nginx.conf
-        DEPENDS mindcc-wasmlib copy-web-assets mindcc_asmjs
-        USES_TERMINAL
-    )
-    add_custom_target(dev-server-in-docker
-        COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/targets/web/run-nginx.sh" "${CMAKE_CURRENT_BINARY_DIR}/web"
-        DEPENDS mindcc-wasmlib copy-web-assets mindcc_asmjs
-        USES_TERMINAL
-    )
-
-    install(
-        FILES
-            ${CMAKE_CURRENT_BINARY_DIR}/web/mindcc-wasm.js
-            $<TARGET_FILE:mindcc-wasmlib>
-        DESTINATION "var/run"
-    )
-    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/cache.manifest.inactive DESTINATION "var/run" RENAME "cache.manifest")
-else()
     file(GLOB_RECURSE TEST_SOURCES tests/*.c)
     add_executable(runall-test ${TEST_SOURCES})
     target_link_libraries(runall-test PRIVATE mindcc-lib)

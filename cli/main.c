@@ -3,7 +3,11 @@
 #include "fe.h"
 #include "tok.h"
 
-int usage() { fprintf(stderr, "Usage: mindustry.compiler <file.mlogp>\n"); }
+int usage()
+{
+    fprintf(stderr, "Usage: mindustry.compiler <file.mlogp>\n");
+    return 1;
+}
 
 int main(int argc, const char* const* argv)
 {
