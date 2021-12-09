@@ -86,57 +86,184 @@ static int symbol_is_compound(char c1, char c2)
     return 0;
 }
 
+struct KeywordEntry
+{
+    const char* const txt;
+    const size_t len;
+    const enum LexerState state;
+};
+
+#define KEYWORD(TXT, STATE)                                                                                            \
+    {                                                                                                                  \
+        TXT, sizeof(TXT) - 1, STATE                                                                                    \
+    }
+
+static const struct KeywordEntry s_keywords_table[] = {
+    KEYWORD("__attribute__", LEX_ATTRIBUTE),
+    KEYWORD("int", LEX_INT),
+    KEYWORD("void", LEX_VOID),
+    KEYWORD("goto", LEX_RETURN),
+    KEYWORD("break", LEX_BREAK),
+    KEYWORD("continue", LEX_CONTINUE),
+    KEYWORD("switch", LEX_SWITCH),
+    KEYWORD("case", LEX_CASE),
+    KEYWORD("if", LEX_IF),
+    KEYWORD("for", LEX_FOR),
+    KEYWORD("while", LEX_WHILE),
+    KEYWORD("return", LEX_RETURN),
+    KEYWORD("break", LEX_BREAK),
+    KEYWORD("do", LEX_DO),
+    KEYWORD("auto", LEX_AUTO),
+    KEYWORD("__string", LEX_MSTRING),
+    KEYWORD("__unit", LEX_UNIT),
+    KEYWORD("struct", LEX_STRUCT),
+    KEYWORD("short", LEX_INT),
+    KEYWORD("char", LEX_INT),
+    KEYWORD("long", LEX_INT),
+    KEYWORD("register", LEX_REGISTER),
+    KEYWORD("const", LEX_CONST),
+    KEYWORD("volatile", LEX_VOLATILE),
+    KEYWORD("else", LEX_ELSE),
+    KEYWORD("static", LEX_STATIC),
+};
+
 int lex(Lexer* l, Buffer* buf)
 {
     int rc;
     size_t i = 0;
     switch (l->state)
     {
+    LEX_START:
+        l->state = LEX_START;
         case LEX_START:
-        LEX_START:
         {
             l->in_directive = 0;
 
             for (; i < buf->sz; advance_rowcol(&l->rc, buf->buf[i++]))
             {
                 const char ch = buf->buf[i];
-                if (ch == ' ' || ch == '\n' || ch == '\r') continue;
+                if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r') continue;
                 if (ch == '#')
                 {
-                    // Todo: support preprocessor directives with preceeding spaces
                     advance_rowcol(&l->rc, buf->buf[i++]);
+                    l->state = LEX_START_DIRECTIVE;
                     l->in_directive = 1;
-                    l->in_include = 0;
                     l->tok_rc = l->rc;
-                    l->state = LEX_DIRECTIVE;
                     if (rc = emit_token(l)) return rc;
+                    goto LEX_START_DIRECTIVE;
                 }
-                l->state = LEX_START2;
                 goto LEX_START2;
             }
             break;
         }
-        case LEX_START2:
-        LEX_START2:
+        LEX_START_DIRECTIVE:
+            l->state = LEX_START_DIRECTIVE;
+        case LEX_START_DIRECTIVE:
             for (; i < buf->sz; advance_rowcol(&l->rc, buf->buf[i++]))
             {
                 const char ch = buf->buf[i];
-                if (ch == ' ') continue;
+                if (ch == ' ' || ch == '\t') continue;
                 if (ch == '\n' || ch == '\r')
                 {
-                    l->state = LEX_START;
+                    return parser_ferror(&l->rc, "error: expected preprocessor directive but found newline\n");
+                }
+                if (is_ascii_alphu(ch))
+                {
+                    l->tok_rc = l->rc;
+                    goto LEX_DIRECTIVE;
+                }
+                else
+                {
+                    return parser_ferror(&l->rc, "error: unexpected character in preprocessor directive: '%c'\n", ch);
+                }
+            }
+            break;
+        LEX_DIRECTIVE:
+            l->state = LEX_DIRECTIVE;
+        case LEX_DIRECTIVE:
+            for (; i < buf->sz; advance_rowcol(&l->rc, buf->buf[i++]))
+            {
+                const char ch = buf->buf[i];
+                if (is_ascii_alnumu(ch))
+                {
+                    if (rc = push_tok_char(l, ch)) return rc;
+                }
+                else
+                {
+                    const int is_include = l->sz == sizeof("include") - 1 && memcmp(l->tok, "include", l->sz) == 0;
+                    if (rc = emit_token(l)) return rc;
+                    if (is_include)
+                    {
+                        goto LEX_DIRECTIVE_INCLUDE_WS;
+                    }
+                    goto LEX_START2;
+                }
+            }
+            break;
+        LEX_DIRECTIVE_INCLUDE_WS:
+            l->state = LEX_DIRECTIVE_INCLUDE_WS;
+        case LEX_DIRECTIVE_INCLUDE_WS:
+            for (; i < buf->sz; advance_rowcol(&l->rc, buf->buf[i++]))
+            {
+                const char ch = buf->buf[i];
+                if (ch == ' ' || ch == '\t') continue;
+                if (ch == '\n' || ch == '\r')
+                {
+                    return parser_ferror(&l->rc, "error: expected include but found newline\n");
+                }
+                if (ch == '<' || ch == '"')
+                {
+                    l->tok_rc = l->rc;
+                    if (rc = push_tok_char(l, ch)) return rc;
+                    advance_rowcol(&l->rc, buf->buf[i++]);
+                    goto LEX_DIRECTIVE_INCLUDE;
+                }
+                goto LEX_START2;
+            }
+            break;
+        LEX_DIRECTIVE_INCLUDE:
+            l->state = LEX_DIRECTIVE_INCLUDE;
+        case LEX_DIRECTIVE_INCLUDE:
+        {
+            const char closing_ch = l->tok[0] == '<' ? '>' : '"';
+            for (; i < buf->sz; advance_rowcol(&l->rc, buf->buf[i++]))
+            {
+                const char ch = buf->buf[i];
+                if (ch == '\n' || ch == '\r')
+                {
+                    return parser_ferror(&l->rc, "error: expected '%c' but found newline\n", closing_ch);
+                }
+                if (rc = push_tok_char(l, ch)) return rc;
+
+                if (ch == closing_ch)
+                {
+                    if (rc = emit_token(l)) return rc;
+                    advance_rowcol(&l->rc, closing_ch);
+                    ++i;
+                    goto LEX_START2;
+                }
+            }
+            break;
+        }
+        LEX_START2:
+            l->state = LEX_START2;
+        case LEX_START2:
+            for (; i < buf->sz; advance_rowcol(&l->rc, buf->buf[i++]))
+            {
+                const char ch = buf->buf[i];
+                if (ch == ' ' || ch == '\t') continue;
+                if (ch == '\n' || ch == '\r')
+                {
                     goto LEX_START;
                 }
                 if (is_ascii_alphu(ch))
                 {
                     l->tok_rc = l->rc;
-                    l->state = LEX_IDENT;
                     goto LEX_IDENT;
                 }
                 else if (is_ascii_digit(ch))
                 {
                     l->tok_rc = l->rc;
-                    l->state = LEX_NUMBER;
                     goto LEX_NUMBER;
                 }
                 else if (is_ascii_symbol(ch))
@@ -144,14 +271,12 @@ int lex(Lexer* l, Buffer* buf)
                     l->tok_rc = l->rc;
                     l->tok[0] = ch;
                     l->sz = 1;
-                    l->state = LEX_SYMBOL;
                     advance_rowcol(&l->rc, buf->buf[i++]);
                     goto LEX_SYMBOL;
                 }
                 else if (ch == '"')
                 {
                     l->tok_rc = l->rc;
-                    l->state = LEX_STRING;
                     advance_rowcol(&l->rc, buf->buf[i++]);
                     goto LEX_STRING;
                 }
@@ -161,8 +286,9 @@ int lex(Lexer* l, Buffer* buf)
                 }
             }
             break;
-        case LEX_SYMBOL:
         LEX_SYMBOL:
+            l->state = LEX_SYMBOL;
+        case LEX_SYMBOL:
             for (; i < buf->sz; advance_rowcol(&l->rc, buf->buf[i++]))
             {
                 const char ch = buf->buf[i];
@@ -171,7 +297,6 @@ int lex(Lexer* l, Buffer* buf)
                     // multi-line comment
                     advance_rowcol(&l->rc, buf->buf[i++]);
                     l->sz = 0;
-                    l->state = LEX_MULTILINE_COMMENT;
                     goto LEX_MULTILINE_COMMENT;
                 }
                 if (l->sz == 1 && l->tok[0] == '/' && ch == '/')
@@ -179,7 +304,6 @@ int lex(Lexer* l, Buffer* buf)
                     // single-line comment
                     advance_rowcol(&l->rc, buf->buf[i++]);
                     l->sz = 0;
-                    l->state = LEX_COMMENT;
                     goto LEX_COMMENT;
                 }
                 if (l->sz == 1 && symbol_is_compound(l->tok[0], ch))
@@ -189,12 +313,12 @@ int lex(Lexer* l, Buffer* buf)
                     continue;
                 }
                 if (rc = emit_token(l)) return rc;
-                l->state = LEX_START2;
                 goto LEX_START2;
             }
             break;
-        case LEX_STRING:
         LEX_STRING:
+            l->state = LEX_STRING;
+        case LEX_STRING:
             for (; i < buf->sz; advance_rowcol(&l->rc, buf->buf[i++]))
             {
                 const char ch = buf->buf[i];
@@ -203,14 +327,12 @@ int lex(Lexer* l, Buffer* buf)
                     // finish string
                     if (rc = emit_token(l)) return rc;
                     advance_rowcol(&l->rc, buf->buf[i++]);
-                    l->state = LEX_START2;
                     goto LEX_START2;
                 }
                 else if (ch == '\\')
                 {
                     // escape
                     advance_rowcol(&l->rc, buf->buf[i++]);
-                    l->state = LEX_STRING1;
                     goto LEX_STRING1;
                 }
                 else if (ch == '\n')
@@ -219,13 +341,13 @@ int lex(Lexer* l, Buffer* buf)
                 }
                 else
                 {
-                    int rc;
                     if (rc = push_tok_char(l, ch)) return rc;
                 }
             }
             break;
-        case LEX_STRING1:
         LEX_STRING1:
+            l->state = LEX_STRING1;
+        case LEX_STRING1:
             if (i < buf->sz)
             {
                 const char ch = buf->buf[i];
@@ -236,16 +358,15 @@ int lex(Lexer* l, Buffer* buf)
                 else
                 {
                     // TODO: handle escape characters
-                    int rc;
                     if (rc = push_tok_char(l, ch)) return rc;
                     advance_rowcol(&l->rc, buf->buf[i++]);
                 }
-                l->state = LEX_STRING;
                 goto LEX_STRING;
             }
             break;
-        case LEX_MULTILINE_COMMENT:
         LEX_MULTILINE_COMMENT:
+            l->state = LEX_MULTILINE_COMMENT;
+        case LEX_MULTILINE_COMMENT:
             for (; i < buf->sz; advance_rowcol(&l->rc, buf->buf[i++]))
             {
                 const char ch = buf->buf[i];
@@ -258,7 +379,6 @@ int lex(Lexer* l, Buffer* buf)
                     l->sz = 0;
                     if (rc = emit_token(l)) return rc;
                     advance_rowcol(&l->rc, buf->buf[i++]);
-                    l->state = LEX_START2;
                     goto LEX_START2;
                 }
                 else
@@ -267,8 +387,9 @@ int lex(Lexer* l, Buffer* buf)
                 }
             }
             break;
-        case LEX_COMMENT:
         LEX_COMMENT:
+            l->state = LEX_COMMENT;
+        case LEX_COMMENT:
             for (; i < buf->sz; advance_rowcol(&l->rc, buf->buf[i++]))
             {
                 const char ch = buf->buf[i];
@@ -277,123 +398,38 @@ int lex(Lexer* l, Buffer* buf)
                     l->sz = 0;
                     if (rc = emit_token(l)) return rc;
                     advance_rowcol(&l->rc, buf->buf[i++]);
-                    l->state = LEX_START;
                     goto LEX_START;
                 }
             }
             break;
-        case LEX_IDENT:
         LEX_IDENT:
+            l->state = LEX_IDENT;
+        case LEX_IDENT:
             for (; i < buf->sz; advance_rowcol(&l->rc, buf->buf[i++]))
             {
                 const char ch = buf->buf[i];
                 if (is_ascii_alnumu(ch))
                 {
-                    int rc;
                     if (rc = push_tok_char(l, ch)) return rc;
                 }
                 else
                 {
-                    if (l->sz == sizeof("__attribute__") - 1 && memcmp("__attribute__", l->tok, l->sz) == 0)
+                    for (size_t i = 0; i < sizeof(s_keywords_table) / sizeof(s_keywords_table[0]); ++i)
                     {
-                        l->state = LEX_ATTRIBUTE;
-                    }
-                    else if (l->sz == sizeof("int") - 1 && memcmp("int", l->tok, l->sz) == 0)
-                    {
-                        l->state = LEX_INT;
-                    }
-                    else if (l->sz == sizeof("void") - 1 && memcmp("void", l->tok, l->sz) == 0)
-                    {
-                        l->state = LEX_VOID;
-                    }
-                    else if (l->sz == sizeof("goto") - 1 && memcmp("goto", l->tok, l->sz) == 0)
-                    {
-                        l->state = LEX_GOTO;
-                    }
-                    else if (l->sz == sizeof("return") - 1 && memcmp("return", l->tok, l->sz) == 0)
-                    {
-                        l->state = LEX_RETURN;
-                    }
-                    else if (l->sz == sizeof("break") - 1 && memcmp("break", l->tok, l->sz) == 0)
-                    {
-                        l->state = LEX_BREAK;
-                    }
-                    else if (l->sz == sizeof("continue") - 1 && memcmp("continue", l->tok, l->sz) == 0)
-                    {
-                        l->state = LEX_CONTINUE;
-                    }
-                    else if (l->sz == sizeof("switch") - 1 && memcmp("switch", l->tok, l->sz) == 0)
-                    {
-                        l->state = LEX_SWITCH;
-                    }
-                    else if (l->sz == sizeof("if") - 1 && memcmp("if", l->tok, l->sz) == 0)
-                    {
-                        l->state = LEX_IF;
-                    }
-                    else if (l->sz == sizeof("for") - 1 && memcmp("for", l->tok, l->sz) == 0)
-                    {
-                        l->state = LEX_FOR;
-                    }
-                    else if (l->sz == sizeof("while") - 1 && memcmp("while", l->tok, l->sz) == 0)
-                    {
-                        l->state = LEX_WHILE;
-                    }
-                    else if (l->sz == sizeof("do") - 1 && memcmp("do", l->tok, l->sz) == 0)
-                    {
-                        l->state = LEX_DO;
-                    }
-                    else if (l->sz == sizeof("auto") - 1 && memcmp("auto", l->tok, l->sz) == 0)
-                    {
-                        l->state = LEX_AUTO;
-                    }
-                    else if (l->sz == sizeof("__string") - 1 && memcmp("__string", l->tok, l->sz) == 0)
-                    {
-                        l->state = LEX_MSTRING;
-                    }
-                    else if (l->sz == sizeof("__unit") - 1 && memcmp("__unit", l->tok, l->sz) == 0)
-                    {
-                        l->state = LEX_UNIT;
-                    }
-                    else if (l->sz == sizeof("struct") - 1 && memcmp("struct", l->tok, l->sz) == 0)
-                    {
-                        l->state = LEX_STRUCT;
-                    }
-                    else if (l->sz == sizeof("short") - 1 && memcmp("short", l->tok, l->sz) == 0)
-                    {
-                        l->state = LEX_INT;
-                    }
-                    else if (l->sz == sizeof("char") - 1 && memcmp("char", l->tok, l->sz) == 0)
-                    {
-                        l->state = LEX_INT;
-                    }
-                    else if (l->sz == sizeof("long") - 1 && memcmp("long", l->tok, l->sz) == 0)
-                    {
-                        l->state = LEX_INT;
-                    }
-                    else if (l->sz == sizeof("register") - 1 && memcmp("register", l->tok, l->sz) == 0)
-                    {
-                        l->state = LEX_REGISTER;
-                    }
-                    else if (l->sz == sizeof("const") - 1 && memcmp("const", l->tok, l->sz) == 0)
-                    {
-                        l->state = LEX_CONST;
-                    }
-                    else if (l->sz == sizeof("volatile") - 1 && memcmp("volatile", l->tok, l->sz) == 0)
-                    {
-                        l->state = LEX_VOLATILE;
-                    }
-                    else if (l->sz == sizeof("else") - 1 && memcmp("else", l->tok, l->sz) == 0)
-                    {
-                        l->state = LEX_ELSE;
+                        if (l->sz == s_keywords_table[i].len && memcmp(l->tok, s_keywords_table[i].txt, l->sz) == 0)
+                        {
+                            l->state = s_keywords_table[i].state;
+                            break;
+                        }
                     }
                     if (rc = emit_token(l)) return rc;
-                    l->state = LEX_START2;
                     goto LEX_START2;
                 }
             }
             break;
-        case LEX_NUMBER:
         LEX_NUMBER:
+            l->state = LEX_NUMBER;
+        case LEX_NUMBER:
             for (; i < buf->sz; advance_rowcol(&l->rc, buf->buf[i++]))
             {
                 const char ch = buf->buf[i];
@@ -401,7 +437,6 @@ int lex(Lexer* l, Buffer* buf)
                 {
                     if (l->sz == sizeof(l->tok) - 1)
                     {
-                        int rc;
                         if (rc = push_tok_char(l, ch)) return rc;
                     }
                     l->tok[l->sz++] = ch;
@@ -409,7 +444,6 @@ int lex(Lexer* l, Buffer* buf)
                 else
                 {
                     if (rc = emit_token(l)) return rc;
-                    l->state = LEX_START2;
                     goto LEX_START2;
                 }
             }

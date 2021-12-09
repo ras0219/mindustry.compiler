@@ -1,7 +1,8 @@
 #include "array.h"
 
-#include <stdlib.h>
 #include <string.h>
+
+#include "stdlibe.h"
 
 void array_init(struct Array* arr) { memset(arr, 0, sizeof(struct Array)); }
 void* array_alloc(struct Array* arr, size_t sz)
@@ -13,7 +14,7 @@ void* array_alloc(struct Array* arr, size_t sz)
         {
             arr->cap = arr->cap ? arr->cap * 2 : sz * 4;
         } while (arr->sz > arr->cap);
-        arr->data = realloc(arr->data, arr->cap);
+        arr->data = my_realloc(arr->data, arr->cap);
     }
     return arr->data + arr->sz - sz;
 }
@@ -35,7 +36,7 @@ void array_reserve(struct Array* arr, size_t sz)
     if (sz > arr->cap)
     {
         arr->cap = sz;
-        arr->data = realloc(arr->data, arr->cap);
+        arr->data = my_realloc(arr->data, arr->cap);
     }
 }
 void* array_push_ptr(struct Array* arr, void* data) { return array_push(arr, &data, sizeof(data)); }

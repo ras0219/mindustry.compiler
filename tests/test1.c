@@ -53,7 +53,7 @@ int test_compile(const char* testname, char* source, const char* binary)
     char outbuf[1024];
     FILE* fout = fmemopen(outbuf, sizeof(outbuf), "w");
     parser_clear_errors();
-    FrontEnd fe;
+    struct FrontEnd fe;
     fe_init(&fe);
     fe.parser.cg.fdebug = NULL;
     fe.parser.cg.fout = fout;

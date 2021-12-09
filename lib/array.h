@@ -2,10 +2,16 @@
 
 #include <stddef.h>
 
+/// <summary>
+/// Resizable array
+/// </summary>
 struct Array
 {
+    // size in bytes
     size_t sz;
+    // capacity in bytes
     size_t cap;
+    // allocated buffer
     void* data;
 };
 

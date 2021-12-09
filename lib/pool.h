@@ -2,6 +2,9 @@
 
 #include <stddef.h>
 
+/// <summary>
+/// Address-stable, resizable element pool.
+/// </summary>
 struct Pool
 {
     size_t sz;

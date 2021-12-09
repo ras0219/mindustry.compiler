@@ -8,10 +8,8 @@
             "name": "(gdb) Launch",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${env:BUILD_DIR}/main",
-            "args": [
-                "${workspaceFolder}/examples/test.c"
-            ],
+            "program": "${env:BUILD_DIR}/runall-test",
+            "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
             "environment": [],

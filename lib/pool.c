@@ -1,7 +1,8 @@
 #include "pool.h"
 
-#include <stdlib.h>
 #include <string.h>
+
+#include "stdlibe.h"
 
 void pool_init(struct Pool* p)
 {
@@ -31,8 +32,8 @@ void* pool_alloc(struct Pool* p, size_t sz)
         }
     }
     ++p->sz_buckets;
-    p->data = realloc(p->data, p->sz_buckets * sizeof(void*));
-    return p->data[p->sz_buckets - 1] = malloc((4 << p->sz_buckets) * sz);
+    p->data = (void**)my_realloc(p->data, p->sz_buckets * sizeof(void*));
+    return p->data[p->sz_buckets - 1] = my_malloc((4 << p->sz_buckets) * sz);
 }
 void* pool_push(struct Pool* p, const void* src, size_t sz)
 {

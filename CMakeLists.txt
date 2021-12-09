@@ -10,7 +10,7 @@ project(mindustry.compiler C)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
-add_compile_options(-Werror -Wno-parentheses -std=c11)
+add_compile_options(-Werror -std=c11 -Wall -Wno-parentheses -Wno-missing-braces)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Webassembly")
     set(CMAKE_RUNTIME_OUTPUT_DIRECTORY web)

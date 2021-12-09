@@ -1,6 +1,5 @@
 #include <limits.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include "ast.h"
@@ -8,6 +7,7 @@
 #include "lexstate.h"
 #include "parsestate.h"
 #include "pool.h"
+#include "stdlibe.h"
 #include "symbol.h"
 #include "tok.h"
 
@@ -191,12 +191,12 @@ static void scope_shrink(struct Scope* s, size_t sz)
         s->binds.sz = sz * sizeof(struct Binding);
     }
 }
-static void scope_pop(struct Scope* s)
-{
-    const size_t sz = scope_size(s) - 1;
-    s->strings.sz = scope_data(s)[sz].ident_offset;
-    s->binds.sz = sz * sizeof(struct Binding);
-}
+// static void scope_pop(struct Scope* s)
+//{
+//    const size_t sz = scope_size(s) - 1;
+//    s->strings.sz = scope_data(s)[sz].ident_offset;
+//    s->binds.sz = sz * sizeof(struct Binding);
+//}
 static size_t scope_insert(struct Scope* s, const char* ident, struct Symbol* sym)
 {
     const size_t sz = scope_size(s);
@@ -400,8 +400,6 @@ enum Precedence
 };
 
 static int compile_expr(Parser* p, struct Expr* expr, struct ValDest* dst, struct CompoundBlock* bb);
-
-static char* my_strdup(const char* s) { return strcpy(malloc(strlen(s) + 1), s); }
 
 static const char* parser_prepare_dst_reg(Parser* p, struct ValDest* dst, struct CompoundBlock* bb)
 {
@@ -829,10 +827,10 @@ struct TypeCategory
 };
 
 static struct TypeStr s_type_unknown = {};
-static struct TypeCategory s_typecat_unknown = {
-    .type = &s_type_unknown,
-    .cat = CAT_UNKNOWN,
-};
+// static struct TypeCategory s_typecat_unknown = {
+//    .type = &s_type_unknown,
+//    .cat = CAT_UNKNOWN,
+//};
 static struct TypeStr s_type_literal_int = {
     .buf = {'I', 'c'},
     .used = 2,
@@ -845,10 +843,10 @@ static struct TypeStr s_type_void = {
     .buf = {'V'},
     .used = 1,
 };
-static struct TypeStr s_type_char = {
-    .buf = {'C'},
-    .used = 1,
-};
+// static struct TypeStr s_type_char = {
+//    .buf = {'C'},
+//    .used = 1,
+//};
 static struct TypeStr s_type_mstr = {
     .buf = {'M'},
     .used = 1,
@@ -1027,7 +1025,7 @@ static int compile_expr_lit(Parser* p, struct ExprLit* e, struct ValDest* dst, s
         {
             return parser_ferror(&e->tok->rc, "error: string constants cannot represent \"\n");
         }
-        char* heap_s = (char*)malloc(slen + 3);
+        char* heap_s = (char*)my_malloc(slen + 3);
         array_push(&p->strings_to_free, &heap_s, sizeof(heap_s));
         heap_s[0] = '"';
         strcpy(heap_s + 1, s);
@@ -1381,11 +1379,11 @@ static int compile_expr_op(Parser* p, struct ExprOp* e, struct ValDest* dst, str
     return 0;
 }
 
-static struct Expr* parser_checked_expr_at(Parser* p, struct ExprCall* e, size_t index)
-{
-    if (index >= e->extent) return NULL;
-    return ((struct Expr**)p->expr_seqs.data)[e->offset + index];
-}
+// static struct Expr* parser_checked_expr_at(Parser* p, struct ExprCall* e, size_t index)
+//{
+//    if (index >= e->extent) return NULL;
+//    return ((struct Expr**)p->expr_seqs.data)[e->offset + index];
+//}
 
 static int compile_expr_call_intrinsic(
     Parser* p, struct ExprCall* e, struct ValDest* dst, struct Symbol* fn, struct CompoundBlock* bb)
@@ -2195,8 +2193,6 @@ static const char* relation_invert(const char* op)
     }
 }
 
-static struct Token* compile_stmt(Parser* p, struct Token* cur_tok, struct CompoundBlock* bb);
-
 static const struct RowCol* expr_rc(struct Expr* e)
 {
     switch (e->kind)
@@ -2295,16 +2291,6 @@ static struct Token* parse_conditional(Parser* p, struct Token* cur_tok, struct 
     if (!(cur_tok = parse_expr(p, cur_tok, p_cond, PRECEDENCE_COMMA))) return NULL;
 
     return token_consume_sym(p, cur_tok, ')');
-}
-
-static struct Token* compile_conditional(
-    Parser* p, struct Token* cur_tok, struct CompoundBlock* bb, const char* jump_to, enum CondInverted inverted)
-{
-    struct Expr* cond;
-    if (!(cur_tok = parse_conditional(p, cur_tok, &cond))) return NULL;
-
-    if (compile_conditional_expr(p, cond, bb, jump_to, inverted)) return NULL;
-    return cur_tok;
 }
 
 struct StmtReturn
@@ -2489,34 +2475,6 @@ static int compile_loop_stmt(Parser* p, struct StmtLoop* stmt, struct CompoundBl
     cg_write_inst_jump(&p->cg, continue_lbl.buf);
     cg_mark_label(&p->cg, break_lbl.buf);
     return 0;
-}
-
-static struct Token* compile_do_while_stmt(Parser* p, struct Token* cur_tok, struct CompoundBlock* bb)
-{
-    struct FreeVar top_lbl = free_var_label(p);
-    struct FreeVar continue_lbl = free_var_label(p);
-    struct FreeVar break_lbl = free_var_label(p);
-    if (parser_spill_registers(p)) return NULL;
-    cg_mark_label(&p->cg, top_lbl.buf);
-    struct CompoundBlock new_cb;
-    cb_init(&new_cb, bb, p);
-    new_cb.break_label = break_lbl.buf;
-    new_cb.continue_label = continue_lbl.buf;
-    if (!(cur_tok = compile_stmt(p, cur_tok, &new_cb))) return NULL;
-    cb_destroy(&new_cb, p);
-    if (cur_tok->type != LEX_WHILE)
-    {
-        return parser_ferror(&cur_tok->rc, "error: expected 'while'\n"), NULL;
-    }
-    ++cur_tok;
-    if (parser_spill_registers(p)) return NULL;
-    cg_mark_label(&p->cg, continue_lbl.buf);
-    if (!(cur_tok = compile_conditional(p, cur_tok, bb, top_lbl.buf, COND_NORMAL))) return NULL;
-    {
-        if (parser_spill_registers(p)) return NULL;
-        cg_mark_label(&p->cg, break_lbl.buf);
-    }
-    return token_consume_sym(p, cur_tok, ';');
 }
 
 static struct Token* parse_stmt(Parser* p, struct Token* cur_tok, struct Expr** p_expr);
@@ -2796,13 +2754,6 @@ static struct Token* parse_stmt(Parser* p, struct Token* cur_tok, struct Expr** 
     }
 }
 
-static struct Token* compile_stmt(Parser* p, struct Token* cur_tok, struct CompoundBlock* bb)
-{
-    struct Expr* expr;
-    if (!(cur_tok = parse_stmt(p, cur_tok, &expr))) return NULL;
-    if (compile_stmt_expr(p, expr, bb)) return NULL;
-    return cur_tok;
-}
 static int compile_decl_init(Parser* p, struct Decl* decl, struct CompoundBlock* bb)
 {
     if (decl->init)
@@ -3111,7 +3062,7 @@ static int is_builtin_fn_expr(struct Expr* fn)
     return 0;
 }
 
-static void* find_with_stride(void* arr_start, size_t arr_size, void* key, size_t stride)
+__attribute__((unused)) static void* find_with_stride(void* arr_start, size_t arr_size, void* key, size_t stride)
 {
     for (size_t i = 0; i < arr_size; i += stride)
     {
@@ -3120,6 +3071,7 @@ static void* find_with_stride(void* arr_start, size_t arr_size, void* key, size_
     }
     return NULL;
 }
+
 static void* array_find_ptr(void* arr_start, size_t arr_size, void* key)
 {
     for (size_t i = 0; i < arr_size; i += sizeof(void*))
@@ -3139,7 +3091,8 @@ struct Elaborator
     struct Array callees_spans;
     struct Array callees_seqs;
 };
-static void elaborator_destroy(struct Elaborator* elab)
+
+__attribute__((unused)) static void elaborator_destroy(struct Elaborator* elab)
 {
     array_destroy(&elab->fns);
     array_destroy(&elab->callees_spans);
@@ -3687,7 +3640,6 @@ static int dfs_emit(const struct ArrSpan* edgespans, const int* edges, int* out_
 static int elaborate_decls(struct Elaborator* elab, struct Expr** declstmts, size_t count)
 {
     struct Expr** const seqs = elab->p->expr_seqs.data;
-    size_t const seqs_sz = elab->p->expr_seqs.sz / sizeof(struct Expr*);
     for (size_t i = 0; i < count; ++i)
     {
         if (declstmts[i]->kind != STMT_DECLS) abort();
@@ -3712,9 +3664,9 @@ static int elaborate_decls(struct Elaborator* elab, struct Expr** declstmts, siz
     if (n_fns > 0)
     {
         struct ArrSpan* edgespans = elab->callees_spans.data;
-        struct ArrSpan* rev_edgespans = malloc(sizeof(struct ArrSpan) * n_fns);
+        struct ArrSpan* rev_edgespans = my_malloc(sizeof(struct ArrSpan) * n_fns);
         memset(rev_edgespans, 0, sizeof(struct ArrSpan) * n_fns);
-        int* edges = malloc(n_edges * sizeof(int));
+        int* edges = my_malloc(n_edges * sizeof(int));
         {
             struct Decl** edges_decls = elab->callees_seqs.data;
             for (size_t i = 0; i < n_edges; ++i)
@@ -3731,8 +3683,8 @@ static int elaborate_decls(struct Elaborator* elab, struct Expr** declstmts, siz
             rev_edgespans[i - 1].extent = 0;
         }
         rev_edgespans[n_fns - 1].extent = 0;
-        int* rev_edges = malloc(n_edges * sizeof(int));
-        char* is_reentrant = malloc(n_fns);
+        int* rev_edges = my_malloc(n_edges * sizeof(int));
+        char* is_reentrant = my_malloc(n_fns);
         memset(is_reentrant, 0, n_fns);
         for (size_t i = 0; i < n_fns; ++i)
         {
@@ -3746,9 +3698,9 @@ static int elaborate_decls(struct Elaborator* elab, struct Expr** declstmts, siz
             }
         }
 
-        char* arr_visited = malloc(n_fns);
+        char* arr_visited = my_malloc(n_fns);
         memset(arr_visited, 0, n_fns);
-        int* arr_toposort = malloc(sizeof(int) * n_fns);
+        int* arr_toposort = my_malloc(sizeof(int) * n_fns);
         int arr_toposort_offset = 0;
         for (size_t i = 0; i < n_fns; ++i)
         {
@@ -3758,7 +3710,7 @@ static int elaborate_decls(struct Elaborator* elab, struct Expr** declstmts, siz
 
         // dfs with reverse edges in reverse toposort order to find connected components
         memset(arr_visited, 0, n_fns);
-        int* arr_rev_toposort = malloc(sizeof(int) * n_fns);
+        int* arr_rev_toposort = my_malloc(sizeof(int) * n_fns);
         for (size_t i = n_fns; i > 0; --i)
         {
             int emitted = dfs_emit(rev_edgespans, rev_edges, arr_rev_toposort, arr_visited, arr_toposort[i - 1]);
@@ -3811,7 +3763,6 @@ int parse(Parser* p, Lexer* l)
         }
 
         // actually parse
-        const size_t num_toks = p->toks.sz / sizeof(struct Token);
         struct Token* cur_tok = (struct Token*)p->toks.data;
 
         struct Array arr_exprs;

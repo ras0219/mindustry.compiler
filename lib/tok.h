@@ -33,12 +33,13 @@ void parser_clear_errors();
 struct Lexer
 {
     int (*f_on_token)(struct Lexer*);
-    unsigned int in_directive : 1;
-    unsigned int in_include : 1;
     unsigned int state : 8;
+    unsigned int in_directive : 1;
     struct RowCol tok_rc;
     struct RowCol rc;
+    // length of tok
     size_t sz;
+    // null-terminated when calling f_on_token
     char tok[MAX_TOKEN_SIZE];
 };
 
