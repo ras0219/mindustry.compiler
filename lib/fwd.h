@@ -1,5 +1,13 @@
 #pragma once
 
-typedef struct Lexer Lexer;
+struct Lexer;
 struct Parser;
-typedef struct Buffer Buffer;
+struct Buffer;
+struct Elaborator;
+struct BackEnd;
+struct CodeGen;
+struct ElaborateDeclCtx;
+struct Expr;
+struct TACEntry;
+struct TACAddress;
+struct Decl;

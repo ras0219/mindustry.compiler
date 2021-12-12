@@ -1,6 +1,7 @@
 #pragma once
 
 #include "array.h"
+#include "stdio.h"
 #include "tok.h"
 
 enum PreprocessorState
@@ -9,20 +10,24 @@ enum PreprocessorState
     PP_HASH,
     PP_INCLUDE,
     PP_PRAGMA,
-    PP_PRAGMA_MEM,
     PP_IGNORE,
 };
 
 struct FrontEnd
 {
     struct Lexer lexer;
-    struct Parser parser;
+    struct Parser* parser;
+    struct Elaborator* elab;
+    struct BackEnd* be;
+    struct CodeGen* cg;
     enum PreprocessorState preproc;
 
     // Array<char*>
     struct Array files_open;
     // Array<char*>
     struct Array filenames;
+
+    FILE* fout;
 };
 
 void fe_init(struct FrontEnd* fe);

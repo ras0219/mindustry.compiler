@@ -4,30 +4,184 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "errors.h"
+#include "tac.h"
 #include "tok.h"
+#include "unwrap.h"
 
 void cg_init(struct CodeGen* cg)
 {
-    cg->lines = 0;
-    array_init(&cg->text);
-    array_init(&cg->labels);
-    array_init(&cg->label_strs);
-    memset(&cg->memory, 0, sizeof(cg->memory));
     cg->fdebug = NULL;
-    cg->fout = stdout;
+    array_init(&cg->const_);
+    array_init(&cg->code);
 }
 void cg_destroy(struct CodeGen* cg)
 {
-    array_destroy(&cg->text);
-    array_destroy(&cg->labels);
-    array_destroy(&cg->label_strs);
+    array_destroy(&cg->const_);
+    array_destroy(&cg->code);
 }
+
+__forceinline void cg_debug(struct CodeGen* cg, const char* fmt, ...)
+{
+    if (cg->fdebug)
+    {
+        va_list argp;
+        va_start(argp, fmt);
+        vfprintf(cg->fdebug, fmt, argp);
+        va_end(argp);
+    }
+}
+
+void cg_declare_extern(struct CodeGen* cg, const char* sym)
+{
+    cg_debug(cg, "   : %s\n", sym);
+    array_appendf(&cg->code, "extern %s:proc\n", sym);
+}
+
+void cg_declare_public(struct CodeGen* cg, const char* sym)
+{
+    cg_debug(cg, "   : %s\n", sym);
+    array_appendf(&cg->code, "public %s\n", sym);
+}
+
+void cg_mark_label(struct CodeGen* cg, const char* sym)
+{
+    cg_debug(cg, "   : %s\n", sym);
+    array_appendf(&cg->code, "%s:\n", sym);
+}
+
+void cg_string_constant(struct CodeGen* cg, size_t cidx, const char* str)
+{
+    cg_debug(cg, "   : strconst %d: %s\n", cidx, str);
+    array_appendf(&cg->const_, "@S%d db \"%s\",0\n", cidx, str);
+}
+static int cg_gen_taca(struct CodeGen* cg, struct TACAddress addr)
+{
+    int rc = 0;
+    switch (addr.kind)
+    {
+        case TACA_NAME: array_appendf(&cg->code, "%s", addr.name); break;
+        case TACA_LITERAL: array_appendf(&cg->code, "%s", addr.literal); break;
+        case TACA_CONST: array_appendf(&cg->code, "offset @S%d", addr.const_idx); break;
+        default: return parser_ferror(NULL, "error: unimplemented TACA: %d\n", addr.kind);
+    }
+    return rc;
+}
+
+static const char* const s_reg_names[4] = {"RCX", "RDX", "R8", "R9"};
+
+int cg_gen_taces(struct CodeGen* cg, struct TACEntry* taces, size_t n_taces)
+{
+    int rc = 0;
+    for (size_t i = 0; i < n_taces; ++i)
+    {
+        switch (taces[i].op)
+        {
+            case TACO_PARAM:
+                if (taces[i].arg2.param_idx > 3) return parser_ferror(NULL, "error: only 4 parameters are supported\n");
+                array_appendf(&cg->code, "mov %s, ", s_reg_names[taces[i].arg2.param_idx]);
+                UNWRAP(cg_gen_taca(cg, taces[i].arg1));
+                array_push(&cg->code, "\n", 1);
+                break;
+            case TACO_CALL:
+                array_push(&cg->code, "call ", 5);
+                UNWRAP(cg_gen_taca(cg, taces[i].arg1));
+                array_push(&cg->code, "\n", 1);
+                break;
+            default: return parser_ferror(NULL, "error: unimplemented TACO: %d\n", taces[i].op);
+        }
+    }
+fail:
+    return rc;
+}
+
+int cg_emit(struct CodeGen* cg, FILE* fout)
+{
+    int rc = 0;
+    cg_debug(cg, "cg_emit():\n");
+    const char prelude[] = "option casemap:none\n";
+    UNWRAP(!fwrite(prelude, sizeof(prelude) - 1, 1, fout));
+    if (cg->const_.sz)
+    {
+        UNWRAP(fputs("\n.const\n\n", fout) < 0);
+        UNWRAP(!fwrite(cg->const_.data, cg->const_.sz, 1, fout));
+    }
+    if (cg->code.sz)
+    {
+        UNWRAP(fputs("\n.code\n\n", fout) < 0);
+        UNWRAP(!fwrite(cg->code.data, cg->code.sz, 1, fout));
+    }
+
+    UNWRAP(0 > fputs("END\n", fout));
+
+    return 0;
+
+fail:
+    perror("error: failed to write output");
+    return 1;
+
+#if 0
+    const struct CodeGenLabel lab = {
+        .line = globals_size,
+        .str_len = strlen("__stk__"),
+        .str_offset = cg->label_strs.sz,
+    };
+    array_push(&cg->label_strs, "__stk__", lab.str_len);
+    array_push(&cg->labels, &lab, sizeof(struct CodeGenLabel));
+
+    if (cg->fdebug) fprintf(cg->fdebug, "\nCode Gen\n--------\n");
+    fflush(NULL);
+
+    const char* const text = (const char*)cg->text.data;
+    size_t last_emit_point = 0;
+    size_t i = 0;
+    for (; i < cg->text.sz; ++i)
+    {
+        if (text[i] == '$')
+        {
+            if (fwrite(text + last_emit_point, 1, i - last_emit_point, cg->fout) != i - last_emit_point)
+            {
+                perror("error: failed to write output");
+                abort();
+            }
+            const size_t sym_begin = ++i;
+            do
+            {
+                if (i == cg->text.sz)
+                {
+                    fprintf(stderr, "error: unterminated symbol in generated code\n");
+                    abort();
+                }
+                if (text[i] == '$') break;
+                ++i;
+            } while (1);
+            const struct CodeGenLabel* label = cg_lookup(cg, text + sym_begin, i - sym_begin);
+            if (!label)
+            {
+                // fprintf(stderr, "error: unresolved symbol: '%.*s'\n", (int)(i - sym_begin), text + sym_begin);
+                // abort();
+            }
+            else
+            {
+                fprintf(cg->fout, "%zu", label->line);
+            }
+            last_emit_point = ++i;
+        }
+    }
+    if (fwrite(text + last_emit_point, 1, i - last_emit_point, cg->fout) != i - last_emit_point)
+    {
+        perror("error: failed to write output");
+        abort();
+    }
+#endif
+}
+
+#if 0
 static struct RowCol s_unknown_rc = {
     .file = "<unknown>",
     .row = 1,
     .col = 1,
 };
-
 void cg_write_push_ret(struct CodeGen* cg, struct FreeVar* ret_addr)
 {
     if (ret_addr->buf[0])
@@ -141,7 +295,7 @@ int cg_write_mem(struct CodeGen* cg, const char* addr, const char* val, const st
     if (!addr || !*addr) abort();
     if (!cg->memory.buf[0])
     {
-        return parser_ferror(rc, "error: no memory bank configured yet -- use #pragma memory <memory1>\n"), 1;
+        // return parser_ferror(rc, "error: no memory bank configured yet -- use #pragma memory <memory1>\n"), 1;
     }
     char buf[128];
     snprintf(buf, sizeof(buf), "write %s %s %s", val, cg->memory.buf, addr);
@@ -162,9 +316,8 @@ int cg_read_mem(struct CodeGen* cg, const char* addr, const char* reg, const str
 void cg_write_inst(struct CodeGen* cg, const char* inst)
 {
     if (cg->fdebug) fprintf(cg->fdebug, "%03zu: %s\n", cg->lines, inst);
-    static const char s_nl = '\n';
     array_push(&cg->text, inst, strlen(inst));
-    array_push(&cg->text, &s_nl, 1);
+    array_push(&cg->text, "\n", 1);
     ++cg->lines;
 }
 
@@ -174,24 +327,6 @@ struct CodeGenLabel
     ptrdiff_t str_len;
     size_t line;
 };
-
-void cg_mark_label(struct CodeGen* cg, const char* sym)
-{
-    if (cg->fdebug) fprintf(cg->fdebug, "   : %s\n", sym);
-    const size_t sym_len = strlen(sym);
-    if (sym[0] != '$' || sym_len < 2 || sym[sym_len - 1] != '$')
-    {
-        fprintf(stderr, "internal compiler error\n");
-        abort();
-    }
-    const struct CodeGenLabel lab = {
-        .line = cg->lines,
-        .str_len = sym_len - 2,
-        .str_offset = cg->label_strs.sz,
-    };
-    array_push(&cg->label_strs, sym + 1, lab.str_len);
-    array_push(&cg->labels, &lab, sizeof(struct CodeGenLabel));
-}
 
 static const struct CodeGenLabel* cg_lookup(struct CodeGen* cg, const char* sym, size_t sym_len)
 {
@@ -205,58 +340,6 @@ static const struct CodeGenLabel* cg_lookup(struct CodeGen* cg, const char* sym,
     return NULL;
 }
 
-void cg_emit(struct CodeGen* cg, int globals_size)
-{
-    const struct CodeGenLabel lab = {
-        .line = globals_size,
-        .str_len = strlen("__stk__"),
-        .str_offset = cg->label_strs.sz,
-    };
-    array_push(&cg->label_strs, "__stk__", lab.str_len);
-    array_push(&cg->labels, &lab, sizeof(struct CodeGenLabel));
-
-    if (cg->fdebug) fprintf(cg->fdebug, "\nCode Gen\n--------\n");
-    fflush(NULL);
-
-    const char* const text = (const char*)cg->text.data;
-    size_t last_emit_point = 0;
-    size_t i = 0;
-    for (; i < cg->text.sz; ++i)
-    {
-        if (text[i] == '$')
-        {
-            if (fwrite(text + last_emit_point, 1, i - last_emit_point, cg->fout) != i - last_emit_point)
-            {
-                perror("error: failed to write output");
-                abort();
-            }
-            const size_t sym_begin = ++i;
-            do
-            {
-                if (i == cg->text.sz)
-                {
-                    fprintf(stderr, "error: unterminated symbol in generated code\n");
-                    abort();
-                }
-                if (text[i] == '$') break;
-                ++i;
-            } while (1);
-            const struct CodeGenLabel* label = cg_lookup(cg, text + sym_begin, i - sym_begin);
-            if (!label)
-            {
-                fprintf(stderr, "error: unresolved symbol: '%.*s'\n", (int)(i - sym_begin), text + sym_begin);
-                abort();
-            }
-            fprintf(cg->fout, "%zu", label->line);
-            last_emit_point = ++i;
-        }
-    }
-    if (fwrite(text + last_emit_point, 1, i - last_emit_point, cg->fout) != i - last_emit_point)
-    {
-        perror("error: failed to write output");
-        abort();
-    }
-}
 int cg_set_memory_bank(struct CodeGen* cg, const struct RowCol* rc, const char* mem)
 {
     size_t n = strlen(mem);
@@ -269,3 +352,4 @@ int cg_set_memory_bank(struct CodeGen* cg, const struct RowCol* rc, const char* 
     strcpy(cg->memory.buf, mem);
     return 0;
 }
+#endif

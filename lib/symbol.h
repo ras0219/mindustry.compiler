@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ast.h"
+#include "typestr.h"
 
 struct DeclSpecs
 {
@@ -15,6 +16,8 @@ struct DeclSpecs
     int is_static : 1;
 
     int is_typedef : 1;
+
+    int is_stdcall : 1;
 };
 
 struct Attribute
@@ -36,14 +39,6 @@ struct RegMap
     struct FreeVar mem_loc;
 };
 
-struct TypeStr
-{
-    char buf[31];
-#ifndef NDEBUG
-    char buf_zero_pad;
-#endif
-    unsigned char used : 5;
-};
 struct Symbol
 {
     struct Expr kind;
@@ -58,11 +53,7 @@ struct Symbol
     struct RegMap reg;
 };
 
-struct ArrSpan
-{
-    size_t offset;
-    size_t extent;
-};
+struct RowCol* sym_to_rc(struct Symbol*);
 
 #define ARRAY_ARITY_NONE (-1)
 
@@ -71,6 +62,7 @@ struct Decl
     struct Expr kind;
 
     struct Token* id;
+    const char* name;
     struct Attribute attr;
     struct DeclSpecs specs;
     struct Decl* def;

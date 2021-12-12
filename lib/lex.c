@@ -1,5 +1,6 @@
 #include <stdio.h>
 
+#include "errors.h"
 #include "lexstate.h"
 #include "string.h"
 #include "tok.h"
@@ -125,6 +126,9 @@ static const struct KeywordEntry s_keywords_table[] = {
     KEYWORD("volatile", LEX_VOLATILE),
     KEYWORD("else", LEX_ELSE),
     KEYWORD("static", LEX_STATIC),
+    KEYWORD("extern", LEX_EXTERN),
+    KEYWORD("__stdcall", LEX_STDCALL),
+    KEYWORD("__cdecl", LEX_CDECL),
 };
 
 int lex(Lexer* l, Buffer* buf)

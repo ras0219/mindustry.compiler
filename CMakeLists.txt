@@ -17,7 +17,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Webassembly")
     set(CMAKE_LIBRARY_OUTPUT_DIRECTORY web)
 
     # Use custom CRT
-    file(GLOB CRT_SRC wasm/ffi/*.c wasm/crt/*.c)
+    file(GLOB CRT_SRC wasm/ffi/* wasm/crt/*)
     add_library(mindcc-crt OBJECT ${CRT_SRC})
     target_include_directories(mindcc-crt PUBLIC wasm/crt wasm/ffi)
     link_libraries(mindcc-crt)
@@ -25,18 +25,18 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
     add_compile_options(-D_CRT_SECURE_NO_WARNINGS)
 
     # Extend uCRT with additional posix functions
-    file(GLOB CRT_SRC windows/*.c)
+    file(GLOB CRT_SRC windows/*)
     add_library(mindcc-crt OBJECT ${CRT_SRC})
     target_include_directories(mindcc-crt PUBLIC windows)
     link_libraries(mindcc-crt)
 endif()
 
-file(GLOB LIB lib/*.c)
+file(GLOB LIB lib/*.c lib/*.h)
 add_library(mindcc-lib OBJECT ${LIB})
 target_include_directories(mindcc-lib PUBLIC lib)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Webassembly")
-    file(GLOB SRC wasm/*.c)
+    file(GLOB SRC wasm/*)
     add_library(mindcc-wasmlib SHARED ${SRC})
     target_link_libraries(mindcc-wasmlib PRIVATE mindcc-lib)
     set_target_properties(mindcc-wasmlib PROPERTIES
@@ -67,11 +67,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Webassembly")
 
     install(TARGETS mindcc-wasmlib mindcc-asmjs website DESTINATION "var/run")
 else()
-    file(GLOB SRC cli/*.c)
+    file(GLOB SRC cli/*)
     add_executable(main ${SRC})
     target_link_libraries(main PRIVATE mindcc-lib)
 
-    file(GLOB_RECURSE TEST_SOURCES tests/*.c)
+    file(GLOB_RECURSE TEST_SOURCES tests/*)
     add_executable(runall-test ${TEST_SOURCES})
     target_link_libraries(runall-test PRIVATE mindcc-lib)
     add_test(AllTests runall-test)

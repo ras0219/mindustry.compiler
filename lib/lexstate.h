@@ -37,7 +37,10 @@ enum LexerState
     LEX_CONST,
     LEX_VOLATILE,
     LEX_REGISTER,
+    LEX_EXTERN,
     LEX_AUTO,
+    LEX_STDCALL,
+    LEX_CDECL,
     // extensions
     LEX_ATTRIBUTE,
     LEX_MSTRING,

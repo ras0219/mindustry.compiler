@@ -4,31 +4,36 @@
 
 #include "freevar.h"
 
+#define X_AST_KIND(Y)                                                                                                  \
+    Y(EXPR_SYM)                                                                                                        \
+    Y(EXPR_LIT)                                                                                                        \
+    Y(EXPR_CAST)                                                                                                       \
+    Y(EXPR_OP)                                                                                                         \
+    Y(EXPR_CALL)                                                                                                       \
+    Y(AST_DECL)                                                                                                        \
+    Y(STMT_DECLS)                                                                                                      \
+    Y(STMT_RETURN)                                                                                                     \
+    Y(STMT_GOTO)                                                                                                       \
+    Y(STMT_IF)                                                                                                         \
+    Y(STMT_LOOP)                                                                                                       \
+    Y(STMT_BLOCK)                                                                                                      \
+    Y(STMT_LABEL)                                                                                                      \
+    Y(STMT_BREAK)                                                                                                      \
+    Y(STMT_CONTINUE)
+
+#define Y_COMMA(Z) Z,
 enum AstKind
 {
-    EXPR_SYM,
-    EXPR_LIT,
-    EXPR_CAST,
-    EXPR_OP,
-    EXPR_CALL,
-    AST_DECL,
-    STMT_DECLS,
-    STMT_RETURN,
-    STMT_GOTO,
-    STMT_IF,
-    STMT_LOOP,
-    STMT_BLOCK,
-    STMT_LABEL,
-    STMT_BREAK,
-    STMT_CONTINUE,
+    X_AST_KIND(Y_COMMA)
 
-    AST_KIND_END_POOLS,
+        AST_KIND_END_POOLS,
 
     STMT_NONE = AST_KIND_END_POOLS,
     AST_SYM,
 };
 
 int ast_kind_is_expr(enum AstKind k);
+const char* ast_kind_to_string(enum AstKind k);
 
 struct Expr
 {
@@ -40,6 +45,7 @@ struct ExprLit
     struct Expr kind;
 
     const struct Token* tok;
+    const char* text;
 };
 
 struct ExprCast
@@ -76,3 +82,66 @@ struct ExprCall
     size_t offset;
     size_t extent;
 };
+
+struct StmtReturn
+{
+    struct Expr kind;
+    struct Token* tok;
+    // may be null
+    struct Expr* expr;
+};
+struct StmtDecls
+{
+    struct Expr kind;
+    size_t offset;
+    size_t extent;
+};
+struct StmtIf
+{
+    struct Expr kind;
+    struct Expr* cond;
+    struct Expr* if_body;
+    // may be null
+    struct Expr* else_body;
+};
+struct StmtGoto
+{
+    struct Expr kind;
+    struct Token* dst;
+};
+struct StmtLoop
+{
+    struct Expr kind;
+    struct Expr* cond;
+    struct Expr* body;
+    // null for while/dowhile
+    struct Expr* init;
+    // null for while/dowhile
+    struct Expr* advance;
+
+    int is_do_while : 1;
+};
+struct StmtBlock
+{
+    struct Expr kind;
+    size_t offset;
+    size_t extent;
+};
+struct StmtLabel
+{
+    struct Expr kind;
+    struct Token* tok;
+    struct Expr* stmt;
+};
+struct StmtBreak
+{
+    struct Expr kind;
+    struct Token* tok;
+};
+struct StmtContinue
+{
+    struct Expr kind;
+    struct Token* tok;
+};
+
+const struct RowCol* expr_to_rc(struct Expr* expr);

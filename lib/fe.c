@@ -4,8 +4,12 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "be.h"
 #include "cg.h"
+#include "elaborator.h"
+#include "errors.h"
 #include "lexstate.h"
+#include "parse.h"
 #include "stdlibe.h"
 #include "tok.h"
 
@@ -40,7 +44,7 @@ static int sublex_on_token(Lexer* l)
     }
     else
     {
-        return parse(&self->fe->parser, &self->lexer);
+        return parser_push(self->fe->parser, &self->lexer);
     }
 }
 
@@ -93,8 +97,6 @@ static int path_is_absolute(const char* path)
 
 static int fe_handle_directive(struct FrontEnd* fe, Lexer* l)
 {
-    printf("tok: %s\n", l->tok);
-
     switch (fe->preproc)
     {
         case PP_INIT:
@@ -182,14 +184,9 @@ static int fe_handle_directive(struct FrontEnd* fe, Lexer* l)
             return 0;
         case PP_PRAGMA:
             HANDLE_DIRECTIVE("once", PP_INIT);
-            HANDLE_DIRECTIVE("memory", PP_PRAGMA_MEM);
             return parser_ferror(&l->tok_rc, "error: unknown pragma directive: %s\n", l->tok), 1;
-        case PP_PRAGMA_MEM:
-        {
-            fe->preproc = PP_INIT;
-            return cg_set_memory_bank(&fe->parser.cg, &l->tok_rc, l->tok);
-        }
     }
+    abort();
 }
 
 static int fe_on_token(Lexer* l)
@@ -211,20 +208,39 @@ static int fe_on_token(Lexer* l)
     }
     else
     {
-        return parse(&self->parser, &self->lexer);
+        return parser_push(self->parser, &self->lexer);
     }
 }
 
 void fe_init(struct FrontEnd* fe)
 {
     fe->preproc = PP_INIT;
-    parser_init(&fe->parser);
+    fe->parser = (struct Parser*)my_malloc(sizeof(struct Parser));
+    parser_init(fe->parser);
+    fe->elab = (struct Elaborator*)my_malloc(sizeof(struct Elaborator));
+    elaborator_init(fe->elab, fe->parser);
+
+    fe->cg = (struct CodeGen*)my_malloc(sizeof(struct CodeGen));
+    cg_init(fe->cg);
+
+    fe->be = (struct BackEnd*)my_malloc(sizeof(struct BackEnd));
+    be_init(fe->be, fe->parser, fe->elab, fe->cg);
+
     array_init(&fe->filenames);
     array_init(&fe->files_open);
+
+    fe->fout = NULL;
 }
 void fe_destroy(struct FrontEnd* fe)
 {
-    parser_destroy(&fe->parser);
+    cg_destroy(fe->cg);
+    free(fe->cg);
+    be_destroy(fe->be);
+    free(fe->be);
+    elaborator_destroy(fe->elab);
+    free(fe->elab);
+    parser_destroy(fe->parser);
+    free(fe->parser);
     char** b = fe->filenames.data;
     for (size_t i = 0; i < fe->filenames.sz / sizeof(char*); ++i)
     {
@@ -247,7 +263,11 @@ int fe_lex_file(struct FrontEnd* fe, const char* filename)
     init_lexer(&fe->lexer, filename, &fe_on_token);
     int rc = lex_file(f, &fe->lexer);
     fclose(f);
-    return rc;
+    if (rc) return rc;
+    if ((rc = parser_parse(fe->parser))) return rc;
+    if ((rc = elaborate(fe->elab))) return rc;
+    if ((rc = be_compile(fe->be))) return rc;
+    return cg_emit(fe->cg, fe->fout);
 }
 
 int fe_lex_file_opened(struct FrontEnd* fe, const char* filename, FILE* f)

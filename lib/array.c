@@ -1,5 +1,7 @@
 #include "array.h"
 
+#include <stdarg.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "stdlibe.h"
@@ -31,11 +33,11 @@ void* array_push_zeroes(struct Array* arr, size_t sz)
     return dst;
 }
 void array_clear(struct Array* arr) { arr->sz = 0; }
-void array_reserve(struct Array* arr, size_t sz)
+void array_reserve(struct Array* arr, size_t cap)
 {
-    if (sz > arr->cap)
+    if (cap > arr->cap)
     {
-        arr->cap = sz;
+        arr->cap = cap;
         arr->data = my_realloc(arr->data, arr->cap);
     }
 }
@@ -47,3 +49,30 @@ void* array_pop_ptr(struct Array* arr)
     return ((void**)arr->data)[arr->sz / sizeof(void*)];
 }
 void array_destroy(struct Array* arr) { free(arr->data); }
+
+int array_appendf(struct Array* arr, const char* fmt, ...)
+{
+    va_list argp;
+    va_start(argp, fmt);
+
+    const size_t start_offset = arr->sz;
+    const size_t remain = arr->cap - arr->sz;
+
+    int size_req = vsnprintf((char*)arr->data + start_offset, remain, fmt, argp);
+
+    if (size_req + 1 > remain)
+    {
+        array_alloc(arr, size_req + 1);
+        size_req = vsnprintf((char*)arr->data + start_offset, size_req + 1, fmt, argp);
+        // pop null byte
+        --arr->sz;
+    }
+    else if (size_req >= 0)
+    {
+        arr->sz += size_req;
+    }
+
+    va_end(argp);
+
+    return size_req;
+}

@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "errors.h"
 #include "fe.h"
 #include "tok.h"
 
@@ -18,6 +19,7 @@ int main(int argc, const char* const* argv)
     }
     struct FrontEnd fe;
     fe_init(&fe);
+    fe.fout = stdout;
     int rc = fe_lex_file(&fe, argv[1]);
     fe_destroy(&fe);
     if (rc)

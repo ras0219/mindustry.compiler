@@ -3,7 +3,10 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "cg.h"
+#include "errors.h"
 #include "fe.h"
+#include "parse.h"
 
 int require_same_lines(const char* buf, size_t buf1sz, const char* str)
 {
@@ -55,8 +58,8 @@ int test_compile(const char* testname, char* source, const char* binary)
     parser_clear_errors();
     struct FrontEnd fe;
     fe_init(&fe);
-    fe.parser.cg.fdebug = NULL;
-    fe.parser.cg.fout = fout;
+    fe.cg->fdebug = NULL;
+    fe.fout = fout;
     FILE* f = fmemopen(source, strlen(source), "r");
     int rc = fe_lex_file_opened(&fe, testname, f);
     fe_destroy(&fe);
