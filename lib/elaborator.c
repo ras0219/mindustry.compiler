@@ -444,6 +444,26 @@ static void elaborate_expr(struct Elaborator* elab,
                 abort();
             }
             if (rty->used == 0) abort();
+            if (rty->buf[rty->used - 1] != '(')
+            {
+                size_t count = expr->extent;
+                while (rty->buf[rty->used - 1] != '(')
+                {
+                    typestr_pop_arg(rty, &expected_aty);
+                    ++count;
+                }
+                parser_tok_error(expr->tok,
+                                 "error: too few arguments in function call: got %zu, expected %zu\n",
+                                 expr->extent,
+                                 count);
+                if (expr->fn->kind == EXPR_SYM)
+                {
+                    struct ExprSym* sym = (struct ExprSym*)expr->fn;
+                    parser_tok_error(sym->tok, "       in call to %s\n", sym->sym->decl->name);
+                }
+                rty->used--;
+                return;
+            }
             rty->used--;
             return;
         }

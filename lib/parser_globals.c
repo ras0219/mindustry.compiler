@@ -38,7 +38,7 @@ int parser_vferror(const struct RowCol* rc, const char* fmt, va_list argp)
     {
         size_t n = snprintf(s_error_buffer + s_error_buf_used,
                             sizeof(s_error_buffer) - s_error_buf_used,
-                            "%s(%d,%d): ",
+                            "%s:%d:%d: ",
                             rc->file,
                             rc->row,
                             rc->col);

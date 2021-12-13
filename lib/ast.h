@@ -31,6 +31,7 @@ enum AstKind
     STMT_NONE = AST_KIND_END_POOLS,
     AST_SYM,
 };
+#undef Y_COMMA
 
 int ast_kind_is_expr(enum AstKind k);
 const char* ast_kind_to_string(enum AstKind k);

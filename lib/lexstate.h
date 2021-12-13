@@ -20,6 +20,11 @@ enum LexerState
     LEX_EOF,
     // keywords
     LEX_INT,
+    LEX_SHORT,
+    LEX_CHAR,
+    LEX_LONG,
+    LEX_UNSIGNED,
+    LEX_SIGNED,
     LEX_VOID,
     LEX_GOTO,
     LEX_RETURN,

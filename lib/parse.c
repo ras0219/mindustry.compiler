@@ -45,7 +45,7 @@ static struct RowCol s_unknown_rc = {
 #define PARSER_DO(...)                                                                                                 \
     do                                                                                                                 \
     {                                                                                                                  \
-        cur_tok = __VA_ARGS__;                                                                                         \
+        cur_tok = (__VA_ARGS__);                                                                                       \
         if (cur_tok == NULL) goto fail;                                                                                \
     } while (0)
 
@@ -347,27 +347,6 @@ static struct Token* parse_expr(Parser* p, struct Token* cur_tok, struct Expr** 
     return parse_expr_continue(p, cur_tok, lhs, ppe, precedence);
 }
 
-enum TypeKind
-{
-    TYPE_UNKNOWN,
-    TYPE_SYM,
-    TYPE_INT,
-    TYPE_VOID,
-    TYPE_CHAR,
-    TYPE_MSTRING,
-    TYPE_FUN,
-    TYPE_PTR,
-    TYPE_ARR,
-};
-
-enum ValueCategory
-{
-    CAT_UNKNOWN,
-    CAT_LVALUE,
-    CAT_XVALUE,
-    CAT_PRVALUE,
-};
-
 enum AttrKind
 {
     ATTR_SYM,
@@ -457,49 +436,37 @@ static struct Token* parse_declspecs(Parser* p, struct Token* cur_tok, struct De
             struct Binding* const cur_bind = scope_find(&p->type_scope, token_str(p, cur_tok));
             if (!cur_bind)
             {
-                if (!specs->type) return parser_ferror(&cur_tok->rc, "error: expected type before identifier\n"), NULL;
+                if (!specs->type) PARSER_FAIL("error: expected type before identifier\n");
                 return cur_tok;
             }
         }
         else if (cur_tok->type == LEX_STRUCT)
         {
             specs->type = cur_tok++;
-            if (cur_tok->type != LEX_IDENT) return parser_ferror(&cur_tok->rc, "error: expected typename\n"), NULL;
+            if (cur_tok->type != LEX_IDENT) PARSER_FAIL("error: expected identifier for struct\n");
         }
-        else if (cur_tok->type == LEX_VOID || cur_tok->type == LEX_INT || cur_tok->type == LEX_MSTRING ||
-                 cur_tok->type == LEX_UNIT)
+        else if (cur_tok->type == LEX_VOID || cur_tok->type == LEX_INT || cur_tok->type == LEX_CHAR ||
+                 cur_tok->type == LEX_MSTRING || cur_tok->type == LEX_UNIT)
         {
             if (specs->type)
-                return parser_ferror(&cur_tok->rc, "error: repeated core declaration specifiers are not allowed\n"),
-                       NULL;
+            {
+                PARSER_FAIL("error: repeated core declaration specifiers are not allowed\n");
+            }
             specs->type = cur_tok;
         }
         else if (cur_tok->type == LEX_CONST)
         {
-            if (specs->is_const)
-            {
-                return parser_ferror(&cur_tok->rc, "error: repeated 'const' declaration specifiers are not allowed\n"),
-                       NULL;
-            }
+            if (specs->is_const) PARSER_FAIL("error: repeated 'const' declaration specifiers are not allowed\n");
             specs->is_const = 1;
         }
         else if (cur_tok->type == LEX_REGISTER)
         {
-            if (specs->is_register)
-            {
-                return parser_ferror(&cur_tok->rc,
-                                     "error: repeated 'register' declaration specifiers are not allowed\n"),
-                       NULL;
-            }
+            if (specs->is_register) PARSER_FAIL("error: repeated 'register' declaration specifiers are not allowed\n");
             specs->is_register = 1;
         }
         else if (cur_tok->type == LEX_EXTERN)
         {
-            if (specs->is_extern)
-            {
-                return parser_ferror(&cur_tok->rc, "error: repeated 'extern' declaration specifiers are not allowed\n"),
-                       NULL;
-            }
+            if (specs->is_extern) PARSER_FAIL("error: repeated 'extern' declaration specifiers are not allowed\n");
             specs->is_extern = 1;
         }
         else if (cur_tok->type == LEX_STDCALL)
@@ -508,21 +475,19 @@ static struct Token* parse_declspecs(Parser* p, struct Token* cur_tok, struct De
         }
         else if (cur_tok->type == LEX_VOLATILE)
         {
-            if (specs->is_volatile)
-            {
-                return parser_ferror(&cur_tok->rc,
-                                     "error: repeated 'volatile' declaration specifiers are not allowed\n"),
-                       NULL;
-            }
+            if (specs->is_volatile) PARSER_FAIL("error: repeated 'volatile' declaration specifiers are not allowed\n");
             specs->is_volatile = 1;
         }
         else
         {
-            if (!specs->type) return parser_ferror(&cur_tok->rc, "error: expected type\n"), NULL;
+            if (!specs->type) PARSER_FAIL("error: expected type\n");
             return cur_tok;
         }
         ++cur_tok;
     } while (1);
+
+fail:
+    return cur_tok;
 }
 
 enum ExpectIdentifier
@@ -717,6 +682,10 @@ static struct TypeStr declspecs_to_type(struct Parser* p, struct DeclSpecs* spec
     {
         ty = s_type_int;
     }
+    else if (specs->type->type == LEX_CHAR)
+    {
+        ty = s_type_char;
+    }
     else if (specs->type->type == LEX_VOID)
     {
         ty = s_type_void;
@@ -889,12 +858,11 @@ fail:
 
 static struct Token* parse_stmts(Parser* p, struct Token* cur_tok, struct Expr** p_expr)
 {
-    struct Array arr_stmts;
-    array_init(&arr_stmts);
+    struct Array arr_stmts = {};
     do
     {
         if (cur_tok->type == LEX_EOF || token_is_sym(p, cur_tok, '}')) break;
-        if (!(cur_tok = parse_stmt(p, cur_tok, array_alloc(&arr_stmts, sizeof(struct Expr*))))) return NULL;
+        PARSER_DO(parse_stmt(p, cur_tok, array_alloc(&arr_stmts, sizeof(struct Expr*))));
     } while (1);
     struct StmtBlock ret = {
         .kind = STMT_BLOCK,
@@ -902,8 +870,9 @@ static struct Token* parse_stmts(Parser* p, struct Token* cur_tok, struct Expr**
         .extent = arr_stmts.sz / sizeof(struct Expr*),
     };
     array_push(&p->expr_seqs, arr_stmts.data, arr_stmts.sz);
-    array_destroy(&arr_stmts);
     *p_expr = pool_push(&p->ast_pools[ret.kind.kind], &ret, sizeof(ret));
+fail:
+    array_destroy(&arr_stmts);
     return cur_tok;
 }
 
@@ -923,14 +892,16 @@ static struct Token* parse_stmt(Parser* p, struct Token* cur_tok, struct Expr** 
         {
             struct StmtReturn ret = {
                 .kind = STMT_RETURN,
-                .tok = cur_tok,
+                .tok = cur_tok++,
             };
-            if (token_is_sym(p, cur_tok + 1, ';'))
+            if (token_is_sym(p, cur_tok, ';'))
             {
-                cur_tok += 2;
+                cur_tok++;
             }
-            else if (!(cur_tok = parse_expr(p, cur_tok + 1, &ret.expr, PRECEDENCE_COMMA)))
-                return NULL;
+            else
+            {
+                PARSER_DO(parse_expr(p, cur_tok, &ret.expr, PRECEDENCE_COMMA));
+            }
             *p_expr = pool_push(&p->ast_pools[ret.kind.kind], &ret, sizeof(ret));
             return cur_tok;
         }
@@ -939,14 +910,14 @@ static struct Token* parse_stmt(Parser* p, struct Token* cur_tok, struct Expr** 
             struct StmtIf ret = {
                 .kind = STMT_IF,
             };
-            size_t scope_sz = scope_size(&p->scope);
-            if (!(cur_tok = parse_conditional(p, cur_tok + 1, &ret.cond))) return NULL;
-            if (!(cur_tok = parse_stmt(p, cur_tok, &ret.if_body))) return NULL;
+            const size_t scope_sz = scope_size(&p->scope);
+            PARSER_DO(parse_conditional(p, cur_tok + 1, &ret.cond));
+            PARSER_DO(parse_stmt(p, cur_tok, &ret.if_body));
             scope_shrink(&p->scope, scope_sz);
 
             if (cur_tok->type == LEX_ELSE)
             {
-                if (!(cur_tok = parse_stmt(p, cur_tok + 1, &ret.else_body))) return NULL;
+                PARSER_DO(parse_stmt(p, cur_tok + 1, &ret.else_body));
                 scope_shrink(&p->scope, scope_sz);
             }
             else
@@ -1115,24 +1086,12 @@ static struct Token* parse_stmt(Parser* p, struct Token* cur_tok, struct Expr** 
         }
         default: return parser_ferror(&cur_tok->rc, "error: expected statement\n"), NULL;
     }
+
+fail:
+    return cur_tok;
 }
 
-void parser_init(struct Parser* p)
-{
-    array_init(&p->stringpool);
-    array_init(&p->toks);
-    autoheap_init(&p->strings_to_free);
-    scope_init(&p->scope);
-    scope_init(&p->type_scope);
-    p->fn = NULL;
-
-    for (size_t i = 0; i < AST_KIND_END_POOLS; ++i)
-    {
-        pool_init(&p->ast_pools[i]);
-    }
-    array_init(&p->expr_seqs);
-    array_init(&p->arr_exprs);
-}
+void parser_init(struct Parser* p) { memset(p, 0, sizeof(struct Parser)); }
 void parser_destroy(struct Parser* p)
 {
     array_destroy(&p->toks);

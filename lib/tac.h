@@ -21,18 +21,30 @@ enum TACO
     TACO_ARG,
 };
 
+#define X_TACA_KIND(Y)                                                                                                 \
+    Y(TACA_VOID)                                                                                                       \
+    Y(TACA_LITERAL)                                                                                                    \
+    Y(TACA_IMM)                                                                                                        \
+    Y(TACA_NAME)                                                                                                       \
+    Y(TACA_FRAME)                                                                                                      \
+    Y(TACA_ARG)                                                                                                        \
+    Y(TACA_REF)                                                                                                        \
+    Y(TACA_CONST)                                                                                                      \
+    Y(TACA_PARAM)
+
+#define Y_SUM(Z) +1
+#define Y_COMMA(Z) Z,
+enum
+{
+    TACA_KIND_COUNT = X_TACA_KIND(Y_SUM),
+};
+
 enum TACAKind
 {
-    TACA_VOID,
-    TACA_LITERAL,
-    TACA_IMM,
-    TACA_NAME,
-    TACA_FRAME,
-    TACA_ARG,
-    TACA_REF,
-    TACA_CONST,
-    TACA_PARAM,
+    X_TACA_KIND(Y_COMMA)
 };
+#undef Y_COMMA
+#undef Y_SUM
 
 struct TACAddress
 {

@@ -2094,8 +2094,10 @@ int be_compile(struct BackEnd* be)
 
                 UNWRAP(be_compile_expr(be, decl->init, &entry.arg1));
 
-                UNWRAP(cg_gen_taces(
-                    be->cg, (struct TACEntry*)be->code.data, array_size(&be->code, sizeof(struct TACEntry))));
+                UNWRAP(cg_gen_taces(be->cg,
+                                    (struct TACEntry*)be->code.data,
+                                    array_size(&be->code, sizeof(struct TACEntry)),
+                                    be->max_frame_size));
                 array_clear(&be->code);
             }
         }

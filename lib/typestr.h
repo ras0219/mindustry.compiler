@@ -54,7 +54,7 @@ static struct TypeStr s_type_literal_int = {
     .used = 2,
 };
 static struct TypeStr s_type_literal_cstr = {
-    .buf = {'I', 'c', 'p'},
+    .buf = {'C', 'c', 'p'},
     .used = 3,
 };
 static struct TypeStr s_type_int = {
@@ -65,10 +65,10 @@ static struct TypeStr s_type_void = {
     .buf = {'V'},
     .used = 1,
 };
-// static struct TypeStr s_type_char = {
-//    .buf = {'C'},
-//    .used = 1,
-//};
+static struct TypeStr s_type_char = {
+    .buf = {'C'},
+    .used = 1,
+};
 static struct TypeStr s_type_mstr = {
     .buf = {'M'},
     .used = 1,
