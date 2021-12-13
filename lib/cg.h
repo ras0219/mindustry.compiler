@@ -12,6 +12,8 @@ struct CodeGen
 
     struct Array const_;
     struct Array code;
+
+    size_t next_label;
 };
 
 void cg_init(struct CodeGen* cg);

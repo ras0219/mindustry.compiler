@@ -252,7 +252,7 @@ void fe_destroy(struct FrontEnd* fe)
 
 int fe_lex_file(struct FrontEnd* fe, const char* filename)
 {
-    FILE* f = fopen(filename, "r");
+    FILE* f = fopen(filename, "rb");
     if (!f)
     {
         char buf[128];

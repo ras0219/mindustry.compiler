@@ -9,12 +9,7 @@
 #include "tok.h"
 #include "unwrap.h"
 
-void cg_init(struct CodeGen* cg)
-{
-    cg->fdebug = NULL;
-    array_init(&cg->const_);
-    array_init(&cg->code);
-}
+void cg_init(struct CodeGen* cg) { memset(cg, 0, sizeof(struct CodeGen)); }
 void cg_destroy(struct CodeGen* cg)
 {
     array_destroy(&cg->const_);
@@ -63,6 +58,9 @@ static int cg_gen_taca(struct CodeGen* cg, struct TACAddress addr)
         case TACA_NAME: array_appendf(&cg->code, "%s", addr.name); break;
         case TACA_LITERAL: array_appendf(&cg->code, "%s", addr.literal); break;
         case TACA_CONST: array_appendf(&cg->code, "offset @S%d", addr.const_idx); break;
+        case TACA_REF: array_appendf(&cg->code, "%zu[RSP]", addr.ref * 8 + 32); break;
+        case TACA_ARG: array_appendf(&cg->code, "%zu[RSP]", addr.arg_idx * 8 + 128); break;
+        case TACA_FRAME: array_appendf(&cg->code, "QWORD PTR [RSP+%zu]", addr.frame_offset + 32); break;
         default: return parser_ferror(NULL, "error: unimplemented TACA: %d\n", addr.kind);
     }
     return rc;
@@ -70,28 +68,96 @@ static int cg_gen_taca(struct CodeGen* cg, struct TACAddress addr)
 
 static const char* const s_reg_names[4] = {"RCX", "RDX", "R8", "R9"};
 
+// static void cg_emit_label(struct CodeGen* cg, size_t lbl)
+//{
+//    cg_debug(cg, "   : $L%zu\n", lbl);
+//    array_appendf(&cg->code, "$L%zu:\n", lbl);
+//}
+// static void cg_jump_label(struct CodeGen* cg, size_t lbl) { array_appendf(&cg->code, "    jmp $L%zu\n", lbl); }
+
 int cg_gen_taces(struct CodeGen* cg, struct TACEntry* taces, size_t n_taces)
 {
     int rc = 0;
+
+    // 4 QWORDS for calls, 11 QWORDS for temps
+    array_appendf(&cg->code, "    sub rsp, 120\n");
+
+    struct Array param_stack = {};
+
+    if (n_taces > 11)
+    {
+        rc = parser_ferror(NULL, "error: function too long (%zu > 11)\n", n_taces);
+        goto fail;
+    }
+
     for (size_t i = 0; i < n_taces; ++i)
     {
         switch (taces[i].op)
         {
-            case TACO_PARAM:
-                if (taces[i].arg2.param_idx > 3) return parser_ferror(NULL, "error: only 4 parameters are supported\n");
-                array_appendf(&cg->code, "mov %s, ", s_reg_names[taces[i].arg2.param_idx]);
+            case TACO_ARG:
+                if (taces[i].arg1.arg_idx > 3)
+                {
+                    rc = parser_ferror(NULL, "error: only 4 parameters are supported\n");
+                    goto fail;
+                }
+                array_appends(&cg->code, "    mov ");
                 UNWRAP(cg_gen_taca(cg, taces[i].arg1));
-                array_push(&cg->code, "\n", 1);
+                array_appendf(&cg->code, ", %s\n", s_reg_names[taces[i].arg1.arg_idx]);
+                break;
+            case TACO_PARAM:
+                if (taces[i].arg2.param_idx > 3)
+                {
+                    rc = parser_ferror(NULL, "error: only 4 parameters are supported\n");
+                    goto fail;
+                }
+                array_appendf(&cg->code, "    mov %s, ", s_reg_names[taces[i].arg2.param_idx]);
+                UNWRAP(cg_gen_taca(cg, taces[i].arg1));
+                array_appends(&cg->code, "\n");
                 break;
             case TACO_CALL:
-                array_push(&cg->code, "call ", 5);
+                array_appends(&cg->code, "    call ");
                 UNWRAP(cg_gen_taca(cg, taces[i].arg1));
-                array_push(&cg->code, "\n", 1);
+                array_appends(&cg->code, "\n");
+                array_appendf(&cg->code, "    mov %zu[RSP], rax\n", i * 8 + 32);
                 break;
-            default: return parser_ferror(NULL, "error: unimplemented TACO: %d\n", taces[i].op);
+            case TACO_MULT:
+                array_appends(&cg->code, "    mov rax, ");
+                UNWRAP(cg_gen_taca(cg, taces[i].arg1));
+                array_appends(&cg->code, "\n");
+                array_appends(&cg->code, "    imul rax, ");
+                UNWRAP(cg_gen_taca(cg, taces[i].arg2));
+                array_appends(&cg->code, "\n");
+                array_appendf(&cg->code, "    mov %zu[RSP], rax\n", i * 8 + 32);
+                break;
+            case TACO_ADD:
+                array_appends(&cg->code, "    mov rax, ");
+                UNWRAP(cg_gen_taca(cg, taces[i].arg1));
+                array_appends(&cg->code, "\n");
+                array_appends(&cg->code, "    add rax, ");
+                UNWRAP(cg_gen_taca(cg, taces[i].arg2));
+                array_appends(&cg->code, "\n");
+                array_appendf(&cg->code, "    mov %zu[RSP], rax\n", i * 8 + 32);
+                break;
+            case TACO_ASSIGN:
+                array_appends(&cg->code, "    mov ");
+                UNWRAP(cg_gen_taca(cg, taces[i].arg1));
+                array_appends(&cg->code, ", ");
+                UNWRAP(cg_gen_taca(cg, taces[i].arg2));
+                array_appends(&cg->code, "\n");
+                break;
+            case TACO_RETURN:
+                array_appends(&cg->code, "    mov rax, ");
+                UNWRAP(cg_gen_taca(cg, taces[i].arg1));
+                array_appends(&cg->code, "\n    add rsp, 120\n    ret 0\n");
+                break;
+            default: rc = parser_ferror(NULL, "error: unimplemented TACO: %d\n", taces[i].op); goto fail;
         }
     }
+
+    array_appends(&cg->code, "    add rsp, 120\n    ret 0\n");
+
 fail:
+    array_destroy(&param_stack);
     return rc;
 }
 
@@ -99,7 +165,12 @@ int cg_emit(struct CodeGen* cg, FILE* fout)
 {
     int rc = 0;
     cg_debug(cg, "cg_emit():\n");
-    const char prelude[] = "option casemap:none\n";
+    const char prelude[] = "option casemap:none\n"
+                           "INCLUDELIB msvcrt.lib\n"
+                           "INCLUDELIB ucrt.lib\n"
+                           "INCLUDELIB vcruntime.lib\n"
+                           "INCLUDELIB kernel32.lib\n"
+                           "INCLUDELIB legacy_stdio_definitions.lib\n";
     UNWRAP(!fwrite(prelude, sizeof(prelude) - 1, 1, fout));
     if (cg->const_.sz)
     {

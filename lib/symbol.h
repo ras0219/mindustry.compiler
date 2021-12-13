@@ -67,15 +67,18 @@ struct Decl
     struct DeclSpecs specs;
     struct Decl* def;
     struct Expr* init;
+    // encompassing function
     struct Decl* parent_decl;
 
     int pointer_levels;
     int array_arity;
     int is_array : 1;
     int is_function : 1;
+    int is_argument : 1;
     int takes_local_addresses : 1;
     int is_nonreentrant : 1;
     int is_stackless : 1;
+    int arg_index;
     size_t offset;
     size_t extent;
 
@@ -83,6 +86,9 @@ struct Decl
 
     // elaboration information
     int elab_index;
+
+    // backend information
+    size_t frame_offset;
 };
 
 struct Decl* decl_get_def(struct Decl*);

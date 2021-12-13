@@ -50,6 +50,13 @@ void* array_pop_ptr(struct Array* arr)
 }
 void array_destroy(struct Array* arr) { free(arr->data); }
 
+size_t array_appends(struct Array* arr, const char* s)
+{
+    const size_t n = strlen(s);
+    array_push(arr, s, n);
+    return n;
+}
+
 int array_appendf(struct Array* arr, const char* fmt, ...)
 {
     va_list argp;

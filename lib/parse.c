@@ -24,6 +24,31 @@ static struct RowCol s_unknown_rc = {
     .col = 1,
 };
 
+#define PARSER_FAIL_RC(RC, ...)                                                                                        \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        parser_ferror(RC, __VA_ARGS__);                                                                                \
+        cur_tok = NULL;                                                                                                \
+        goto fail;                                                                                                     \
+    } while (0)
+
+#define PARSER_FAIL_TOK(TOK, ...)                                                                                      \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        parser_tok_error(TOK, __VA_ARGS__);                                                                            \
+        cur_tok = NULL;                                                                                                \
+        goto fail;                                                                                                     \
+    } while (0)
+
+#define PARSER_FAIL(...) PARSER_FAIL_TOK(cur_tok, __VA_ARGS__)
+
+#define PARSER_DO(...)                                                                                                 \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        cur_tok = __VA_ARGS__;                                                                                         \
+        if (cur_tok == NULL) goto fail;                                                                                \
+    } while (0)
+
 char* token_str(Parser* p, const struct Token* tk) { return (char*)p->stringpool.data + tk->sp_offset; }
 static int token_is_sym(Parser* p, const struct Token* tk, char sym)
 {
@@ -517,6 +542,85 @@ static struct Token* parse_declarator1(Parser* p,
                                        struct Token* cur_tok,
                                        struct Decl* decl,
                                        enum ExpectIdentifier expect_identifier);
+
+static struct Token* parse_declarator_fnargs(Parser* p,
+                                             struct Token* cur_tok,
+                                             struct Decl* decl,
+                                             struct Binding* prev_sym)
+{
+    struct Decl* const prev_fn = p->fn;
+    if (decl->is_array) PARSER_FAIL("error: arrays of functions are not supported\n");
+    if (decl->pointer_levels) PARSER_FAIL("error: pointers to functions are not supported\n");
+    p->fn = decl;
+    decl->is_function = 1;
+    ++cur_tok;
+    typestr_start_call(&decl->sym.type);
+    if (token_is_sym(p, cur_tok, ')'))
+    {
+        typestr_end_call(&decl->sym.type);
+        ++cur_tok;
+    }
+    else
+    {
+#define MAX_ARG_DECLS 16
+        struct Decl* arg_decls[MAX_ARG_DECLS];
+        while (1)
+        {
+            if (decl->extent == MAX_ARG_DECLS)
+            {
+                PARSER_FAIL("error: exceeded maximum function arguments (%d)\n", MAX_ARG_DECLS);
+            }
+            struct DeclSpecs arg_specs = {0};
+            PARSER_DO(parse_declspecs(p, cur_tok, &arg_specs));
+            struct Decl** p_arg_decl = arg_decls + decl->extent++;
+            PARSER_DO(parse_declarator(p, cur_tok, &arg_specs, p_arg_decl, EXPECT_ANY));
+            struct Decl* arg_decl = *p_arg_decl;
+            arg_decl->is_argument = 1;
+            arg_decl->arg_index = decl->extent - 1;
+            typestr_add_arg(&decl->sym.type, &arg_decl->sym.type);
+
+            if (cur_tok->type == LEX_SYMBOL)
+            {
+                const char ch = token_str(p, cur_tok)[0];
+                if (ch == ',')
+                {
+                    ++cur_tok;
+                    continue;
+                }
+                else if (ch == ')')
+                {
+                    typestr_end_call(&decl->sym.type);
+                    ++cur_tok;
+                    break;
+                }
+            }
+            PARSER_FAIL("error: expected ',' and further parameter declarations or ')'\n");
+        }
+        decl->offset = p->expr_seqs.sz / sizeof(struct Expr*);
+        array_push(&p->expr_seqs, arg_decls, decl->extent * sizeof(struct Expr*));
+    }
+    if (prev_sym)
+    {
+        // ensure symbols match
+        if (!symbol_is_equivalent_redecl(prev_sym->sym, &decl->sym))
+        {
+            PARSER_FAIL_TOK(decl->id, "error: declaration doesn't match previous\n");
+        }
+        if (prev_sym->sym->decl->init)
+        {
+            decl->def = prev_sym->sym->decl;
+        }
+        else
+        {
+            prev_sym->sym->decl->def = decl;
+        }
+    }
+
+fail:
+    p->fn = prev_fn;
+    return cur_tok;
+}
+
 static struct Token* parse_declarator_inner(Parser* p,
                                             struct Token* cur_tok,
                                             struct Decl* decl,
@@ -525,8 +629,8 @@ static struct Token* parse_declarator_inner(Parser* p,
     struct Binding* prev_sym = NULL;
     if (token_is_sym(p, cur_tok, '('))
     {
-        if (!(cur_tok = parse_declarator1(p, cur_tok, decl, expect_identifier))) return NULL;
-        if (!(cur_tok = token_consume_sym(p, cur_tok, ')'))) return NULL;
+        PARSER_DO(parse_declarator1(p, cur_tok, decl, expect_identifier));
+        PARSER_DO(token_consume_sym(p, cur_tok, ')'));
     }
     else if (expect_identifier != EXPECT_NO_IDENTIFIER)
     {
@@ -539,79 +643,13 @@ static struct Token* parse_declarator_inner(Parser* p,
         }
         else if (expect_identifier == EXPECT_IDENTIFIER)
         {
-            return parser_ferror(&cur_tok->rc, "error: expected identifier\n"), NULL;
+            PARSER_FAIL("error: expected identifier\n");
         }
     }
 
     if (token_is_sym(p, cur_tok, '('))
     {
-        if (decl->is_array) return parser_ferror(&cur_tok->rc, "error: arrays of functions are not supported\n"), NULL;
-        if (decl->pointer_levels)
-            return parser_ferror(&cur_tok->rc, "error: pointers to functions are not supported\n"), NULL;
-        decl->is_function = 1;
-        ++cur_tok;
-        typestr_start_call(&decl->sym.type);
-        if (token_is_sym(p, cur_tok, ')'))
-        {
-            typestr_end_call(&decl->sym.type);
-            ++cur_tok;
-        }
-        else
-        {
-#define MAX_ARG_DECLS 16
-            struct Decl* arg_decls[MAX_ARG_DECLS];
-            while (1)
-            {
-                if (decl->extent == MAX_ARG_DECLS)
-                {
-                    return parser_ferror(
-                               &cur_tok->rc, "error: exceeded maximum function arguments (%d)\n", MAX_ARG_DECLS),
-                           NULL;
-                }
-                struct DeclSpecs arg_specs = {0};
-                if (!(cur_tok = parse_declspecs(p, cur_tok, &arg_specs))) return NULL;
-                struct Decl** arg_decl = arg_decls + decl->extent++;
-                if (!(cur_tok = parse_declarator(p, cur_tok, &arg_specs, arg_decl, EXPECT_ANY))) return NULL;
-
-                typestr_add_arg(&decl->sym.type, &(*arg_decl)->sym.type);
-
-                if (cur_tok->type == LEX_SYMBOL)
-                {
-                    const char ch = token_str(p, cur_tok)[0];
-                    if (ch == ',')
-                    {
-                        ++cur_tok;
-                        continue;
-                    }
-                    else if (ch == ')')
-                    {
-                        typestr_end_call(&decl->sym.type);
-                        ++cur_tok;
-                        break;
-                    }
-                }
-                return parser_ferror(&cur_tok->rc, "error: expected ',' and further parameter declarations or ')'\n"),
-                       NULL;
-            }
-            decl->offset = p->expr_seqs.sz / sizeof(struct Expr*);
-            array_push(&p->expr_seqs, arg_decls, decl->extent * sizeof(struct Expr*));
-        }
-        if (prev_sym)
-        {
-            // ensure symbols match
-            if (!symbol_is_equivalent_redecl(prev_sym->sym, &decl->sym))
-            {
-                return parser_ferror(&decl->id->rc, "error: declaration doesn't match previous\n"), NULL;
-            }
-            if (prev_sym->sym->decl->init)
-            {
-                decl->def = prev_sym->sym->decl;
-            }
-            else
-            {
-                prev_sym->sym->decl->def = decl;
-            }
-        }
+        PARSER_DO(parse_declarator_fnargs(p, cur_tok, decl, prev_sym));
     }
     else if (token_is_sym(p, cur_tok, '['))
     {
@@ -620,7 +658,7 @@ static struct Token* parse_declarator_inner(Parser* p,
         ++cur_tok;
         if (token_is_sym(p, cur_tok, ']'))
         {
-            if (decl->is_array) return parser_ferror(&cur_tok->rc, "error: arrays of arrays are not supported\n"), NULL;
+            if (decl->is_array) PARSER_FAIL("error: arrays of arrays are not supported\n");
             decl->is_array = 1;
             decl->array_arity = ARRAY_ARITY_NONE;
             ++cur_tok;
@@ -628,16 +666,16 @@ static struct Token* parse_declarator_inner(Parser* p,
         else if (cur_tok->type == LEX_NUMBER)
         {
             decl->array_arity = atoi(token_str(p, cur_tok));
-            if (decl->array_arity < 1)
-                return parser_ferror(&cur_tok->rc, "error: array arity must be positive\n"), NULL;
-            if (!(cur_tok = token_consume_sym(p, cur_tok + 1, ']'))) return NULL;
+            if (decl->array_arity < 1) PARSER_FAIL("error: array arity must be positive\n");
+            PARSER_DO(token_consume_sym(p, cur_tok + 1, ']'));
         }
         else
         {
-            return parser_ferror(&cur_tok->rc, "error: expected number or ']'\n"), NULL;
+            PARSER_FAIL("error: expected number or ']'\n");
         }
         typestr_add_arr(&decl->sym.type, decl->array_arity);
     }
+fail:
     return cur_tok;
 }
 static struct Token* parse_declarator1(Parser* p,
@@ -727,6 +765,7 @@ static struct Token* parse_declarator(Parser* p,
     symbol_init(&decl->sym);
     decl->sym.decl = decl;
     decl->sym.type = declspecs_to_type(p, specs);
+    decl->parent_decl = p->fn;
 
     return parse_declarator1(p, cur_tok, decl, expect_identifier);
 }
@@ -751,10 +790,6 @@ static struct Token* parse_decl(Parser* p, struct Token* cur_tok, struct Array* 
         struct Decl* pdecl;
         if (!(cur_tok = parse_declarator(p, cur_tok, &specs, &pdecl, EXPECT_IDENTIFIER))) return NULL;
         array_push(pdecls, &pdecl, sizeof(pdecl));
-        if (!specs.is_static)
-        {
-            pdecl->sym.decl->parent_decl = p->fn;
-        }
         if (cur_tok->type == LEX_SYMBOL)
         {
             const char ch = token_str(p, cur_tok)[0];
@@ -811,33 +846,33 @@ static struct Token* parse_stmt_decl(Parser* p, struct Token* cur_tok, struct Ex
     const size_t scope_sz = scope_size(&p->scope);
     struct Array arr_decls;
     array_init(&arr_decls);
-    if (!(cur_tok = parse_decl(p, cur_tok, &arr_decls))) return NULL;
+    PARSER_DO(parse_decl(p, cur_tok, &arr_decls));
 
     if (token_is_sym(p, cur_tok, '{'))
     {
         if (p->fn)
         {
-            return parser_ferror(&cur_tok->rc, "error: cannot define function inside another function\n"), NULL;
+            PARSER_FAIL("error: cannot define function inside another function\n");
         }
         if (arr_decls.sz != sizeof(struct Decl*))
         {
-            return parser_ferror(&cur_tok->rc, "error: functions must be declared alone\n"), NULL;
+            PARSER_FAIL("error: functions must be declared alone\n");
         }
         struct Decl* decl = *(struct Decl**)arr_decls.data;
         if (!decl->is_function)
         {
-            return parser_ferror(&cur_tok->rc, "error: only functions may be initialized with a code block\n"), NULL;
+            PARSER_FAIL("error: only functions may be initialized with a code block\n");
         }
         p->fn = decl;
-        if (!(cur_tok = parse_stmts(p, cur_tok + 1, &decl->init))) return NULL;
-        if (!(cur_tok = token_consume_sym(p, cur_tok, '}'))) return NULL;
+        PARSER_DO(parse_stmts(p, cur_tok + 1, &decl->init));
+        PARSER_DO(token_consume_sym(p, cur_tok, '}'));
         // Remove function arguments from the scope
         p->fn = NULL;
         scope_shrink(&p->scope, scope_sz + 1);
     }
     else
     {
-        if (!(cur_tok = token_consume_sym(p, cur_tok, ';'))) return NULL;
+        PARSER_DO(token_consume_sym(p, cur_tok, ';'));
     }
 
     struct StmtDecls ret = {
@@ -846,8 +881,9 @@ static struct Token* parse_stmt_decl(Parser* p, struct Token* cur_tok, struct Ex
         .extent = arr_decls.sz / sizeof(struct Decl*),
     };
     array_push(&p->expr_seqs, arr_decls.data, arr_decls.sz);
-    array_destroy(&arr_decls);
     *p_expr = pool_push(&p->ast_pools[ret.kind.kind], &ret, sizeof(ret));
+fail:
+    array_destroy(&arr_decls);
     return cur_tok;
 }
 

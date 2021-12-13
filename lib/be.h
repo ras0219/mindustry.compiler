@@ -20,6 +20,9 @@ struct BackEnd
     struct Array code;
 
     struct Scope scope;
+
+    size_t frame_size;
+    size_t max_frame_size;
 };
 
 void be_init(struct BackEnd* be, struct Parser* p, struct Elaborator* e, struct CodeGen* cg);

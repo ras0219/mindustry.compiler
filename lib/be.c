@@ -833,286 +833,7 @@ static int compile_stmt_expr(struct BackEnd* p, struct Expr* expr, struct Compou
 
 static int compile_expr_op(struct BackEnd* p, struct ExprOp* e, struct ValDest* dst, struct CompoundBlock* bb)
 {
-    if (!e->lhs) return parser_ice_tok(e->tok);
-
-    const char* const op = token_str(p->parser, e->tok);
-    if (op[0] == '!' && op[1] == '\0')
-    {
-        struct RegMap regmap = {0};
-        struct ValDest lhs = dest_regmap(&regmap);
-        if (compile_expr(p, e->lhs, &lhs, bb)) return 1;
-        const char* const srcreg = parser_prepare_src_reg(p, &lhs, &s_unknown_rc);
-        if (!srcreg) return 1;
-        const char* const dstreg = parser_prepare_dst_reg(p, dst, bb);
-        if (!dstreg) return 1;
-        cg_write_inst_op(p->cg, "!=", dstreg, srcreg, "true");
-        parser_deactivate_reg(&regmap);
-        return 0;
-    }
-    else if (op[0] == '&' && op[1] == '\0' && !e->rhs)
-    {
-        if (e->lhs->kind != EXPR_SYM)
-        {
-            return parser_tok_error(e->tok, "error: attempting to take address of non-symbol\n");
-        }
-        struct ExprSym* lhs_sym = (struct ExprSym*)e->lhs;
-        if (lhs_sym->sym->is_register || lhs_sym->sym->reg.stack_addr == -1)
-        {
-            return parser_tok_error(e->tok, "error: attempting to take address of register\n");
-        }
-        if (lhs_sym->sym->reg.is_global)
-        {
-            char buf[16];
-            snprintf(buf, 16, "%d", lhs_sym->sym->reg.stack_addr);
-            struct ValDest vd = dest_literal(buf);
-            return parser_assign_dsts(p, dst, &vd, bb, &s_unknown_rc);
-        }
-        else
-        {
-            const char* const dstreg = parser_prepare_dst_reg(p, dst, bb);
-            if (!dstreg) return 1;
-
-            cg_write_inst_add(p->cg, dstreg, "__ebp__", lhs_sym->sym->reg.stack_addr);
-        }
-        return 0;
-    }
-    else if (op[0] == '*' && op[1] == '\0' && !e->rhs)
-    {
-        if (dest_is_any(dst))
-        {
-            struct RegMap* dst_regmap = dst->regmap;
-            if (compile_expr(p, e->lhs, dst, bb)) return 1;
-            if (dst->is_reference)
-            {
-                if (dst->kind == DEST_REGMAP && dst->regmap == dst_regmap)
-                {
-                    if (cg_read_mem(p->cg, dst->regmap->rename.buf, dst->regmap->rename.buf, &s_unknown_rc)) return 1;
-                }
-                else
-                {
-                    struct ValDest tmp = dest_regmap(dst->regmap);
-                    parser_prepare_dst_reg(p, &tmp, bb);
-                    if (parser_assign_dsts(p, &tmp, dst, bb, &s_unknown_rc)) return 1;
-                    *dst = tmp;
-                }
-            }
-            dst->is_const = 0;
-            dst->is_reference = 1;
-            return 0;
-        }
-        else
-        {
-            struct RegMap regmap = {0};
-            struct ValDest lhs = dest_regmap(&regmap);
-            if (compile_expr(p, e->lhs, &lhs, bb)) return 1;
-            if (lhs.is_reference)
-            {
-                if (lhs.kind == DEST_REGMAP && lhs.regmap == &regmap)
-                {
-                    if (cg_read_mem(p->cg, lhs.regmap->rename.buf, lhs.regmap->rename.buf, &s_unknown_rc)) return 1;
-                }
-                else
-                {
-                    struct ValDest tmp = dest_regmap(&regmap);
-                    parser_prepare_dst_reg(p, &tmp, bb);
-                    if (parser_assign_dsts(p, &tmp, &lhs, bb, &s_unknown_rc)) return 1;
-                    lhs = tmp;
-                }
-            }
-            lhs.is_reference = 1;
-            lhs.is_const = 0;
-            if (parser_assign_dsts(p, dst, &lhs, bb, &s_unknown_rc)) return 1;
-            parser_deactivate_reg(&regmap);
-        }
-        return 0;
-    }
-    else if (op[0] == '+' && op[1] == '+')
-    {
-        struct RegMap regmap = {0};
-        struct ValDest lhs = dest_regmap(&regmap);
-        if (compile_expr(p, e->lhs, &lhs, bb)) return 1;
-        const char* const srcreg = parser_prepare_src_reg(p, &lhs, &s_unknown_rc);
-        if (!srcreg) return 1;
-        const char* const dstreg = parser_prepare_dst_reg(p, &lhs, bb);
-        if (!dstreg) return 1;
-        cg_write_inst_op(p->cg, "+", dstreg, srcreg, "1");
-        parser_deactivate_reg(&regmap);
-        return 0;
-    }
-    else if (op[0] == '-' && op[1] == '-')
-    {
-        struct RegMap regmap = {0};
-        struct ValDest lhs = dest_regmap(&regmap);
-        if (compile_expr(p, e->lhs, &lhs, bb)) return 1;
-        const char* const srcreg = parser_prepare_src_reg(p, &lhs, &s_unknown_rc);
-        if (!srcreg) return 1;
-        const char* const dstreg = parser_prepare_dst_reg(p, &lhs, bb);
-        if (!dstreg) return 1;
-        cg_write_inst_op(p->cg, "-", dstreg, srcreg, "1");
-        parser_deactivate_reg(&regmap);
-        return 0;
-    }
-
-    if (!e->rhs) return parser_ice_tok(e->tok);
-
-    if (op[0] == '=' && op[1] == '\0')
-    {
-        if (dest_is_any(dst))
-        {
-            if (compile_expr(p, e->lhs, dst, bb)) return 1;
-            if (dst->is_const)
-            {
-                return parser_tok_error(e->tok, "error: illegal assignment to constant\n");
-            }
-            return compile_expr(p, e->rhs, dst, bb);
-        }
-        else
-        {
-            struct RegMap regmap = {0};
-            struct ValDest lhs = dest_regmap(&regmap);
-            if (compile_expr(p, e->lhs, &lhs, bb)) return 1;
-            if (lhs.is_const)
-            {
-                return parser_tok_error(e->tok, "error: illegal assignment to constant\n");
-            }
-            if (compile_expr(p, e->rhs, &lhs, bb)) return 1;
-            if (parser_assign_dsts(p, dst, &lhs, bb, &s_unknown_rc)) return 1;
-            parser_deactivate_reg(&regmap);
-            return 0;
-        }
-    }
-
-    if (op[0] == '+' && op[1] == '=')
-    {
-        if (dest_is_any(dst))
-        {
-            if (compile_expr(p, e->lhs, dst, bb)) return 1;
-            if (dst->is_const)
-            {
-                return parser_tok_error(e->tok, "error: illegal assignment to constant\n");
-            }
-            struct RegMap regmapr = {0};
-            struct ValDest rhs = dest_regmap(&regmapr);
-            if (compile_expr(p, e->rhs, &rhs, bb)) return 1;
-            const char* r2 = parser_prepare_src_reg(p, dst, &s_unknown_rc);
-            if (!r2) return 1;
-            const char* r3 = parser_prepare_src_reg(p, &rhs, &s_unknown_rc);
-            if (!r3) return 1;
-            const char* r1 = parser_prepare_dst_reg(p, dst, bb);
-            if (!r1) return 1;
-            cg_write_inst_op(p->cg, "+", r1, r2, r3);
-            parser_deactivate_reg(&regmapr);
-        }
-        else
-        {
-            struct RegMap regmap = {0};
-            struct ValDest lhs = dest_regmap(&regmap);
-            if (compile_expr(p, e->lhs, &lhs, bb)) return 1;
-            if (lhs.is_const)
-            {
-                return parser_tok_error(e->tok, "error: illegal assignment to constant\n");
-            }
-            struct RegMap regmapr = {0};
-            struct ValDest rhs = dest_regmap(&regmapr);
-            if (compile_expr(p, e->rhs, &rhs, bb)) return 1;
-            const char* r2 = parser_prepare_src_reg(p, &lhs, &s_unknown_rc);
-            if (!r2) return 1;
-            const char* r3 = parser_prepare_src_reg(p, &rhs, &s_unknown_rc);
-            if (!r3) return 1;
-            const char* r1 = parser_prepare_dst_reg(p, &lhs, bb);
-            if (!r1) return 1;
-            cg_write_inst_op(p->cg, "+", r1, r2, r3);
-            if (parser_assign_dsts(p, dst, &lhs, bb, &s_unknown_rc)) return 1;
-            parser_deactivate_reg(&regmapr);
-            parser_deactivate_reg(&regmap);
-            return 0;
-        }
-    }
-    if (op[0] == '|' && op[1] == '|')
-    {
-        struct FreeVar end_lbl = free_var_label(p);
-        struct RegMap regmapl = {0};
-        struct ValDest tmp = dest_regmap(&regmapl);
-        struct ValDest* p_lhs = dest_is_any(dst) ? dst : &tmp;
-
-        const char* lhs_reg = parser_prepare_dst_reg(p, p_lhs, bb);
-        if (!lhs_reg) return 1;
-        cg_write_inst_set(p->cg, lhs_reg, "1");
-        if (compile_conditional_expr(p, (struct Expr*)e, bb, end_lbl.buf, COND_NORMAL)) return 1;
-        lhs_reg = parser_prepare_dst_reg(p, p_lhs, bb);
-        cg_write_inst_set(p->cg, lhs_reg, "0");
-        if (parser_spill_registers(p)) return 1;
-        cg_mark_label(p->cg, end_lbl.buf);
-        if (p_lhs != dst)
-        {
-            if (parser_assign_dsts(p, dst, p_lhs, bb, &s_unknown_rc)) return 1;
-            parser_deactivate_reg(&regmapl);
-        }
-        return 0;
-    }
-    if (op[0] == '&' && op[1] == '&')
-    {
-        struct FreeVar end_lbl = free_var_label(p);
-        struct RegMap regmapl = {0};
-        struct ValDest tmp = dest_regmap(&regmapl);
-        struct ValDest* p_lhs = dest_is_any(dst) ? dst : &tmp;
-
-        const char* lhs_reg = parser_prepare_dst_reg(p, p_lhs, bb);
-        if (!lhs_reg) return 1;
-        cg_write_inst_set(p->cg, lhs_reg, "0");
-        if (compile_conditional_expr(p, (struct Expr*)e, bb, end_lbl.buf, COND_INVERTED)) return 1;
-        lhs_reg = parser_prepare_dst_reg(p, p_lhs, bb);
-        cg_write_inst_set(p->cg, lhs_reg, "1");
-        if (parser_spill_registers(p)) return 1;
-        cg_mark_label(p->cg, end_lbl.buf);
-        if (p_lhs != dst)
-        {
-            if (parser_assign_dsts(p, dst, p_lhs, bb, &s_unknown_rc)) return 1;
-            parser_deactivate_reg(&regmapl);
-        }
-        return 0;
-    }
-
-    if (op[0] == '+' && op[1] == '\0')
-    {
-        return compile_expr_op_add(p, e->lhs, e->rhs, dst, bb, &s_unknown_rc);
-    }
-
-    if (op[0] == '[' && op[1] == '\0')
-    {
-        if (dest_is_any(dst))
-        {
-            if (compile_expr_op_add(p, e->lhs, e->rhs, dst, bb, &s_unknown_rc)) return 1;
-            dst->is_reference = 1;
-            dst->is_const = 0;
-            return 0;
-        }
-        struct RegMap regmapl = {0};
-        struct ValDest lhs = dest_regmap(&regmapl);
-        if (compile_expr_op_add(p, e->lhs, e->rhs, &lhs, bb, &s_unknown_rc)) return 1;
-        lhs.is_reference = 1;
-        dst->is_const = 0;
-        if (parser_assign_dsts(p, dst, &lhs, bb, &s_unknown_rc)) return 1;
-        parser_deactivate_reg(&regmapl);
-        return 0;
-    }
-
-    struct RegMap regmapl = {0};
-    struct ValDest lhs = dest_regmap(&regmapl);
-    struct RegMap regmapr = {0};
-    struct ValDest rhs = dest_regmap(&regmapr);
-    if (compile_expr(p, e->lhs, &lhs, bb)) return 1;
-    if (compile_expr(p, e->rhs, &rhs, bb)) return 1;
-    const char* r2 = parser_prepare_src_reg(p, &lhs, &s_unknown_rc);
-    if (!r2) return 1;
-    const char* r3 = parser_prepare_src_reg(p, &rhs, &s_unknown_rc);
-    if (!r3) return 1;
-    const char* r1 = parser_prepare_dst_reg(p, dst, bb);
-    if (!r1) return 1;
-    cg_write_inst_op(p->cg, op, r1, r2, r3);
-    parser_deactivate_reg(&regmapl);
-    parser_deactivate_reg(&regmapr);
-    return 0;
+    
 }
 
 // static struct Expr* parser_checked_expr_at(struct BackEnd* p, struct ExprCall* e, size_t index)
@@ -1722,11 +1443,13 @@ fail:
 static int be_compile_StmtBlock(struct BackEnd* be, struct StmtBlock* stmt, struct TACAddress* out)
 {
     int rc = 0;
+    int start_frame_size = be->frame_size;
     struct Expr* const* const expr_seqs = (struct Expr**)be->parser->expr_seqs.data;
     for (size_t i = 0; i < stmt->extent; ++i)
     {
         UNWRAP(be_compile_expr(be, expr_seqs[stmt->offset + i], out));
     }
+    be->frame_size = start_frame_size;
 
 fail:
     return rc;
@@ -1779,8 +1502,29 @@ static int be_compile_ExprLit(struct BackEnd* be, struct ExprLit* e, struct TACA
 static int be_compile_ExprSym(struct BackEnd* be, struct ExprSym* esym, struct TACAddress* out)
 {
     if (!esym->sym || !esym->sym->decl) abort();
-    out->kind = TACA_NAME;
-    out->name = decl_get_def(esym->sym->decl)->name;
+    struct Decl* decl = esym->sym->decl;
+    if (decl->is_function)
+    {
+        out->kind = TACA_NAME;
+        out->name = decl_get_def(esym->sym->decl)->name;
+    }
+    else if (decl->parent_decl)
+    {
+        if (decl->is_argument)
+        {
+            out->kind = TACA_ARG;
+            out->arg_idx = decl->arg_index;
+        }
+        else
+        {
+            out->kind = TACA_FRAME;
+            out->frame_offset = decl_get_def(esym->sym->decl)->frame_offset;
+        }
+    }
+    else
+    {
+        return parser_tok_error(esym->tok, "error: unimplemented symbol type\n");
+    }
     return 0;
 }
 
@@ -1791,6 +1535,21 @@ static int be_compile_ExprCall(struct BackEnd* be, struct ExprCall* e, struct TA
     int rc = 0;
 
     struct Expr* const* const expr_seqs = (struct Expr**)be->parser->expr_seqs.data;
+    if (e->extent > 4) return parser_tok_error(e->tok, "error: only 4 parameters are supported (%uz).\n", e->extent);
+
+    struct TACAddress param_addr[4] = {};
+
+    for (size_t i = e->extent; i > 0; --i)
+    {
+        UNWRAP(be_compile_expr(be, expr_seqs[e->offset + i - 1], param_addr + i - 1));
+    }
+    struct TACEntry call = {
+        .op = TACO_CALL,
+        .arg1 = s_taca_void,
+        .arg2 = taca_imm(e->extent),
+    };
+    UNWRAP(be_compile_expr(be, e->fn, &call.arg1));
+
     struct TACEntry param = {
         .op = TACO_PARAM,
         .arg1 = s_taca_void,
@@ -1800,131 +1559,368 @@ static int be_compile_ExprCall(struct BackEnd* be, struct ExprCall* e, struct TA
                 .param_idx = 0,
             },
     };
-
     for (size_t i = e->extent; i > 0; --i)
     {
-        UNWRAP(be_compile_expr(be, expr_seqs[e->offset + i - 1], &param.arg1));
+        param.arg1 = param_addr[i - 1];
         param.arg2.param_idx = i - 1;
         be_push_tace(be, &param);
     }
-
-    struct TACEntry call = {
-        .op = TACO_CALL,
-        .arg1 = s_taca_void,
-        .arg2 = taca_imm(e->extent),
-    };
-    UNWRAP(be_compile_expr(be, e->fn, &call.arg1));
 
     *out = be_push_tace(be, &call);
 
 fail:
     return rc;
+}
 
-#if 0
-    struct RegMap regmap = {0};
-    struct ValDest fn = dest_regmap(&regmap);
-    if (compile_expr(p, e->fn, &fn, bb)) return 1;
+static int be_compile_ExprOp(struct BackEnd* be, struct ExprOp* e, struct TACAddress* out)
+{
+    int rc = 0;
+    if (!e->lhs) return parser_ice_tok(e->tok);
+    const char* const op = token_str(be->parser, e->tok);
 
-    if (fn.kind != DEST_SYM || !fn.sym->decl->is_function)
+    if (op[0] == '*' && op[1] == '\0')
     {
-        return parser_tok_error(e->tok, "error: attempting to call a non-function\n");
+        if (!e->rhs) UNWRAP(parser_tok_error(e->tok, "error: dereference not yet implemented\n"));
+        struct TACEntry tace = {
+            .op = TACO_MULT,
+        };
+        UNWRAP(be_compile_expr(be, e->rhs, &tace.arg2));
+        UNWRAP(be_compile_expr(be, e->lhs, &tace.arg1));
+        *out = be_push_tace(be, &tace);
     }
-
-    if (fn.sym->decl->extent != e->extent)
+    else if (op[0] == '+' && op[1] == '\0')
     {
-        return parser_tok_error(
-            e->tok, "error: function requires %d arguments, %lu provided\n", fn.sym->decl->extent, e->extent);
-    }
-    if (fn.sym->decl->attr.asmstr)
-    {
-        return compile_expr_call_intrinsic(p, e, dst, fn.sym, bb);
+        if (!e->rhs) UNWRAP(parser_tok_error(e->tok, "error: unary plus not yet implemented\n"));
+        struct TACEntry tace = {
+            .op = TACO_ADD,
+        };
+        UNWRAP(be_compile_expr(be, e->rhs, &tace.arg2));
+        UNWRAP(be_compile_expr(be, e->lhs, &tace.arg1));
+        *out = be_push_tace(be, &tace);
     }
     else
     {
-        if (e->extent > PARAM_COUNT)
-        {
-            return parser_tok_error(e->tok, "error: exceeded maximum call arguments (%d)\n", PARAM_COUNT);
-        }
+        UNWRAP(parser_tok_error(e->tok, "error: operation not yet implemented: %s\n", op));
+    }
+fail:
+    return rc;
 
-        if (!bb->fn_sym)
+#if 0
+    if (op[0] == '!' && op[1] == '\0')
+    {
+        struct RegMap regmap = {0};
+        struct ValDest lhs = dest_regmap(&regmap);
+        if (compile_expr(p, e->lhs, &lhs, bb)) return 1;
+        const char* const srcreg = parser_prepare_src_reg(p, &lhs, &s_unknown_rc);
+        if (!srcreg) return 1;
+        const char* const dstreg = parser_prepare_dst_reg(p, dst, bb);
+        if (!dstreg) return 1;
+        cg_write_inst_op(p->cg, "!=", dstreg, srcreg, "true");
+        parser_deactivate_reg(&regmap);
+        return 0;
+    }
+    else if (op[0] == '&' && op[1] == '\0' && !e->rhs)
+    {
+        if (e->lhs->kind != EXPR_SYM)
         {
-            return parser_tok_error(e->tok, "error: not in function scope\n");
+            return parser_tok_error(e->tok, "error: attempting to take address of non-symbol\n");
         }
-
-        struct RegMap arg_regmaps[PARAM_COUNT - 1] = {0};
-        struct ValDest arg_dsts[PARAM_COUNT - 1] = {0};
-        for (size_t i = 1; i < e->extent; ++i)
+        struct ExprSym* lhs_sym = (struct ExprSym*)e->lhs;
+        if (lhs_sym->sym->is_register || lhs_sym->sym->reg.stack_addr == -1)
         {
-            struct ValDest* arg_dst = arg_dsts + i - 1;
-            *arg_dst = dest_regmap(arg_regmaps + i - 1);
-            if (compile_expr(p, ((struct Expr**)p->parser->expr_seqs.data)[e->offset + i], arg_dst, bb)) return 1;
+            return parser_tok_error(e->tok, "error: attempting to take address of register\n");
         }
-
-        if (fn.sym->decl->is_nonreentrant)
+        if (lhs_sym->sym->reg.is_global)
         {
-            const char* const name = token_str(p->parser, fn.sym->decl->id);
-            struct RegMap arg0_regmap = {
-                .rename = nrfun_param(p, 0, name),
-            };
-            if (e->extent > 0)
-            {
-                struct ValDest fv_dst = dest_regmap(&arg0_regmap);
-                if (compile_expr(p, ((struct Expr**)p->parser->expr_seqs.data)[e->offset], &fv_dst, bb)) return 1;
-            }
-            parser_deactivate_reg(&arg0_regmap);
-            for (size_t i = 1; i < e->extent; ++i)
-            {
-                struct FreeVar fv = nrfun_param(p, i, name);
-                if (parser_assign_load(p, arg_dsts[i - 1], fv.buf)) return 1;
-                parser_deactivate_reg(arg_regmaps + i - 1);
-            }
-            if (parser_spill_registers(p)) return 1;
-            if (!bb->fn_sym->decl->is_stackless)
-            {
-                char buf[16];
-                snprintf(buf, sizeof(buf), "%d", bb->frame_size);
-                cg_write_inst_op(p->cg, "+", "__stk__", "__ebp__", buf);
-            }
-            const struct FreeVar fv_ret = nrfun_param_ret(p, name);
-            cg_write_inst_op(p->cg, "+", fv_ret.buf, "1", "@counter");
+            char buf[16];
+            snprintf(buf, 16, "%d", lhs_sym->sym->reg.stack_addr);
+            struct ValDest vd = dest_literal(buf);
+            return parser_assign_dsts(p, dst, &vd, bb, &s_unknown_rc);
         }
         else
         {
-            if (e->extent > PARAM_COUNT)
-            {
-                return parser_tok_error(e->tok, "error: exceeded maximum call arguments (%d)\n", PARAM_COUNT);
-            }
-            struct RegMap arg0_regmap = {
-                .rename = s_freevar_paramreg0,
-            };
-            if (e->extent > 0)
-            {
-                struct ValDest fv_dst = dest_regmap(&arg0_regmap);
-                if (compile_expr(p, ((struct Expr**)p->parser->expr_seqs.data)[e->offset], &fv_dst, bb)) return 1;
-            }
-            parser_deactivate_reg(&arg0_regmap);
-            for (size_t i = 1; i < e->extent; ++i)
-            {
-                if (parser_assign_load(p, arg_dsts[i - 1], PARAM_NAMES_ARR[i])) return 1;
-                parser_deactivate_reg(arg_regmaps + i - 1);
-            }
-            if (parser_spill_registers(p)) return 1;
-            cg_write_inst(p->cg, "op add ret 1 @counter");
+            const char* const dstreg = parser_prepare_dst_reg(p, dst, bb);
+            if (!dstreg) return 1;
+
+            cg_write_inst_add(p->cg, dstreg, "__ebp__", lhs_sym->sym->reg.stack_addr);
         }
-        cg_write_inst_jump(p->cg, fn.sym->reg.rename.buf);
-        if (dst->kind != DEST_VOID)
+        return 0;
+    }
+    else if (op[0] == '*' && op[1] == '\0' && !e->rhs)
+    {
+        if (dest_is_any(dst))
         {
-            struct RegMap ret_regmap = {
-                .rename = s_freevar_paramreg0,
-            };
-            be_push_active_reg(p, &ret_regmap);
-            struct ValDest ret_dst = dest_regmap(&ret_regmap);
-            if (!parser_prepare_dst_reg(p, dst, bb)) return 1;
-            if (parser_assign_dsts(p, dst, &ret_dst, bb, &s_unknown_rc)) return 1;
-            parser_deactivate_reg(&ret_regmap);
+            struct RegMap* dst_regmap = dst->regmap;
+            if (compile_expr(p, e->lhs, dst, bb)) return 1;
+            if (dst->is_reference)
+            {
+                if (dst->kind == DEST_REGMAP && dst->regmap == dst_regmap)
+                {
+                    if (cg_read_mem(p->cg, dst->regmap->rename.buf, dst->regmap->rename.buf, &s_unknown_rc)) return 1;
+                }
+                else
+                {
+                    struct ValDest tmp = dest_regmap(dst->regmap);
+                    parser_prepare_dst_reg(p, &tmp, bb);
+                    if (parser_assign_dsts(p, &tmp, dst, bb, &s_unknown_rc)) return 1;
+                    *dst = tmp;
+                }
+            }
+            dst->is_const = 0;
+            dst->is_reference = 1;
+            return 0;
+        }
+        else
+        {
+            struct RegMap regmap = {0};
+            struct ValDest lhs = dest_regmap(&regmap);
+            if (compile_expr(p, e->lhs, &lhs, bb)) return 1;
+            if (lhs.is_reference)
+            {
+                if (lhs.kind == DEST_REGMAP && lhs.regmap == &regmap)
+                {
+                    if (cg_read_mem(p->cg, lhs.regmap->rename.buf, lhs.regmap->rename.buf, &s_unknown_rc)) return 1;
+                }
+                else
+                {
+                    struct ValDest tmp = dest_regmap(&regmap);
+                    parser_prepare_dst_reg(p, &tmp, bb);
+                    if (parser_assign_dsts(p, &tmp, &lhs, bb, &s_unknown_rc)) return 1;
+                    lhs = tmp;
+                }
+            }
+            lhs.is_reference = 1;
+            lhs.is_const = 0;
+            if (parser_assign_dsts(p, dst, &lhs, bb, &s_unknown_rc)) return 1;
+            parser_deactivate_reg(&regmap);
+        }
+        return 0;
+    }
+    else if (op[0] == '+' && op[1] == '+')
+    {
+        struct RegMap regmap = {0};
+        struct ValDest lhs = dest_regmap(&regmap);
+        if (compile_expr(p, e->lhs, &lhs, bb)) return 1;
+        const char* const srcreg = parser_prepare_src_reg(p, &lhs, &s_unknown_rc);
+        if (!srcreg) return 1;
+        const char* const dstreg = parser_prepare_dst_reg(p, &lhs, bb);
+        if (!dstreg) return 1;
+        cg_write_inst_op(p->cg, "+", dstreg, srcreg, "1");
+        parser_deactivate_reg(&regmap);
+        return 0;
+    }
+    else if (op[0] == '-' && op[1] == '-')
+    {
+        struct RegMap regmap = {0};
+        struct ValDest lhs = dest_regmap(&regmap);
+        if (compile_expr(p, e->lhs, &lhs, bb)) return 1;
+        const char* const srcreg = parser_prepare_src_reg(p, &lhs, &s_unknown_rc);
+        if (!srcreg) return 1;
+        const char* const dstreg = parser_prepare_dst_reg(p, &lhs, bb);
+        if (!dstreg) return 1;
+        cg_write_inst_op(p->cg, "-", dstreg, srcreg, "1");
+        parser_deactivate_reg(&regmap);
+        return 0;
+    }
+
+    if (!e->rhs) return parser_ice_tok(e->tok);
+
+    if (op[0] == '=' && op[1] == '\0')
+    {
+        if (dest_is_any(dst))
+        {
+            if (compile_expr(p, e->lhs, dst, bb)) return 1;
+            if (dst->is_const)
+            {
+                return parser_tok_error(e->tok, "error: illegal assignment to constant\n");
+            }
+            return compile_expr(p, e->rhs, dst, bb);
+        }
+        else
+        {
+            struct RegMap regmap = {0};
+            struct ValDest lhs = dest_regmap(&regmap);
+            if (compile_expr(p, e->lhs, &lhs, bb)) return 1;
+            if (lhs.is_const)
+            {
+                return parser_tok_error(e->tok, "error: illegal assignment to constant\n");
+            }
+            if (compile_expr(p, e->rhs, &lhs, bb)) return 1;
+            if (parser_assign_dsts(p, dst, &lhs, bb, &s_unknown_rc)) return 1;
+            parser_deactivate_reg(&regmap);
+            return 0;
         }
     }
+
+    if (op[0] == '+' && op[1] == '=')
+    {
+        if (dest_is_any(dst))
+        {
+            if (compile_expr(p, e->lhs, dst, bb)) return 1;
+            if (dst->is_const)
+            {
+                return parser_tok_error(e->tok, "error: illegal assignment to constant\n");
+            }
+            struct RegMap regmapr = {0};
+            struct ValDest rhs = dest_regmap(&regmapr);
+            if (compile_expr(p, e->rhs, &rhs, bb)) return 1;
+            const char* r2 = parser_prepare_src_reg(p, dst, &s_unknown_rc);
+            if (!r2) return 1;
+            const char* r3 = parser_prepare_src_reg(p, &rhs, &s_unknown_rc);
+            if (!r3) return 1;
+            const char* r1 = parser_prepare_dst_reg(p, dst, bb);
+            if (!r1) return 1;
+            cg_write_inst_op(p->cg, "+", r1, r2, r3);
+            parser_deactivate_reg(&regmapr);
+        }
+        else
+        {
+            struct RegMap regmap = {0};
+            struct ValDest lhs = dest_regmap(&regmap);
+            if (compile_expr(p, e->lhs, &lhs, bb)) return 1;
+            if (lhs.is_const)
+            {
+                return parser_tok_error(e->tok, "error: illegal assignment to constant\n");
+            }
+            struct RegMap regmapr = {0};
+            struct ValDest rhs = dest_regmap(&regmapr);
+            if (compile_expr(p, e->rhs, &rhs, bb)) return 1;
+            const char* r2 = parser_prepare_src_reg(p, &lhs, &s_unknown_rc);
+            if (!r2) return 1;
+            const char* r3 = parser_prepare_src_reg(p, &rhs, &s_unknown_rc);
+            if (!r3) return 1;
+            const char* r1 = parser_prepare_dst_reg(p, &lhs, bb);
+            if (!r1) return 1;
+            cg_write_inst_op(p->cg, "+", r1, r2, r3);
+            if (parser_assign_dsts(p, dst, &lhs, bb, &s_unknown_rc)) return 1;
+            parser_deactivate_reg(&regmapr);
+            parser_deactivate_reg(&regmap);
+            return 0;
+        }
+    }
+    if (op[0] == '|' && op[1] == '|')
+    {
+        struct FreeVar end_lbl = free_var_label(p);
+        struct RegMap regmapl = {0};
+        struct ValDest tmp = dest_regmap(&regmapl);
+        struct ValDest* p_lhs = dest_is_any(dst) ? dst : &tmp;
+
+        const char* lhs_reg = parser_prepare_dst_reg(p, p_lhs, bb);
+        if (!lhs_reg) return 1;
+        cg_write_inst_set(p->cg, lhs_reg, "1");
+        if (compile_conditional_expr(p, (struct Expr*)e, bb, end_lbl.buf, COND_NORMAL)) return 1;
+        lhs_reg = parser_prepare_dst_reg(p, p_lhs, bb);
+        cg_write_inst_set(p->cg, lhs_reg, "0");
+        if (parser_spill_registers(p)) return 1;
+        cg_mark_label(p->cg, end_lbl.buf);
+        if (p_lhs != dst)
+        {
+            if (parser_assign_dsts(p, dst, p_lhs, bb, &s_unknown_rc)) return 1;
+            parser_deactivate_reg(&regmapl);
+        }
+        return 0;
+    }
+    if (op[0] == '&' && op[1] == '&')
+    {
+        struct FreeVar end_lbl = free_var_label(p);
+        struct RegMap regmapl = {0};
+        struct ValDest tmp = dest_regmap(&regmapl);
+        struct ValDest* p_lhs = dest_is_any(dst) ? dst : &tmp;
+
+        const char* lhs_reg = parser_prepare_dst_reg(p, p_lhs, bb);
+        if (!lhs_reg) return 1;
+        cg_write_inst_set(p->cg, lhs_reg, "0");
+        if (compile_conditional_expr(p, (struct Expr*)e, bb, end_lbl.buf, COND_INVERTED)) return 1;
+        lhs_reg = parser_prepare_dst_reg(p, p_lhs, bb);
+        cg_write_inst_set(p->cg, lhs_reg, "1");
+        if (parser_spill_registers(p)) return 1;
+        cg_mark_label(p->cg, end_lbl.buf);
+        if (p_lhs != dst)
+        {
+            if (parser_assign_dsts(p, dst, p_lhs, bb, &s_unknown_rc)) return 1;
+            parser_deactivate_reg(&regmapl);
+        }
+        return 0;
+    }
+
+    if (op[0] == '+' && op[1] == '\0')
+    {
+        return compile_expr_op_add(p, e->lhs, e->rhs, dst, bb, &s_unknown_rc);
+    }
+
+    if (op[0] == '[' && op[1] == '\0')
+    {
+        if (dest_is_any(dst))
+        {
+            if (compile_expr_op_add(p, e->lhs, e->rhs, dst, bb, &s_unknown_rc)) return 1;
+            dst->is_reference = 1;
+            dst->is_const = 0;
+            return 0;
+        }
+        struct RegMap regmapl = {0};
+        struct ValDest lhs = dest_regmap(&regmapl);
+        if (compile_expr_op_add(p, e->lhs, e->rhs, &lhs, bb, &s_unknown_rc)) return 1;
+        lhs.is_reference = 1;
+        dst->is_const = 0;
+        if (parser_assign_dsts(p, dst, &lhs, bb, &s_unknown_rc)) return 1;
+        parser_deactivate_reg(&regmapl);
+        return 0;
+    }
+
+    struct RegMap regmapl = {0};
+    struct ValDest lhs = dest_regmap(&regmapl);
+    struct RegMap regmapr = {0};
+    struct ValDest rhs = dest_regmap(&regmapr);
+    if (compile_expr(p, e->lhs, &lhs, bb)) return 1;
+    if (compile_expr(p, e->rhs, &rhs, bb)) return 1;
+    const char* r2 = parser_prepare_src_reg(p, &lhs, &s_unknown_rc);
+    if (!r2) return 1;
+    const char* r3 = parser_prepare_src_reg(p, &rhs, &s_unknown_rc);
+    if (!r3) return 1;
+    const char* r1 = parser_prepare_dst_reg(p, dst, bb);
+    if (!r1) return 1;
+    cg_write_inst_op(p->cg, op, r1, r2, r3);
+    parser_deactivate_reg(&regmapl);
+    parser_deactivate_reg(&regmapr);
+    return 0;
 #endif
+}
+
+static int be_compile_StmtReturn(struct BackEnd* be, struct StmtReturn* stmt, struct TACAddress* out)
+{
+    int rc;
+    struct TACEntry entry = {
+        .op = TACO_RETURN,
+    };
+    UNWRAP(be_compile_expr(be, stmt->expr, &entry.arg1));
+    be_push_tace(be, &entry);
+    *out = s_taca_void;
+fail:
+    return rc;
+}
+
+static int be_compile_Decl(struct BackEnd* be, struct Decl* decl, struct TACAddress* out)
+{
+    if (decl->is_function) return 0;
+    int rc = 0;
+    decl->frame_offset = be->frame_size;
+    be->frame_size += 8;
+    be->max_frame_size = be->max_frame_size < be->frame_size ? be->frame_size : be->max_frame_size;
+
+    if (decl->init)
+    {
+        struct TACEntry init = {.op = TACO_ASSIGN,
+                                .arg1 = {
+                                    .kind = TACA_FRAME,
+                                    .frame_offset = decl->frame_offset,
+                                }};
+        UNWRAP(be_compile_expr(be, decl->init, &init.arg2));
+        be_push_tace(be, &init);
+    }
+
+    *out = s_taca_void;
+fail:
+    return rc;
 }
 
 static int be_compile_expr(struct BackEnd* be, struct Expr* e, struct TACAddress* out)
@@ -1939,6 +1935,15 @@ static int be_compile_expr(struct BackEnd* be, struct Expr* e, struct TACAddress
         DISPATCH(STMT_BLOCK, StmtBlock);
         DISPATCH(EXPR_CALL, ExprCall);
         DISPATCH(EXPR_LIT, ExprLit);
+        DISPATCH(EXPR_OP, ExprOp);
+        DISPATCH(STMT_RETURN, StmtReturn);
+        DISPATCH(AST_DECL, Decl);
+        case STMT_NONE: *out = s_taca_void; return 0;
+        default:
+            parser_ferror(expr_to_rc(e), "error: unhandled expr: %s (%d)\n", ast_kind_to_string(e->kind), e->kind);
+            return 1;
+    }
+    return 0;
 #if 0
         case STMT_RETURN:
         {
@@ -2043,11 +2048,6 @@ static int be_compile_expr(struct BackEnd* be, struct Expr* e, struct TACAddress
             abort();
             break;
 #endif
-        default:
-            parser_ferror(expr_to_rc(e), "error: unhandled expr: %s (%d)\n", ast_kind_to_string(e->kind), e->kind);
-            return 1;
-    }
-    return 0;
 }
 
 int be_compile(struct BackEnd* be)
@@ -2081,11 +2081,22 @@ int be_compile(struct BackEnd* be)
             if (decl->init)
             {
                 cg_mark_label(be->cg, decl->name);
-                struct TACAddress addr;
-                UNWRAP(be_compile_expr(be, decl->init, &addr));
+                be->frame_size = 0;
+                be->max_frame_size = 0;
+
+                struct TACEntry entry = {.op = TACO_ARG};
+                for (size_t i = 0; i < decl->extent; ++i)
+                {
+                    entry.arg1.kind = TACA_ARG;
+                    entry.arg1.arg_idx = i;
+                    be_push_tace(be, &entry);
+                }
+
+                UNWRAP(be_compile_expr(be, decl->init, &entry.arg1));
 
                 UNWRAP(cg_gen_taces(
                     be->cg, (struct TACEntry*)be->code.data, array_size(&be->code, sizeof(struct TACEntry))));
+                array_clear(&be->code);
             }
         }
     }

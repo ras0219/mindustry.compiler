@@ -18,6 +18,7 @@ enum TACO
     TACO_LEA,
     TACO_STORE,
     TACO_LOAD,
+    TACO_ARG,
 };
 
 enum TACAKind
@@ -26,6 +27,8 @@ enum TACAKind
     TACA_LITERAL,
     TACA_IMM,
     TACA_NAME,
+    TACA_FRAME,
+    TACA_ARG,
     TACA_REF,
     TACA_CONST,
     TACA_PARAM,
@@ -42,6 +45,8 @@ struct TACAddress
         size_t param_idx;
         size_t ref;
         size_t const_idx;
+        size_t arg_idx;
+        size_t frame_offset;
     };
 };
 
