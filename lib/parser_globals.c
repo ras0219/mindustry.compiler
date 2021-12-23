@@ -6,8 +6,8 @@
 #include "tok.h"
 #include "token.h"
 
-size_t s_error_buf_used = 0;
-char s_error_buffer[1024];
+static size_t s_error_buf_used = 0;
+static char s_error_buffer[4096];
 
 int parser_has_errors() { return s_error_buf_used > 0; }
 
@@ -16,7 +16,10 @@ int parser_tok_error(const struct Token* tok, const char* fmt, ...)
     va_list argp;
     va_start(argp, fmt);
 
-    parser_vferror(&tok->rc, fmt, argp);
+    if (tok)
+        parser_vferror(&tok->rc, fmt, argp);
+    else
+        parser_vferror(NULL, fmt, argp);
 
     va_end(argp);
     return 1;

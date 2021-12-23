@@ -26,6 +26,12 @@ void* array_push(struct Array* arr, const void* src, size_t sz)
     memcpy(dst, src, sz);
     return dst;
 }
+void* array_push_byte(struct Array* arr, char ch)
+{
+    char* dst = array_alloc(arr, 1);
+    *dst = ch;
+    return dst;
+}
 void* array_push_zeroes(struct Array* arr, size_t sz)
 {
     void* dst = array_alloc(arr, sz);

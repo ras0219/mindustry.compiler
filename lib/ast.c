@@ -1,6 +1,7 @@
 #include "ast.h"
 
 #include "rowcol.h"
+#include "symbol.h"
 #include "token.h"
 
 static struct RowCol s_ast_unknown_rc = {
@@ -9,14 +10,21 @@ static struct RowCol s_ast_unknown_rc = {
     .col = 1,
 };
 
-const struct RowCol* expr_to_rc(struct Expr* e)
+#define EXPR_TO_RC(K, T)                                                                                               \
+    case K: return &((const struct T*)e)->tok->rc
+const struct RowCol* expr_to_rc(const struct Expr* e)
 {
     switch (e->kind)
     {
-        case EXPR_SYM: return &((struct ExprSym*)e)->tok->rc;
-        case EXPR_CALL: return &((struct ExprCall*)e)->tok->rc;
-        case EXPR_LIT: return &((struct ExprLit*)e)->tok->rc;
-        case EXPR_OP: return &((struct ExprOp*)e)->tok->rc;
+        EXPR_TO_RC(EXPR_LIT, ExprLit);
+        EXPR_TO_RC(EXPR_CAST, ExprCast);
+        EXPR_TO_RC(EXPR_SYM, ExprSym);
+        EXPR_TO_RC(EXPR_FIELD, ExprSym);
+        EXPR_TO_RC(EXPR_OP, ExprOp);
+        EXPR_TO_RC(STMT_RETURN, StmtReturn);
+        EXPR_TO_RC(AST_DECLARR, DeclArr);
+        EXPR_TO_RC(AST_DECLFN, DeclFn);
+        EXPR_TO_RC(AST_DECLPTR, DeclPtr);
         default: return &s_ast_unknown_rc;
     }
 }

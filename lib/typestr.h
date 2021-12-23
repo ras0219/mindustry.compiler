@@ -1,26 +1,18 @@
 #pragma once
 
-struct TypeStr
+enum
 {
-    char buf[31];
-#ifndef NDEBUG
-    char buf_zero_pad;
-#endif
-    unsigned char used : 5;
+    TYPESTR_BUF_SIZE = 32,
 };
 
-__forceinline int typestr_is_array(struct TypeStr* ts)
+struct TypeStr
 {
-    if (!ts->used) return 0;
-    return ts->buf[ts->used - 1] == ']';
-}
-__forceinline int typestr_is_pointer(struct TypeStr* ts)
-{
-    if (!ts->used) return 0;
-    return ts->buf[ts->used - 1] == 'p';
-}
+    // length counted, first byte is length
+    char buf[TYPESTR_BUF_SIZE];
+};
 
-int typestr_add_const(struct TypeStr* ts);
+#if 0
+__forceinline void typestr_add_const(struct TypeStr* ts) { return ts->buf[ts->buf[0]] == 'c'; }
 
 __forceinline int typestr_add_pointer(struct TypeStr* ts)
 {
@@ -46,9 +38,8 @@ __forceinline int typestr_end_call(struct TypeStr* ts)
     return 0;
 }
 int typestr_add_arr(struct TypeStr* ts, int arity);
-
-static struct TypeStr s_type_unknown = {0};
-
+#endif
+#if 0
 static struct TypeStr s_type_literal_int = {
     .buf = {'I', 'c'},
     .used = 2,
@@ -59,6 +50,14 @@ static struct TypeStr s_type_literal_cstr = {
 };
 static struct TypeStr s_type_int = {
     .buf = {'I'},
+    .used = 1,
+};
+static struct TypeStr s_type_long = {
+    .buf = {'l'},
+    .used = 1,
+};
+static struct TypeStr s_type_short = {
+    .buf = {'s'},
     .used = 1,
 };
 static struct TypeStr s_type_void = {
@@ -77,3 +76,4 @@ static struct TypeStr s_type_unit = {
     .buf = {'U'},
     .used = 1,
 };
+#endif

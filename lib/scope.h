@@ -7,7 +7,7 @@
 struct Binding
 {
     size_t ident_offset;
-    struct Symbol* sym;
+    struct Decl* sym;
 };
 
 struct Scope
@@ -21,5 +21,5 @@ void scope_destroy(struct Scope* s);
 size_t scope_size(struct Scope* s);
 struct Binding* scope_data(struct Scope* s);
 void scope_shrink(struct Scope* s, size_t sz);
-size_t scope_insert(struct Scope* s, const char* ident, struct Symbol* sym);
+size_t scope_insert(struct Scope* s, const char* ident, struct Decl* sym);
 struct Binding* scope_find(struct Scope* s, const char* id);

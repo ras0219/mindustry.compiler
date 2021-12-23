@@ -13,6 +13,27 @@
 #include "token.h"
 #include "unwrap.h"
 
+const char* taca_to_string(enum TACAKind k)
+{
+#define Y(Z)                                                                                                           \
+    case Z: return #Z;
+
+    switch (k)
+    {
+        X_TACA_KIND(Y)
+        default: abort();
+    }
+}
+const char* taco_to_string(enum TACOKind k)
+{
+    switch (k)
+    {
+        X_TACO_KIND(Y)
+        default: abort();
+    }
+}
+
+#undef Y
 static const struct TACAddress s_taca_void = {};
 
 __forceinline static struct TACAddress taca_imm(size_t imm)
@@ -1095,7 +1116,7 @@ static int compile_expr(struct BackEnd* p, struct Expr* e, struct ValDest* dst, 
         case EXPR_SYM:
         {
             struct ExprSym* esym = (struct ExprSym*)e;
-            struct Symbol* sym = &decl_get_def(esym->sym->decl)->sym;
+            struct Symbol* sym = &decl_get_def(esym->decl)->sym;
             struct ValDest sym_dst = dest_sym(sym);
             return parser_assign_dsts(p, dst, &sym_dst, bb, &s_unknown_rc);
         }
@@ -1426,6 +1447,7 @@ static struct TACAddress be_push_tace(struct BackEnd* be, const struct TACEntry*
 }
 
 static int be_compile_expr(struct BackEnd* be, struct Expr* e, struct TACAddress* out);
+static int be_compile_lvalue(struct BackEnd* be, struct Expr* e, struct TACAddress* out);
 
 static int be_compile_StmtDecls(struct BackEnd* be, struct StmtDecls* stmt, struct TACAddress* out)
 {
@@ -1501,29 +1523,25 @@ static int be_compile_ExprLit(struct BackEnd* be, struct ExprLit* e, struct TACA
 
 static int be_compile_ExprSym(struct BackEnd* be, struct ExprSym* esym, struct TACAddress* out)
 {
-    if (!esym->sym || !esym->sym->decl) abort();
-    struct Decl* decl = esym->sym->decl;
-    if (decl->is_function)
+    if (!esym->decl) abort();
+    struct Decl* decl = esym->decl;
+    if (decl->parent_decl)
     {
-        out->kind = TACA_NAME;
-        out->name = decl_get_def(esym->sym->decl)->name;
-    }
-    else if (decl->parent_decl)
-    {
-        if (decl->is_argument)
+        if (decl->arg_index > 0)
         {
             out->kind = TACA_ARG;
-            out->arg_idx = decl->arg_index;
+            out->arg_idx = decl->arg_index - 1;
         }
         else
         {
             out->kind = TACA_FRAME;
-            out->frame_offset = decl_get_def(esym->sym->decl)->frame_offset;
+            out->frame_offset = decl_get_def(esym->decl)->frame_offset;
         }
     }
     else
     {
-        return parser_tok_error(esym->tok, "error: unimplemented symbol type\n");
+        out->kind = TACA_NAME;
+        out->name = decl_get_def(esym->decl)->name;
     }
     return 0;
 }
@@ -1578,32 +1596,75 @@ static int be_compile_ExprOp(struct BackEnd* be, struct ExprOp* e, struct TACAdd
     if (!e->lhs) return parser_ice_tok(e->tok);
     const char* const op = token_str(be->parser, e->tok);
 
-    if (op[0] == '*' && op[1] == '\0')
+    if (e->rhs)
     {
-        if (!e->rhs) UNWRAP(parser_tok_error(e->tok, "error: dereference not yet implemented\n"));
-        struct TACEntry tace = {
-            .op = TACO_MULT,
-        };
-        UNWRAP(be_compile_expr(be, e->rhs, &tace.arg2));
-        UNWRAP(be_compile_expr(be, e->lhs, &tace.arg1));
-        *out = be_push_tace(be, &tace);
-    }
-    else if (op[0] == '+' && op[1] == '\0')
-    {
-        if (!e->rhs) UNWRAP(parser_tok_error(e->tok, "error: unary plus not yet implemented\n"));
-        struct TACEntry tace = {
-            .op = TACO_ADD,
-        };
-        UNWRAP(be_compile_expr(be, e->rhs, &tace.arg2));
-        UNWRAP(be_compile_expr(be, e->lhs, &tace.arg1));
-        *out = be_push_tace(be, &tace);
+        if (op[0] == '*' && op[1] == '\0')
+        {
+            struct TACEntry tace = {
+                .op = TACO_MULT,
+            };
+            UNWRAP(be_compile_expr(be, e->rhs, &tace.arg2));
+            UNWRAP(be_compile_expr(be, e->lhs, &tace.arg1));
+            *out = be_push_tace(be, &tace);
+        }
+        else if (op[0] == '+' && op[1] == '\0')
+        {
+            struct TACEntry tace = {
+                .op = TACO_ADD,
+            };
+            UNWRAP(be_compile_expr(be, e->rhs, &tace.arg2));
+            UNWRAP(be_compile_expr(be, e->lhs, &tace.arg1));
+            *out = be_push_tace(be, &tace);
+        }
+        else if (op[0] == '-' && op[1] == '>')
+        {
+            struct TACEntry tace = {
+                .op = TACO_LOAD,
+            };
+            UNWRAP(be_compile_expr(be, e->lhs, &tace.arg1));
+            *out = be_push_tace(be, &tace);
+        }
+        else if (op[0] == '.' && op[1] == '\0')
+        {
+            UNWRAP(be_compile_expr(be, e->lhs, out));
+        }
+        else if (op[0] == '/' && op[1] == '\0')
+        {
+            struct TACEntry tace = {
+                .op = TACO_DIV,
+            };
+            UNWRAP(be_compile_expr(be, e->rhs, &tace.arg2));
+            UNWRAP(be_compile_expr(be, e->lhs, &tace.arg1));
+            *out = be_push_tace(be, &tace);
+        }
+        else
+        {
+            UNWRAP(parser_tok_error(e->tok, "error: operation not yet implemented: %s\n", op));
+        }
     }
     else
     {
-        UNWRAP(parser_tok_error(e->tok, "error: operation not yet implemented: %s\n", op));
+        if (op[0] == '*' && op[1] == '\0')
+        {
+            struct TACEntry tace = {
+                .op = TACO_LOAD,
+            };
+            UNWRAP(be_compile_expr(be, e->lhs, &tace.arg1));
+            *out = be_push_tace(be, &tace);
+        }
+        else if (op[0] == '+' && op[1] == '\0')
+        {
+            UNWRAP(parser_tok_error(e->tok, "error: unary plus not yet implemented\n"));
+        }
+        else
+        {
+            UNWRAP(parser_tok_error(e->tok, "error: operation not yet implemented: %s\n", op));
+        }
     }
+
 fail:
     return rc;
+}
 
 #if 0
     if (op[0] == '!' && op[1] == '\0')
@@ -1884,7 +1945,6 @@ fail:
     parser_deactivate_reg(&regmapr);
     return 0;
 #endif
-}
 
 static int be_compile_StmtReturn(struct BackEnd* be, struct StmtReturn* stmt, struct TACAddress* out)
 {
@@ -1901,7 +1961,6 @@ fail:
 
 static int be_compile_Decl(struct BackEnd* be, struct Decl* decl, struct TACAddress* out)
 {
-    if (decl->is_function) return 0;
     int rc = 0;
     decl->frame_offset = be->frame_size;
     be->frame_size += 8;
@@ -1909,11 +1968,14 @@ static int be_compile_Decl(struct BackEnd* be, struct Decl* decl, struct TACAddr
 
     if (decl->init)
     {
-        struct TACEntry init = {.op = TACO_ASSIGN,
-                                .arg1 = {
-                                    .kind = TACA_FRAME,
-                                    .frame_offset = decl->frame_offset,
-                                }};
+        struct TACEntry init = {
+            .op = TACO_ASSIGN,
+            .arg1 =
+                {
+                    .kind = TACA_FRAME,
+                    .frame_offset = decl->frame_offset,
+                },
+        };
         UNWRAP(be_compile_expr(be, decl->init, &init.arg2));
         be_push_tace(be, &init);
     }
@@ -1923,6 +1985,127 @@ fail:
     return rc;
 }
 
+static int be_compile_lvalue_ExprSym(struct BackEnd* be, struct ExprSym* e, struct TACAddress* out)
+{
+    if (!e->decl) abort();
+    struct Decl* decl = e->decl;
+    if (decl->parent_decl)
+    {
+        if (decl->arg_index > 0)
+        {
+            out->kind = TACA_ARG_ADDR;
+            out->arg_idx = decl->arg_index - 1;
+        }
+        else
+        {
+            out->kind = TACA_FRAME_ADDR;
+            out->frame_offset = decl_get_def(decl)->frame_offset;
+        }
+    }
+    else
+    {
+        out->kind = TACA_NAME_ADDR;
+        out->name = decl_get_def(decl)->name;
+    }
+    return 0;
+}
+
+static int be_compile_lvalue_ExprField(struct BackEnd* be, struct ExprField* e, struct TACAddress* out)
+{
+    int rc = 0;
+    if (e->is_arrow)
+    {
+        UNWRAP(be_compile_expr(be, e->lhs, out));
+    }
+    else
+    {
+        UNWRAP(be_compile_lvalue(be, e->lhs, out));
+    }
+
+    if (e->decl->frame_offset != 0)
+    {
+        switch (out->kind)
+        {
+            case TACA_FRAME_ADDR: out->frame_offset += e->decl->frame_offset; break;
+            case TACA_FRAME:
+            case TACA_ARG:
+            {
+                struct TACEntry tace = {
+                    .op = TACO_ADD,
+                    .arg1 = *out,
+                    .arg2 =
+                        {
+                            .kind = TACA_IMM,
+                            .imm = e->decl->frame_offset,
+                        },
+                };
+                *out = be_push_tace(be, &tace);
+                break;
+            }
+            default:
+                UNWRAP(parser_tok_error(
+                    e->tok, "error: %s: unhandled taca: %s (%d)\n", __func__, taca_to_string(out->kind), out->kind));
+        }
+    }
+
+fail:
+    return rc;
+}
+
+static int be_dereference(struct BackEnd* be, struct TACAddress* out)
+{
+    int rc = 0;
+    switch (out->kind)
+    {
+        case TACA_FRAME_ADDR: out->kind = TACA_FRAME; break;
+        case TACA_ARG_ADDR: out->kind = TACA_ARG; break;
+        case TACA_NAME_ADDR: out->kind = TACA_NAME; break;
+        default:
+            struct TACEntry tace = {
+                .op = TACO_LOAD,
+                .arg1 = *out,
+            };
+            *out = be_push_tace(be, &tace);
+            break;
+            UNWRAP(parser_tok_error(
+                NULL, "error: %s: unhandled taca: %s (%d)\n", __func__, taca_to_string(out->kind), out->kind));
+    }
+fail:
+    return rc;
+}
+
+static int be_compile_ExprField(struct BackEnd* be, struct ExprField* e, struct TACAddress* out)
+{
+    int rc = 0;
+    UNWRAP(be_compile_lvalue_ExprField(be, e, out));
+    UNWRAP(be_dereference(be, out));
+
+fail:
+    return rc;
+}
+
+static int be_compile_lvalue(struct BackEnd* be, struct Expr* e, struct TACAddress* out)
+{
+#define DISPATCH(ENUM, TYPE)                                                                                           \
+    case ENUM: return be_compile_lvalue_##TYPE(be, (struct TYPE*)e, out);
+
+    switch (e->kind)
+    {
+        DISPATCH(EXPR_SYM, ExprSym);
+        // DISPATCH(EXPR_CALL, ExprCall);
+        // DISPATCH(EXPR_LIT, ExprLit);
+        // DISPATCH(EXPR_OP, ExprOp);
+        case STMT_NONE: *out = s_taca_void; return 0;
+        default:
+            parser_ferror(expr_to_rc(e),
+                          "error: be_compile_lvalue unhandled expr: %s (%d)\n",
+                          ast_kind_to_string(e->kind),
+                          e->kind);
+            return 1;
+    }
+    return 0;
+#undef DISPATCH
+}
 static int be_compile_expr(struct BackEnd* be, struct Expr* e, struct TACAddress* out)
 {
 #define DISPATCH(ENUM, TYPE)                                                                                           \
@@ -1936,14 +2119,21 @@ static int be_compile_expr(struct BackEnd* be, struct Expr* e, struct TACAddress
         DISPATCH(EXPR_CALL, ExprCall);
         DISPATCH(EXPR_LIT, ExprLit);
         DISPATCH(EXPR_OP, ExprOp);
+        DISPATCH(EXPR_FIELD, ExprField);
         DISPATCH(STMT_RETURN, StmtReturn);
         DISPATCH(AST_DECL, Decl);
         case STMT_NONE: *out = s_taca_void; return 0;
         default:
-            parser_ferror(expr_to_rc(e), "error: unhandled expr: %s (%d)\n", ast_kind_to_string(e->kind), e->kind);
+            parser_ferror(expr_to_rc(e),
+                          "error: be_compile_expr unhandled expr: %s (%d)\n",
+                          ast_kind_to_string(e->kind),
+                          e->kind);
             return 1;
     }
     return 0;
+#undef DISPATCH
+}
+
 #if 0
         case STMT_RETURN:
         {
@@ -2048,7 +2238,6 @@ static int be_compile_expr(struct BackEnd* be, struct Expr* e, struct TACAddress
             abort();
             break;
 #endif
-}
 
 int be_compile(struct BackEnd* be)
 {
@@ -2068,9 +2257,12 @@ int be_compile(struct BackEnd* be)
         {
             if (expr_seqs[decls.offset + j]->kind != AST_DECL) abort();
             struct Decl* decl = decl_seqs[decls.offset + j];
-            if (!decl->is_function) continue;
+            // skip struct definitions
+            if (!decl->type) continue;
+            if (decl->type->kind != AST_DECLFN) continue;
+            struct DeclFn* declfn = (struct DeclFn*)decl->type;
             if (!decl->name) abort();
-            if (decl->specs.is_extern)
+            if (decl->specs->is_extern)
             {
                 cg_declare_extern(be->cg, decl->name);
             }
@@ -2085,7 +2277,7 @@ int be_compile(struct BackEnd* be)
                 be->max_frame_size = 0;
 
                 struct TACEntry entry = {.op = TACO_ARG};
-                for (size_t i = 0; i < decl->extent; ++i)
+                for (size_t i = 0; i < declfn->extent; ++i)
                 {
                     entry.arg1.kind = TACA_ARG;
                     entry.arg1.arg_idx = i;

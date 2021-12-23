@@ -12,7 +12,7 @@
 
 int usage()
 {
-    fprintf(stderr, "Usage: mindustry.compiler [-o <output>] [-c] <file.c>\n");
+    fprintf(stderr, "Usage: mindustry.compiler [-o <output>] [-I <path>] [-c] <file.c>\n");
     return 1;
 }
 
@@ -20,6 +20,7 @@ struct Arguments
 {
     const char* input;
     const char* output;
+    struct Array inc;
     char fCompile;
 };
 
@@ -38,7 +39,7 @@ static int parse_arguments(int argc, const char* const* argv, struct Arguments* 
                 ++i;
                 if (i == argc)
                 {
-                    fprintf(stderr, "error: expected filename after -o\n");
+                    fprintf(stderr, "error: expected filename after %s\n", argv[i - 1]);
                     return usage();
                 }
                 if (out->output)
@@ -47,6 +48,20 @@ static int parse_arguments(int argc, const char* const* argv, struct Arguments* 
                     return usage();
                 }
                 out->output = argv[i];
+            }
+            else if (strcmp(argv[i] + 1, "I") == 0)
+            {
+                ++i;
+                if (i == argc)
+                {
+                    fprintf(stderr, "error: expected filename after %s\n", argv[i - 1]);
+                    return usage();
+                }
+                if (out->inc.sz)
+                {
+                    array_push_byte(&out->inc, ';');
+                }
+                array_appends(&out->inc, argv[i]);
             }
             else
             {
@@ -64,6 +79,14 @@ static int parse_arguments(int argc, const char* const* argv, struct Arguments* 
             out->input = argv[i];
         }
     }
+
+    if (out->inc.sz)
+    {
+        array_push_byte(&out->inc, ';');
+    }
+    char* inc = getenv("INCLUDE");
+    if (inc) array_appends(&out->inc, inc);
+    array_push_byte(&out->inc, 0);
 
     if (!out->input)
     {
@@ -92,7 +115,7 @@ int main(int argc, const char* const* argv)
     }
 
     struct FrontEnd fe;
-    fe_init(&fe);
+    fe_init(&fe, args.inc.data);
     fe.fout = f;
     rc = fe_lex_file(&fe, args.input);
     fe_destroy(&fe);

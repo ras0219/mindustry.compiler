@@ -58,6 +58,7 @@ static int cg_gen_taca(struct CodeGen* cg, struct TACAddress addr, size_t frame_
     {
         case TACA_NAME: array_appendf(&cg->code, "%s", addr.name); break;
         case TACA_LITERAL: array_appendf(&cg->code, "%s", addr.literal); break;
+        case TACA_IMM: array_appendf(&cg->code, "%zu", addr.imm); break;
         case TACA_CONST: array_appendf(&cg->code, "offset @S%d", addr.const_idx); break;
         case TACA_REF: array_appendf(&cg->code, "%zu[RSP]", (size_t)32 + frame_slots[addr.ref] * 8); break;
         case TACA_ARG: array_appendf(&cg->code, "%zu[RSP]", addr.arg_idx * 8 + 8 + frame_size); break;
@@ -114,6 +115,10 @@ enum
     TACA_PARAM_IS_MEMORY = 0,
     TACA_CONST_IS_MEMORY = 0,
     TACA_ARG_IS_MEMORY = 1,
+
+    TACA_ARG_ADDR_IS_MEMORY = 0,
+    TACA_FRAME_ADDR_IS_MEMORY = 0,
+    TACA_NAME_ADDR_IS_MEMORY = 0,
 };
 
 #define Y_IS_MEMORY(Z) Z##_IS_MEMORY,
@@ -220,8 +225,12 @@ int cg_gen_taces(struct CodeGen* cg, struct TACEntry* taces, size_t n_taces, siz
 
     for (size_t i = 0; i < n_taces; ++i)
     {
-        array_appendf(
-            &cg->code, "    ; TAC %zu: (%d, %d, %d)\n", i, taces[i].op, taces[i].arg1.kind, taces[i].arg2.kind);
+        array_appendf(&cg->code,
+                      "    ; TAC %zu: (%s, %s, %s)\n",
+                      i,
+                      taco_to_string(taces[i].op),
+                      taca_to_string(taces[i].arg1.kind),
+                      taca_to_string(taces[i].arg2.kind));
 
         switch (taces[i].op)
         {
@@ -251,11 +260,28 @@ int cg_gen_taces(struct CodeGen* cg, struct TACEntry* taces, size_t n_taces, siz
                 array_appends(&cg->code, "\n");
                 cg_mov_frame_from_rax(cg, frame_slots[i]);
                 break;
+            case TACO_LOAD:
+                array_appends(&cg->code, "    mov rax, ");
+                UNWRAP(cg_gen_taca(cg, taces[i].arg1, frame_size, frame_slots));
+                array_appends(&cg->code,
+                              "\n"
+                              "    mov rax, [rax]\n");
+                cg_mov_frame_from_rax(cg, frame_slots[i]);
+                break;
             case TACO_MULT:
                 array_appends(&cg->code, "    mov rax, ");
                 UNWRAP(cg_gen_taca(cg, taces[i].arg1, frame_size, frame_slots));
                 array_appends(&cg->code, "\n");
                 array_appends(&cg->code, "    imul rax, ");
+                UNWRAP(cg_gen_taca(cg, taces[i].arg2, frame_size, frame_slots));
+                array_appends(&cg->code, "\n");
+                cg_mov_frame_from_rax(cg, frame_slots[i]);
+                break;
+            case TACO_DIV:
+                array_appends(&cg->code, "    mov rax, ");
+                UNWRAP(cg_gen_taca(cg, taces[i].arg1, frame_size, frame_slots));
+                array_appends(&cg->code, "\n");
+                array_appends(&cg->code, "    idiv rax, ");
                 UNWRAP(cg_gen_taca(cg, taces[i].arg2, frame_size, frame_slots));
                 array_appends(&cg->code, "\n");
                 cg_mov_frame_from_rax(cg, frame_slots[i]);

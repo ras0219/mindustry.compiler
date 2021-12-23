@@ -10,8 +10,6 @@
 
 struct Parser
 {
-    struct Array toks;
-    struct Array stringpool;
     struct AutoHeap strings_to_free;
 
     struct Decl* fn;
@@ -25,6 +23,8 @@ struct Parser
 
     // top-level expressions
     struct Array arr_exprs;
+
+    const char* tk_strdata;
 };
 
 enum Precedence
@@ -44,6 +44,6 @@ enum Precedence op_precedence(const char* op);
 
 void parser_init(struct Parser* p);
 void parser_destroy(struct Parser* p);
-int parser_push(struct Parser* p, struct Lexer* l);
-int parser_parse(struct Parser* p);
-char* token_str(struct Parser* p, const struct Token* tk);
+// tk array must terminate with LEX_EOF
+int parser_parse(struct Parser* p, struct Token* tk, const char* tk_strs);
+const char* token_str(struct Parser* p, const struct Token* tk);

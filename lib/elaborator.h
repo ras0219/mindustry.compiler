@@ -1,4 +1,5 @@
 #pragma once
+#pragma once
 
 #include <stdio.h>
 
@@ -8,11 +9,8 @@
 struct Elaborator
 {
     struct Parser* p;
-    int all_stackless : 1;
-    struct Decl* main;
-    struct Array fns;
-    struct Array callees_spans;
-    struct Array callees_seqs;
+
+    struct TypeTable* types;
 
     FILE* fdebug;
 };
@@ -26,8 +24,6 @@ struct ArrSpan
 struct ElaborateDeclCtx
 {
     struct Decl* decl;
-    int calls_non_builtins;
-    struct ArrSpan callees_span;
 };
 
 void elaborator_init(struct Elaborator* elab, struct Parser* p);

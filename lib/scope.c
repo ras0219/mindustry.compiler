@@ -30,7 +30,7 @@ static void scope_pop(struct Scope* s)
     s->binds.sz = sz * sizeof(struct Binding);
 }
 #endif
-size_t scope_insert(struct Scope* s, const char* ident, struct Symbol* sym)
+size_t scope_insert(struct Scope* s, const char* ident, struct Decl* sym)
 {
     const size_t sz = scope_size(s);
     struct Binding* const e = array_alloc(&s->binds, sizeof(struct Binding));

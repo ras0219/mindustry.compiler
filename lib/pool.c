@@ -42,3 +42,13 @@ void* pool_push(struct Pool* p, const void* src, size_t sz)
     return r;
 }
 void pool_shrink(struct Pool* p, size_t count) { p->sz = count; }
+
+void* pool_foreach_bucket(struct Pool* p, size_t sz, pool_foreach_cb_t cb, void* userp)
+{
+    void* r = NULL;
+    for (size_t i = 0; i < p->sz_buckets; ++i)
+    {
+        if (r = cb(userp, p->data[i], (8 << i) * sz)) break;
+    }
+    return r;
+}

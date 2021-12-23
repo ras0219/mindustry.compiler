@@ -2,7 +2,7 @@
 
 #include <stdio.h>
 #include <string.h>
-
+#if 0
 int typestr_add_const(struct TypeStr* ts)
 {
     if (!ts->used) return 1;
@@ -45,3 +45,4 @@ int typestr_add_arr(struct TypeStr* ts, int arity)
     }
     return 0;
 }
+#endif

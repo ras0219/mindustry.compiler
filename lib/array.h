@@ -16,9 +16,10 @@ struct Array
 };
 
 void array_init(struct Array* arr);
-__forceinline size_t array_size(struct Array* arr, size_t sz) { return arr->sz / sz; }
+__forceinline size_t array_size(const struct Array* arr, size_t sz) { return arr->sz / sz; }
 void* array_alloc(struct Array* arr, size_t sz) __attribute__((alloc_size(2), returns_nonnull));
 void* array_push(struct Array* arr, const void* src, size_t sz) __attribute__((alloc_size(3), returns_nonnull));
+void* array_push_byte(struct Array* arr, char ch) __attribute__((returns_nonnull));
 void* array_push_zeroes(struct Array* arr, size_t sz) __attribute__((alloc_size(2), returns_nonnull));
 void array_clear(struct Array* arr);
 

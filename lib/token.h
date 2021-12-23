@@ -8,6 +8,6 @@ struct Token
 {
     struct RowCol rc;
     // enum LexerState
-    int type;
+    unsigned int type : 8;
     ptrdiff_t sp_offset;
 };

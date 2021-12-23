@@ -4,13 +4,18 @@
 
 #include "freevar.h"
 
-#define X_AST_KIND(Y)                                                                                                  \
+#define X_AST_POOL_KIND(Y)                                                                                             \
     Y(EXPR_SYM)                                                                                                        \
+    Y(EXPR_FIELD)                                                                                                      \
     Y(EXPR_LIT)                                                                                                        \
     Y(EXPR_CAST)                                                                                                       \
     Y(EXPR_OP)                                                                                                         \
     Y(EXPR_CALL)                                                                                                       \
     Y(AST_DECL)                                                                                                        \
+    Y(AST_DECLSPEC)                                                                                                    \
+    Y(AST_DECLFN)                                                                                                      \
+    Y(AST_DECLARR)                                                                                                     \
+    Y(AST_DECLPTR)                                                                                                     \
     Y(STMT_DECLS)                                                                                                      \
     Y(STMT_RETURN)                                                                                                     \
     Y(STMT_GOTO)                                                                                                       \
@@ -21,16 +26,23 @@
     Y(STMT_BREAK)                                                                                                      \
     Y(STMT_CONTINUE)
 
+#define X_AST_UNPOOL_KIND(Y) Y(STMT_NONE) Y(TYPE_BUILTIN_INT) Y(TYPE_BUILTIN_CHAR)
+
+#define X_AST_KIND(Y) X_AST_POOL_KIND(Y) X_AST_UNPOOL_KIND(Y)
+
 #define Y_COMMA(Z) Z,
 enum AstKind
 {
     X_AST_KIND(Y_COMMA)
-
-        AST_KIND_END_POOLS,
-
-    STMT_NONE = AST_KIND_END_POOLS,
-    AST_SYM,
 };
+#define Y_LAST(Z) *0 + Z
+enum
+{
+    AST_KIND_END_POOLS = 0 X_AST_POOL_KIND(Y_LAST),
+    AST_KIND_END = 0 X_AST_KIND(Y_LAST),
+    AST_KIND_COUNT,
+};
+#undef Y_LAST
 #undef Y_COMMA
 
 int ast_kind_is_expr(enum AstKind k);
@@ -53,6 +65,7 @@ struct ExprCast
 {
     struct Expr kind;
 
+    const struct Token* tok;
     struct Expr* expr;
     struct Decl* type;
 };
@@ -62,7 +75,17 @@ struct ExprSym
     struct Expr kind;
 
     const struct Token* tok;
-    struct Symbol* sym;
+    struct Decl* decl;
+};
+
+struct ExprField
+{
+    struct Expr kind;
+    int is_arrow : 1;
+    const struct Token* tok;
+    const char* fieldname;
+    struct Expr* lhs;
+    struct Decl* decl;
 };
 
 struct ExprOp
@@ -145,4 +168,4 @@ struct StmtContinue
     struct Token* tok;
 };
 
-const struct RowCol* expr_to_rc(struct Expr* expr);
+const struct RowCol* expr_to_rc(const struct Expr* expr);

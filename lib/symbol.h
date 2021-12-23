@@ -3,13 +3,29 @@
 #include "ast.h"
 #include "typestr.h"
 
+struct Attribute
+{
+    const char* symname;
+    const char* asmstr;
+    int is_nonreentrant : 1;
+};
+
 struct DeclSpecs
 {
-    struct Token* type;
+    struct Expr kind;
 
+    struct Token* tok;
+    struct Decl* type;
+    const char* name;
+    struct Attribute attr;
+
+    int is_struct : 1;
+    int is_enum : 1;
+    int is_union : 1;
     int is_const : 1;
     int is_volatile : 1;
-    int is_restrict : 1;
+    int is_unsigned : 1;
+    int is_signed : 1;
 
     int is_register : 1;
     int is_extern : 1;
@@ -18,13 +34,6 @@ struct DeclSpecs
     int is_typedef : 1;
 
     int is_stdcall : 1;
-};
-
-struct Attribute
-{
-    const char* symname;
-    const char* asmstr;
-    int is_nonreentrant : 1;
 };
 
 struct RegMap
@@ -39,23 +48,35 @@ struct RegMap
     struct FreeVar mem_loc;
 };
 
-struct Symbol
+#define ARRAY_ARITY_NONE (-1)
+
+struct DeclPtr
 {
     struct Expr kind;
-    struct Decl* decl;
-    struct TypeStr type;
-
-    int incomplete : 1;
-    int is_register : 1;
-    int address_taken : 1;
-
-    // register mapping
-    struct RegMap reg;
+    struct Token* tok;
+    struct Expr* type;
+    struct Attribute attr;
+    int is_const : 1;
+    int is_volatile : 1;
+    int is_restrict : 1;
 };
 
-struct RowCol* sym_to_rc(struct Symbol*);
+struct DeclFn
+{
+    struct Expr kind;
+    struct Token* tok;
+    struct Expr* type;
+    size_t offset;
+    size_t extent;
+};
 
-#define ARRAY_ARITY_NONE (-1)
+struct DeclArr
+{
+    struct Expr kind;
+    struct Token* tok;
+    struct Expr* type;
+    struct Expr* arity;
+};
 
 struct Decl
 {
@@ -64,31 +85,25 @@ struct Decl
     struct Token* id;
     const char* name;
     struct Attribute attr;
-    struct DeclSpecs specs;
+    struct DeclSpecs* specs;
     struct Decl* def;
     struct Expr* init;
     // encompassing function
     struct Decl* parent_decl;
-
-    int pointer_levels;
-    int array_arity;
-    int is_array : 1;
-    int is_function : 1;
-    int is_argument : 1;
-    int takes_local_addresses : 1;
-    int is_nonreentrant : 1;
-    int is_stackless : 1;
+    // 0 means not an argument, 1 means first argument, etc
     int arg_index;
-    size_t offset;
-    size_t extent;
 
-    struct Symbol sym;
+    struct Expr* type;
 
     // elaboration information
     int elab_index;
 
     // backend information
     size_t frame_offset;
+    size_t size;
+    size_t align;
 };
+
+struct RowCol* decl_to_rc(struct Decl*);
 
 struct Decl* decl_get_def(struct Decl*);
