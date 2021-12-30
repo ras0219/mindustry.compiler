@@ -15,6 +15,8 @@ struct Lexer
     unsigned int ws_sensitive : 1;
     unsigned int ws_before : 1;
     unsigned int not_first : 1;
+    unsigned int backslash : 1;
+    unsigned int skip_next : 1;
 
     struct RowCol tok_rc;
     struct RowCol rc;

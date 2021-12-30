@@ -19,5 +19,6 @@ struct FrontEnd
 
 void fe_init(struct FrontEnd* fe, const char* include_paths);
 void fe_destroy(struct FrontEnd* fe);
+int fe_preproc(struct FrontEnd* fe, const char* filename);
 int fe_lex_file(struct FrontEnd* fe, const char* filename);
 int fe_lex_file_opened(struct FrontEnd* fe, const char* filename, FILE* f);

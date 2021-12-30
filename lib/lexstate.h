@@ -44,7 +44,6 @@
     Y(LEX_CDECL, "__cdecl")
 
 #define X_LEX_STATES(Z)                                                                                                \
-    X_LEX_KEYWORDS(Z)                                                                                                  \
     Z(LEX_START, "")                                                                                                   \
     Z(LEX_IDENT, "")                                                                                                   \
     Z(LEX_NUMBER, "")                                                                                                  \
@@ -54,7 +53,10 @@
     Z(LEX_COMMENT, "")                                                                                                 \
     Z(LEX_MULTILINE_COMMENT, "")                                                                                       \
     Z(LEX_SYMBOL, "")                                                                                                  \
-    Z(LEX_EOF, "")
+    Z(LEX_EOF, "")                                                                                                     \
+    X_LEX_KEYWORDS(Z)                                                                                                  \
+    Z(LEX_MACRO_VA_ARGS, "")                                                                                           \
+    Z(LEX_MACRO_ARG_BEGIN, "")
 
 enum LexerState
 {
@@ -63,4 +65,4 @@ enum LexerState
 #undef Y_COMMA
 };
 
-const char* lexstate_to_string(enum LexerState s);
+const char* lexstate_to_string(unsigned int s);

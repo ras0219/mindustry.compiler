@@ -13,6 +13,7 @@
 #include "preproc.h"
 #include "stdlibe.h"
 #include "tok.h"
+#include "unwrap.h"
 
 void fe_init(struct FrontEnd* fe, const char* include_paths)
 {
@@ -46,7 +47,7 @@ void fe_destroy(struct FrontEnd* fe)
     free(fe->pp);
 }
 
-int fe_lex_file(struct FrontEnd* fe, const char* filename)
+int fe_preproc(struct FrontEnd* fe, const char* filename)
 {
     FILE* f = fopen(filename, "rb");
     if (!f)
@@ -56,16 +57,21 @@ int fe_lex_file(struct FrontEnd* fe, const char* filename)
         perror(buf);
         return 1;
     }
-
     int rc = preproc_file(fe->pp, f, filename);
-
     fclose(f);
-    if (rc) return rc;
-    if ((rc = parser_parse(fe->parser, (struct Token*)fe->pp->toks.data, (const char*)fe->pp->stringpool.data)))
-        return rc;
-    if ((rc = elaborate(fe->elab))) return rc;
-    if ((rc = be_compile(fe->be))) return rc;
-    return cg_emit(fe->cg, fe->fout);
+    return rc;
+}
+
+int fe_lex_file(struct FrontEnd* fe, const char* filename)
+{
+    int rc = 0;
+    UNWRAP(fe_preproc(fe, filename));
+    UNWRAP(parser_parse(fe->parser, (struct Token*)fe->pp->toks.data, (const char*)fe->pp->stringpool.data));
+    UNWRAP(elaborate(fe->elab));
+    UNWRAP(be_compile(fe->be));
+    UNWRAP(cg_emit(fe->cg, fe->fout));
+fail:
+    return rc;
 }
 
 int fe_lex_file_opened(struct FrontEnd* fe, const char* filename, FILE* f) { return preproc_file(fe->pp, f, filename); }

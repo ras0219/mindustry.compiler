@@ -9,9 +9,7 @@
             "command": "ninja",
             "args": [
                 "-C",
-                "${env:BUILD_DIR}",
-                "&&",
-                "${env:BUILD_DIR}/runall-test"
+                "${env:BUILD_DIR}"
             ],
             "group": {
                 "kind": "build",

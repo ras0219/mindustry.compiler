@@ -11,3 +11,4 @@ struct Expr;
 struct TACEntry;
 struct TACAddress;
 struct Decl;
+struct Token;

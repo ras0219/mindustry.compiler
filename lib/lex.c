@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlibe.h>
 
 #include "errors.h"
 #include "lexstate.h"
@@ -85,33 +86,72 @@ static int symbol_is_compound(char c1, char c2)
     return 0;
 }
 
-static int skip_ws(struct Lexer* const l, const char* const buf, size_t const sz, int i)
+__forceinline static int handle_backslash_nl(struct Lexer* const l, const char* const buf, size_t const sz, size_t* p_i)
 {
-    for (; i < sz; advance_rowcol(&l->rc, buf[i++]))
+    size_t i = *p_i;
+    while (sz != i)
     {
         const char ch = buf[i];
-        if (ch == ' ' || ch == '\t')
+        if (ch == '\\')
         {
-            l->ws_before = 1;
-            continue;
-        }
-        if (ch == '\n' || ch == '\r')
-        {
-            l->ws_before = 1;
-            l->not_first = 0;
-            continue;
+            if (sz == i + 1)
+            {
+                l->backslash = 1;
+                return 1;
+            }
+            if (buf[i + 1] == '\r')
+            {
+                advance_rowcol(&l->rc, '\n');
+                if (i + 2 == sz)
+                {
+                    l->skip_next = 1;
+                    return 1;
+                }
+                i += 3;
+                continue;
+            }
+            else if (buf[i + 1] == '\n')
+            {
+                advance_rowcol(&l->rc, '\n');
+                i += 2;
+                continue;
+            }
         }
         break;
     }
-    return i;
+    *p_i = i;
+    return 0;
 }
+
+#define HANDLE_BACKSLASH_NL()                                                                                          \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        if (handle_backslash_nl(l, buf, sz, &i)) return 0;                                                             \
+    } while (0)
 
 int lex(Lexer* const l, const char* const buf, size_t const sz)
 {
     if (!sz) return 0;
 
-    int rc;
+    int rc = 0;
     size_t i = 0;
+
+    while (l->backslash)
+    {
+        l->backslash = 0;
+        char slashbuf[2] = {'\\', buf[i++]};
+        rc = lex(l, slashbuf, 2);
+        if (rc) return rc;
+        if (i == sz) return 0;
+    }
+
+    if (l->skip_next)
+    {
+        l->skip_next = 0;
+        ++i;
+        if (i == sz) return 0;
+    }
+
     switch (l->state)
     {
     LEX_START:
@@ -122,10 +162,27 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
             if (i == sz) return 0;
             if (!l->ws_sensitive)
             {
-                i = skip_ws(l, buf, sz, i);
+                for (; i < sz; advance_rowcol(&l->rc, buf[i++]))
+                {
+                    HANDLE_BACKSLASH_NL();
+                    const char ch = buf[i];
+                    if (ch == ' ' || ch == '\t')
+                    {
+                        l->ws_before = 1;
+                        continue;
+                    }
+                    if (ch == '\n' || ch == '\r')
+                    {
+                        l->ws_before = 1;
+                        l->not_first = 0;
+                        continue;
+                    }
+                    break;
+                }
                 if (i == sz) return 0;
                 l->ws_sensitive = 1;
             }
+            HANDLE_BACKSLASH_NL();
             const char ch = buf[i];
             l->tok_rc = l->rc;
             if (l->expect_header)
@@ -176,6 +233,7 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
             const char closing_ch = l->tok[0] == '<' ? '>' : '"';
             for (; i < sz; advance_rowcol(&l->rc, buf[i++]))
             {
+                HANDLE_BACKSLASH_NL();
                 const char ch = buf[i];
                 if (ch == '\n' || ch == '\r')
                 {
@@ -198,6 +256,7 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
         case LEX_SYMBOL:
             for (; i < sz; advance_rowcol(&l->rc, buf[i++]))
             {
+                HANDLE_BACKSLASH_NL();
                 const char ch = buf[i];
                 if (l->sz == 1)
                 {
@@ -254,6 +313,7 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
         case LEX_STRING:
             for (; i < sz; advance_rowcol(&l->rc, buf[i++]))
             {
+                HANDLE_BACKSLASH_NL();
                 const char ch = buf[i];
                 if (ch == '"')
                 {
@@ -283,6 +343,7 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
         case LEX_STRING1:
             if (i < sz)
             {
+                HANDLE_BACKSLASH_NL();
                 const char ch = buf[i];
                 if (ch == '\n')
                 {
@@ -302,6 +363,7 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
         case LEX_MULTILINE_COMMENT:
             for (; i < sz; advance_rowcol(&l->rc, buf[i++]))
             {
+                HANDLE_BACKSLASH_NL();
                 const char ch = buf[i];
                 if (ch == '*')
                 {
@@ -325,6 +387,7 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
         case LEX_COMMENT:
             for (; i < sz; advance_rowcol(&l->rc, buf[i++]))
             {
+                HANDLE_BACKSLASH_NL();
                 const char ch = buf[i];
                 if (ch == '\n')
                 {
@@ -340,6 +403,7 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
         case LEX_IDENT:
             for (; i < sz; advance_rowcol(&l->rc, buf[i++]))
             {
+                HANDLE_BACKSLASH_NL();
                 const char ch = buf[i];
                 if (is_ascii_alnumu(ch))
                 {
@@ -357,6 +421,7 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
         case LEX_NUMBER:
             for (; i < sz; advance_rowcol(&l->rc, buf[i++]))
             {
+                HANDLE_BACKSLASH_NL();
                 const char ch = buf[i];
                 if (is_ascii_digit(ch))
                 {
@@ -373,8 +438,9 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
                 }
             }
             break;
+        default: rc = parser_ferror(&l->rc, "error: unknown lexer state %u\n", l->state);
     }
-    return 0;
+    return rc;
 }
 
 int end_lex(Lexer* l)
@@ -397,7 +463,7 @@ int end_lex(Lexer* l)
     return emit_token(l);
 }
 
-const char* lexstate_to_string(enum LexerState s)
+const char* lexstate_to_string(unsigned int s)
 {
 #define Y(E, ...)                                                                                                      \
     case E: return #E;

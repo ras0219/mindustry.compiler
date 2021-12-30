@@ -12,7 +12,7 @@ struct PoolSetFind
 
 static void* poolset_find_obj(void* userp, void* bucket, size_t bucket_sz)
 {
-    const char* const data = bucket;
+    char* const data = bucket;
     const struct PoolSetFind user = *(struct PoolSetFind*)userp;
     for (size_t i = 0; i < bucket_sz; i += user.sz)
     {

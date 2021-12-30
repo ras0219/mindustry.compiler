@@ -4,7 +4,7 @@
 
 #include "stdlibe.h"
 
-static size_t* sm_get_from(struct StringMap* map, size_t start, const char* ntbs_key)
+static size_t* sm_get_from(const struct StringMap* map, size_t start, const char* ntbs_key)
 {
     char** keys = (char**)map->keys.arr.data;
     size_t keys_sz = array_size(&map->keys.arr, sizeof(char*));
@@ -18,7 +18,7 @@ static size_t* sm_get_from(struct StringMap* map, size_t start, const char* ntbs
     return NULL;
 }
 
-size_t* sm_get(struct StringMap* map, const char* ntbs_key) { return sm_get_from(map, 0, ntbs_key); }
+size_t* sm_get(const struct StringMap* map, const char* ntbs_key) { return sm_get_from(map, 0, ntbs_key); }
 void sm_insert(struct StringMap* map, const char* ntbs_key, size_t value)
 {
     char** keys = (char**)map->keys.arr.data;
@@ -55,7 +55,7 @@ void sm_insert(struct StringMap* map, const char* ntbs_key, size_t value)
     size_t len = strlen(ntbs_key);
     char* new_key = autoheap_alloc(&map->keys, len + 1);
     memcpy(new_key, ntbs_key, len + 1);
-    array_push(&map->values, &value, sizeof(size_t));
+    array_push_size_t(&map->values, value);
 }
 void sm_remove(struct StringMap* map, const char* ntbs_key)
 {

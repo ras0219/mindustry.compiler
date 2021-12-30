@@ -47,6 +47,7 @@ void array_reserve(struct Array* arr, size_t cap)
         arr->data = my_realloc(arr->data, arr->cap);
     }
 }
+size_t* array_push_size_t(struct Array* arr, size_t data) { return array_push(arr, &data, sizeof(data)); }
 void* array_push_ptr(struct Array* arr, void* data) { return array_push(arr, &data, sizeof(data)); }
 void array_pop(struct Array* arr, size_t sz) { arr->sz -= sz; }
 void* array_pop_ptr(struct Array* arr)

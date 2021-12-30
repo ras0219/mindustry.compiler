@@ -1,8 +1,10 @@
 #pragma once
+#pragma once
 
 #include <stdio.h>
 
 #include "array.h"
+#include "fwd.h"
 #include "rowcol.h"
 #include "stringmap.h"
 
@@ -15,7 +17,12 @@ enum PreprocessorState
     PP_PRAGMA_ONCE,
     PP_EXPECT_END,
     PP_DEFINE,
+    PP_DEFINE_CONT_FIRST,
     PP_DEFINE_CONT,
+    PP_DEFINE_FN,
+    PP_DEFINE_FN_ARG,
+    PP_DEFINE_FN_COMMA,
+    PP_DEFINE_FN_ELLIPSIS,
     PP_UNDEF,
     PP_IF,
     PP_ELIF,
@@ -41,7 +48,6 @@ struct Preprocessor
     struct RowCol dir_rc;
     char to_include[128];
     size_t to_include_sz;
-    size_t def_start;
 
     const char* include_paths;
 
@@ -52,15 +58,18 @@ struct Preprocessor
     size_t cur_file;
 
     struct StringMap defines_map;
+    struct StringStk def_arg_names;
+    struct Array defs_info;
     struct Array defs_tokens;
-    unsigned int prev_token_was_macrofn : 1;
+    size_t prev_macrodef_idx_p1;
     unsigned int in_directive : 1;
 
-    // concat of null terminated strings
     struct StringStk macro_stack;
-    struct Array macro_arg_idxs;
-    struct Array macro_arg_seqs;
-    int paren_count;
+    struct Array macro_fn_exp;
+    // Array<size_t>, points to the token before the beginning of the arg sequence
+    struct Array macro_arg_offsets;
+    struct Array macro_tmp_buf;
+    size_t paren_count;
 
     struct Array toks;
     struct Array stringpool;
@@ -69,3 +78,4 @@ struct Preprocessor
 void preproc_init(struct Preprocessor* pp, const char* include_paths);
 int preproc_file(struct Preprocessor* pp, FILE* f, const char* filename);
 void preproc_destroy(struct Preprocessor* pp);
+const char* pp_token_str(const struct Preprocessor* pp, const struct Token* tk);
