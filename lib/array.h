@@ -2,6 +2,8 @@
 
 #include <stddef.h>
 
+#include "compilermacros.h"
+
 /// <summary>
 /// Resizable array
 /// </summary>

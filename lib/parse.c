@@ -54,7 +54,7 @@ typedef struct Parser Parser;
         }                                                                                                              \
     } while (0)
 
-static const char* token_str(Parser* p, const struct Token* tk) { return p->tk_strdata + tk->sp_offset; }
+const char* token_str(Parser* p, const struct Token* tk) { return p->tk_strdata + tk->sp_offset; }
 static int token_is_sym(Parser* p, const struct Token* tk, char sym)
 {
     return tk->type == LEX_SYMBOL && token_str(p, tk)[0] == sym;

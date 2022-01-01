@@ -246,7 +246,7 @@ static void typestr_fmt(const struct TypeTable* e, const struct TypeStr* ts, str
         array_appends(buf, str);
         --i;
         goto end;
-    sue:
+    sue:;
         // struct, union, enum
         unsigned int u;
         i -= sizeof(u);

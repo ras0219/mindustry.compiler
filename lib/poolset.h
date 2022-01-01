@@ -1,5 +1,6 @@
 #pragma once
 
+#include "compilermacros.h"
 #include "pool.h"
 
 struct PoolSet

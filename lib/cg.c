@@ -17,7 +17,7 @@ void cg_destroy(struct CodeGen* cg)
     array_destroy(&cg->code);
 }
 
-__forceinline void cg_debug(struct CodeGen* cg, const char* fmt, ...)
+static __forceinline void cg_debug(struct CodeGen* cg, const char* fmt, ...)
 {
     if (cg->fdebug)
     {

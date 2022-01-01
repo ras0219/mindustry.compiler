@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 
+#include "compilermacros.h"
 #include "rowcol.h"
 
 struct Token

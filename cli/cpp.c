@@ -1,7 +1,7 @@
 #include <fcntl.h>
-#include <io.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "errors.h"
 #include "fe.h"
@@ -10,8 +10,11 @@
 #include "tok.h"
 #include "token.h"
 
+#ifdef _WIN32
+#include <io.h>
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
+#endif
 
 int usage()
 {

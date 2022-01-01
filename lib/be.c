@@ -2054,24 +2054,22 @@ fail:
 
 static int be_dereference(struct BackEnd* be, struct TACAddress* out)
 {
-    int rc = 0;
     switch (out->kind)
     {
         case TACA_FRAME_ADDR: out->kind = TACA_FRAME; break;
         case TACA_ARG_ADDR: out->kind = TACA_ARG; break;
         case TACA_NAME_ADDR: out->kind = TACA_NAME; break;
         default:
+        {
             struct TACEntry tace = {
                 .op = TACO_LOAD,
                 .arg1 = *out,
             };
             *out = be_push_tace(be, &tace);
             break;
-            UNWRAP(parser_tok_error(
-                NULL, "error: %s: unhandled taca: %s (%d)\n", __func__, taca_to_string(out->kind), out->kind));
+        }
     }
-fail:
-    return rc;
+    return 0;
 }
 
 static int be_compile_ExprField(struct BackEnd* be, struct ExprField* e, struct TACAddress* out)

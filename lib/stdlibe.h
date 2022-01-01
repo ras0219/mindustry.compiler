@@ -2,6 +2,8 @@
 
 #include <stdlib.h>
 
+#include "compilermacros.h"
+
 __attribute__((__malloc__)) __attribute__((__warn_unused_result__, returns_nonnull))
 __attribute__((__alloc_size__(1))) __forceinline void*
 my_malloc(size_t __size)

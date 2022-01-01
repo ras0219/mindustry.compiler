@@ -230,16 +230,16 @@ static size_t path_parent_span(const char* path)
     return r;
 }
 
+#ifdef _WIN32
 static int is_upper_lower_alpha(char ch) { return (ch >= 'a' & ch <= 'z') | (ch >= 'A' & ch <= 'Z'); }
 
 static int path_is_absolute(const char* path)
 {
-#ifdef _WIN32
     return is_upper_lower_alpha(path[0]) && path[1] == ':' && (path[2] == '/' | path[2] == '\\');
-#else
-    return *path == '/';
-#endif
 }
+#else
+static int path_is_absolute(const char* path) { return *path == '/'; }
+#endif
 
 static size_t pp_find_insert_file(struct Array* parsedfiles, const char* filename)
 {
