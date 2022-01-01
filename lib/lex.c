@@ -9,12 +9,6 @@
 static int is_ascii_alphu(int ch) { return ('a' <= ch && ch <= 'z') || ('A' <= ch && ch <= 'Z') || ch == '_'; }
 static int is_ascii_digit(int ch) { return '0' <= ch && ch <= '9'; }
 static int is_ascii_alnumu(int ch) { return is_ascii_alphu(ch) || is_ascii_digit(ch); }
-static int is_ascii_symbol(int ch)
-{
-    return ch == '/' || ch == '(' || ch == ')' || ch == '=' || ch == ',' || ch == ';' || ch == '[' || ch == ']' ||
-           ch == '*' || ch == '%' || ch == '&' || ch == '+' || ch == '-' || ch == '<' || ch == '>' || ch == '{' ||
-           ch == '}' || ch == ':' || ch == '!' || ch == '|' || ch == '?' || ch == '%' || ch == '.' || ch == '#';
-}
 
 static int emit_token(Lexer* l)
 {
@@ -83,6 +77,7 @@ static int symbol_is_compound(char c1, char c2)
             return 1;
         }
     }
+    if (c1 == '#' && c2 == '#') return 1;
     return 0;
 }
 
@@ -206,14 +201,6 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
             {
                 goto LEX_NUMBER;
             }
-            else if (is_ascii_symbol(ch))
-            {
-                l->tok[0] = ch;
-                l->sz = 1;
-                advance_rowcol(&l->rc, ch);
-                ++i;
-                goto LEX_SYMBOL;
-            }
             else if (ch == '"')
             {
                 advance_rowcol(&l->rc, ch);
@@ -222,7 +209,11 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
             }
             else
             {
-                return parser_ferror(&l->rc, "error: unexpected character: '%c'\n", ch);
+                l->tok[0] = ch;
+                l->sz = 1;
+                advance_rowcol(&l->rc, ch);
+                ++i;
+                goto LEX_SYMBOL;
             }
             break;
         }

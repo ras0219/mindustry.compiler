@@ -56,7 +56,8 @@
     Z(LEX_EOF, "")                                                                                                     \
     X_LEX_KEYWORDS(Z)                                                                                                  \
     Z(LEX_MACRO_VA_ARGS, "")                                                                                           \
-    Z(LEX_MACRO_ARG_BEGIN, "")
+    Z(LEX_MACRO_ARG_BEGIN, "")                                                                                         \
+    Z(LEX_PLACEHOLDER, "")
 
 enum LexerState
 {

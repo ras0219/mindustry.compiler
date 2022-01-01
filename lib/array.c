@@ -38,7 +38,6 @@ void* array_push_zeroes(struct Array* arr, size_t sz)
     memset(dst, 0, sz);
     return dst;
 }
-void array_clear(struct Array* arr) { arr->sz = 0; }
 void array_reserve(struct Array* arr, size_t cap)
 {
     if (cap > arr->cap)

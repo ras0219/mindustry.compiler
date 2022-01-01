@@ -17,3 +17,7 @@ struct Token
 #define TOKEN_SYM1(A) (0x80 + (unsigned int)(A))
 #define TOKEN_SYM2(A, B) (0x80 + (unsigned int)(A) + 0x100 * (unsigned int)(B))
 #define TOKEN_SYM3(A, B, C) (0x80 + (unsigned int)(A) + 0x100 * (unsigned int)(B) + 0x10000 * (unsigned int)(C))
+#define TOKEN_GET_SYM1(A) ((unsigned int)(A) & 0x7F))
+#define TOKEN_GET_SYM2(A) ((unsigned int)(A) & 0x7F00) >> 8)
+#define TOKEN_GET_SYM3(A) ((unsigned int)(A) & 0x7F0000) >> 16)
+__forceinline int token_symlen(unsigned int type) { return 1 + (type >= 0x100) + (type >= 0x10000); }

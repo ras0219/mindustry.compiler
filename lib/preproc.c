@@ -2,12 +2,88 @@
 
 #include <string.h>
 
+#include "array.h"
 #include "errors.h"
 #include "lexstate.h"
+#include "rowcol.h"
 #include "stdlibe.h"
+#include "stringmap.h"
 #include "tok.h"
 #include "token.h"
 #include "unwrap.h"
+
+enum PreprocessorState
+{
+    PP_INIT,
+    PP_INCLUDE,
+    PP_INCLUDE_EXPECT_END,
+    PP_PRAGMA,
+    PP_PRAGMA_ONCE,
+    PP_EXPECT_END,
+    PP_DEFINE,
+    PP_DEFINE_CONT_FIRST,
+    PP_DEFINE_CONT,
+    PP_DEFINE_FN,
+    PP_DEFINE_FN_ARG,
+    PP_DEFINE_FN_COMMA,
+    PP_DEFINE_FN_ELLIPSIS,
+    PP_UNDEF,
+    PP_IF,
+    PP_ELIF,
+    PP_ELSE,
+    PP_ENDIF,
+    PP_IGNORE,
+};
+
+struct StringStk
+{
+    struct Array lengths;
+    struct Array data;
+};
+
+struct MacroExpand
+{
+    size_t paren_count;
+    size_t macro_arg_offsets_start;
+    size_t prev_macrodef_idx_p1;
+};
+
+struct Preprocessor
+{
+    enum PreprocessorState preproc;
+
+    void (*on_include_cb)(struct Preprocessor*, const char* filename, FILE* f);
+
+    char cur_if_false;
+    struct Array if_stack;
+    struct RowCol dir_rc;
+    char to_include[128];
+    size_t to_include_sz;
+
+    const char* include_paths;
+
+    // Array<char*>
+    struct Array files_open;
+    // Array<struct ParsedFile>
+    struct Array filenames;
+    size_t cur_file;
+
+    struct StringMap defines_map;
+    struct StringStk def_arg_names;
+    struct Array defs_info;
+    struct Array defs_tokens;
+    struct MacroExpand exp;
+    unsigned int in_directive : 1;
+
+    struct StringStk macro_stack;
+    struct Array macro_fn_exp;
+    // Array<size_t>, points to the token before the beginning of the arg sequence
+    struct Array macro_arg_offsets;
+    struct Array macro_tmp_buf;
+
+    struct Array toks;
+    struct Array stringpool;
+};
 
 struct ParsedFile
 {
@@ -65,6 +141,18 @@ __forceinline static const char* pp_sp_str(const struct Preprocessor* pp, size_t
 }
 
 const char* pp_token_str(const struct Preprocessor* pp, const struct Token* tk) { return pp_sp_str(pp, tk->sp_offset); }
+
+static size_t pp_sp_alloc_concat(struct Preprocessor* p, size_t s1, size_t s2)
+{
+    const size_t ret = p->stringpool.sz;
+    size_t n1 = strlen((char*)p->stringpool.data + s1);
+    size_t n2 = strlen((char*)p->stringpool.data + s2);
+    char* ch = (char*)array_alloc(&p->stringpool, n1 + n2 + 1);
+    memcpy(ch, (char*)p->stringpool.data + s1, n1);
+    memcpy(ch + n1, (char*)p->stringpool.data + s2, n2);
+    ch[n1 + n2] = '\0';
+    return ret;
+}
 
 static size_t pp_sp_alloc(struct Preprocessor* p, const char* s, size_t n)
 {
@@ -188,6 +276,8 @@ struct MacroDef
     unsigned int is_function : 1;
     unsigned int is_ellipsis : 1;
     unsigned int arity : 6;
+    uint64_t va_evaluated : 1;
+    uint64_t arg_evaluated : 63;
     size_t tok_seq_offset;
     size_t tok_seq_extent;
     ptrdiff_t sp_offset;
@@ -250,16 +340,20 @@ static int pp_handle_directive(struct Preprocessor* pp, Lexer* l)
         {
             struct Token* tk = (struct Token*)array_alloc(&pp->defs_tokens, sizeof(struct Token));
             pp_form_token(pp, l, tk);
+            struct MacroDef* def = array_back(&pp->defs_info, sizeof(struct MacroDef));
             size_t arg_idx = sstk_find(&pp->def_arg_names, l->tok, l->sz);
             if (arg_idx != SIZE_MAX)
             {
                 tk->basic_type = LEX_MACRO_ARG_BEGIN;
                 tk->type = LEX_MACRO_ARG_BEGIN + arg_idx;
+                // arg_idx < 63
+                def->arg_evaluated |= 1 << arg_idx;
             }
             else if (STREQ_LIT(l->tok, l->sz, "__VA_ARGS__"))
             {
                 tk->basic_type = LEX_MACRO_VA_ARGS;
                 tk->type = LEX_MACRO_VA_ARGS;
+                def->va_evaluated = 1;
             }
             return 0;
         }
@@ -278,10 +372,14 @@ static int pp_handle_directive(struct Preprocessor* pp, Lexer* l)
                     return parser_ferror(&l->tok_rc,
                                          "error: duplicate parameter name in macro function parameter list\n");
                 }
-                sstk_push(&pp->def_arg_names, l->tok, l->sz);
                 struct MacroDef* def = array_back(&pp->defs_info, sizeof(struct MacroDef));
-                if (def->arity >= 0x3F /* 2^6 - 1 */) abort();
+                if (def->arity == 0x3F /* 2^6 - 1 = 63*/)
+                {
+                    return parser_ferror(&l->tok_rc,
+                                         "error: exceeded maximum number of macro function parameters (63)\n");
+                }
                 ++def->arity;
+                sstk_push(&pp->def_arg_names, l->tok, l->sz);
                 return 0;
             }
             else if (l->state == LEX_SYMBOL && l->tok[0] == '.' && l->tok[1] == '.' && l->tok[2] == '.')
@@ -481,65 +579,242 @@ static int pp_flush_directive(struct Preprocessor* pp, Lexer* l)
     return 0;
 }
 
-struct MacroExpand
-{
-    size_t prev_paren_count;
-    size_t macro_arg_offsets_offset;
-    size_t macrodef_offset;
-};
+static int pp_push_tok_seq(struct Preprocessor* pp, const struct Token* toks, size_t len);
 
-static int pp_expand_macro(
-    struct Preprocessor* pp, const char* id, size_t id_sz, struct Token const* tks, size_t extent);
+static int pp_eval_tok_seq(struct Preprocessor* pp, size_t cur, const size_t stop);
 
-static int pp_subst_macro_args(struct Preprocessor* pp, struct Array* out, struct MacroExpand* exp)
+static int pp_concat_token(struct Preprocessor* pp, struct Token* dst, const struct Token* src)
 {
-    struct MacroDef* def = (struct MacroDef*)pp->defs_info.data + exp->macrodef_offset;
-    size_t* const macro_arg_data = (size_t*)pp->macro_arg_offsets.data + exp->macro_arg_offsets_offset;
-    struct Token* const toks = pp->toks.data;
-    size_t num_args = array_size(&pp->macro_arg_offsets, sizeof(size_t)) - exp->macro_arg_offsets_offset - 1;
+    if (dst->basic_type == LEX_PLACEHOLDER)
+    {
+        *dst = *src;
+        return 0;
+    }
+    else if (src->basic_type == LEX_PLACEHOLDER)
+    {
+        // do nothing
+        return 0;
+    }
+    else if (src->basic_type == LEX_NUMBER)
+    {
+        if (dst->basic_type == LEX_NUMBER || dst->basic_type == LEX_IDENT)
+        {
+            dst->sp_offset = pp_sp_alloc_concat(pp, dst->sp_offset, src->sp_offset);
+            return 0;
+        }
+        return parser_tok_error(src, "error: pasting formed an invalid preprocessing token\n");
+    }
+    else if (src->basic_type == LEX_IDENT && dst->basic_type == LEX_IDENT)
+    {
+        dst->sp_offset = pp_sp_alloc_concat(pp, dst->sp_offset, src->sp_offset);
+        return 0;
+    }
+    else if (src->basic_type == LEX_SYMBOL && dst->basic_type == LEX_SYMBOL)
+    {
+        int new_len = token_symlen(src->type) + token_symlen(dst->type);
+        if (new_len > 3)
+        {
+            return parser_tok_error(src, "error: pasting formed an invalid preprocessing token\n");
+        }
+        dst->type = ((dst->type & 0x7F7F7F) << (8 * token_symlen(src->type))) | src->type;
+        dst->sp_offset = pp_sp_alloc_concat(pp, dst->sp_offset, src->sp_offset);
+        return 0;
+    }
+    else
+    {
+        return parser_tok_error(src, "error: pasting formed an invalid preprocessing token\n");
+    }
+}
+
+static int pp_complete_fn_macro(struct Preprocessor* pp)
+{
+    int rc = 0;
+    struct Array tmp = {};
+    struct MacroExpand exp = pp->exp;
+    pp->exp.prev_macrodef_idx_p1 = 0;
+    pp->exp.macro_arg_offsets_start = array_size(&pp->macro_arg_offsets, sizeof(size_t));
+
+    struct MacroDef* def = (struct MacroDef*)pp->defs_info.data + exp.prev_macrodef_idx_p1 - 1;
+    size_t fn_tok_offset = ((size_t*)pp->macro_arg_offsets.data)[exp.macro_arg_offsets_start] - 2;
+    size_t num_args = array_size(&pp->macro_arg_offsets, sizeof(size_t)) - exp.macro_arg_offsets_start - 1;
     size_t req_arity = def->arity ? def->arity : 1;
     if ((!def->is_ellipsis && req_arity < num_args) || req_arity > num_args)
     {
-        return parser_ferror(&toks[array_size(&pp->toks, sizeof(struct Token)) - 1].rc,
-                             "error: incorrect number of arguments in macro call to %s: expected %zu but got %zu\n",
-                             pp_sp_str(pp, def->sp_offset),
-                             def->arity,
-                             num_args);
+        UNWRAP(parser_tok_error(array_back(&pp->toks, sizeof(struct Token)),
+                                "error: incorrect number of arguments in macro call to %s: expected %zu but got %zu\n",
+                                pp_sp_str(pp, def->sp_offset),
+                                def->arity,
+                                num_args));
     }
-    struct Token* const data = (struct Token*)pp->defs_tokens.data + def->tok_seq_offset;
     const size_t extent = def->tok_seq_extent;
+    struct Token* const data = (struct Token*)pp->defs_tokens.data + def->tok_seq_offset;
     for (size_t i = 0; i < extent; ++i)
     {
         if (data[i].basic_type == LEX_MACRO_ARG_BEGIN)
         {
-            if (i > 0 && data[i - 1].type == TOKEN_SYM('#'))
+            size_t* const macro_arg_data = (size_t*)pp->macro_arg_offsets.data + exp.macro_arg_offsets_start;
+            size_t const arg_idx = data[i].type - LEX_MACRO_ARG_BEGIN;
+            struct Token* toks = pp->toks.data;
+            if (i > 0 && data[i - 1].type == TOKEN_SYM1('#'))
             {
                 // stringify tokens
+                struct Array str = {};
+                for (size_t i = macro_arg_data[arg_idx]; i < macro_arg_data[arg_idx + 1] - 1; ++i)
+                {
+                    if (str.sz) array_push_byte(&str, ' ');
+                    const char* s = pp_token_str(pp, toks + i);
+                    array_push(&str, s, strlen(s));
+                }
+                struct Token* tgt = array_alloc(&tmp, sizeof(struct Token));
+                tgt->rc = toks[macro_arg_data[arg_idx]].rc;
+                tgt->basic_type = LEX_STRING;
+                tgt->noreplace = 0;
+                tgt->type = LEX_STRING;
+                tgt->sp_offset = pp_sp_alloc(pp, str.data, str.sz);
+                array_destroy(&str);
             }
-
-            size_t const arg_idx = data[i].type - LEX_MACRO_ARG_BEGIN;
-            struct Token* const argseq_start = toks + macro_arg_data[arg_idx] + 1;
-            size_t argseq_len = macro_arg_data[arg_idx + 1] - macro_arg_data[arg_idx] - 1;
-            array_push(out, argseq_start, argseq_len * sizeof(struct Token));
+            else if (i > 0 && data[i - 1].type == TOKEN_SYM2('#', '#'))
+            {
+                size_t arg_extent = macro_arg_data[arg_idx + 1] - 1 - macro_arg_data[arg_idx];
+                if (arg_extent > 0)
+                {
+                    pp_concat_token(pp, array_back(&tmp, sizeof(struct Token)), toks + macro_arg_data[arg_idx]);
+                    array_push(&tmp, toks + macro_arg_data[arg_idx] + 1, (arg_extent - 1) * sizeof(struct Token));
+                }
+            }
+            else if (i + 1 < extent && data[i + 1].type == TOKEN_SYM2('#', '#'))
+            {
+                size_t arg_extent = macro_arg_data[arg_idx + 1] - 1 - macro_arg_data[arg_idx];
+                if (arg_extent == 0)
+                {
+                    struct Token* tok = array_push_zeroes(&tmp, sizeof(struct Token));
+                    tok->basic_type = LEX_PLACEHOLDER;
+                    tok->type = LEX_PLACEHOLDER;
+                }
+                else
+                {
+                    array_push(&tmp, toks + macro_arg_data[arg_idx], arg_extent * sizeof(struct Token));
+                }
+            }
+            else
+            {
+                // eval arg.
+                size_t res_start = array_size(&pp->toks, sizeof(struct Token));
+                UNWRAP(pp_eval_tok_seq(pp, macro_arg_data[arg_idx], macro_arg_data[arg_idx + 1] - 1));
+                array_push(
+                    &tmp, (struct Token*)pp->toks.data + res_start, pp->toks.sz - res_start * sizeof(struct Token));
+                array_shrink(&pp->toks, res_start, sizeof(struct Token));
+            }
         }
         else if (data[i].basic_type == LEX_MACRO_VA_ARGS)
         {
-            if (def->arity < num_args)
+            // eval args.
+            size_t res_start = array_size(&pp->toks, sizeof(struct Token));
+            for (size_t i = def->arity; i < num_args; ++i)
             {
-                struct Token* const argseq_start = toks + macro_arg_data[def->arity] + 1;
-                size_t argseq_len = macro_arg_data[num_args] - macro_arg_data[def->arity] - 1;
-                array_push(out, argseq_start, argseq_len * sizeof(struct Token));
+                size_t* const macro_arg_data = (size_t*)pp->macro_arg_offsets.data + exp.macro_arg_offsets_start;
+                size_t const arg_idx = data[i].type - LEX_MACRO_ARG_BEGIN;
+                UNWRAP(
+                    pp_eval_tok_seq(pp, macro_arg_data[arg_idx] - (i > def->arity), macro_arg_data[arg_idx + 1] - 1));
             }
+            array_push(&tmp, (struct Token*)pp->toks.data + res_start, pp->toks.sz - res_start * sizeof(struct Token));
+            array_shrink(&pp->toks, res_start, sizeof(struct Token));
         }
-        else if (data[i].type = TOKEN_SYM1('#'))
+        else if (data[i].type == TOKEN_SYM1('#') || data[i].type == TOKEN_SYM2('#', '#'))
         {
         }
         else
         {
-            array_push(out, data + i, sizeof(struct Token));
+            array_push(&tmp, data + i, sizeof(struct Token));
         }
     }
-    return 0;
+    array_shrink(&pp->macro_arg_offsets, exp.macro_arg_offsets_start, sizeof(size_t));
+    // pop off macro token and all argument sequences
+    pp->toks.sz = fn_tok_offset * sizeof(struct Token);
+    {
+        const size_t sstk_orig_size = sstk_size(&pp->macro_stack);
+        sstk_push(&pp->macro_stack, pp_sp_str(pp, def->sp_offset), def->sp_len);
+        UNWRAP(pp_push_tok_seq(pp, tmp.data, array_size(&tmp, sizeof(struct Token))));
+        sstk_shrink(&pp->macro_stack, sstk_orig_size);
+    }
+fail:
+    array_destroy(&tmp);
+    return rc;
+}
+
+static int pp_handle_tok(struct Preprocessor* pp)
+{
+    int rc = 0;
+    struct Token* tok = array_back(&pp->toks, sizeof(struct Token));
+    if (pp->exp.paren_count)
+    {
+        if (tok->type == TOKEN_SYM1('('))
+        {
+            ++pp->exp.paren_count;
+        }
+        else if (tok->type == TOKEN_SYM1(')'))
+        {
+            --pp->exp.paren_count;
+            if (!pp->exp.paren_count)
+            {
+                // complete macro fn call
+                array_push_size_t(&pp->macro_arg_offsets, array_size(&pp->toks, sizeof(struct Token)));
+                UNWRAP(pp_complete_fn_macro(pp));
+            }
+        }
+        else if (tok->type == TOKEN_SYM1(',') && pp->exp.paren_count == 1)
+        {
+            // next macro fn arg
+            array_push_size_t(&pp->macro_arg_offsets, array_size(&pp->toks, sizeof(struct Token)));
+        }
+        return 0;
+    }
+
+    if (pp->exp.prev_macrodef_idx_p1)
+    {
+        if (tok->type == TOKEN_SYM1('('))
+        {
+            pp->exp.macro_arg_offsets_start = array_size(&pp->macro_arg_offsets, sizeof(size_t));
+            array_push_size_t(&pp->macro_arg_offsets, array_size(&pp->toks, sizeof(struct Token)));
+            pp->exp.paren_count = 1;
+            return 0;
+        }
+        pp->exp.prev_macrodef_idx_p1 = 0;
+    }
+
+    if (!tok->noreplace && tok->basic_type == LEX_IDENT)
+    {
+        // look up macro
+        const char* s = pp_token_str(pp, tok);
+        size_t tok_len = strlen(s);
+        if (sstk_find(&pp->macro_stack, s, tok_len) != SIZE_MAX)
+        {
+            tok->noreplace = 1;
+        }
+        else
+        {
+            size_t* v = sm_get(&pp->defines_map, s);
+            if (v)
+            {
+                struct MacroDef* def = (struct MacroDef*)pp->defs_info.data + *v;
+                if (def->is_function)
+                {
+                    pp->exp.prev_macrodef_idx_p1 = *v + 1;
+                }
+                else
+                {
+                    array_pop(&pp->toks, sizeof(struct Token));
+                    const size_t sstk_orig_size = sstk_size(&pp->macro_stack);
+                    sstk_push(&pp->macro_stack, s, tok_len);
+                    UNWRAP(pp_push_tok_seq(
+                        pp, (struct Token*)pp->defs_tokens.data + def->tok_seq_offset, def->tok_seq_extent));
+                    sstk_shrink(&pp->macro_stack, sstk_orig_size);
+                }
+            }
+        }
+    }
+fail:
+    return rc;
 }
 
 static int pp_push_tok_seq(struct Preprocessor* pp, const struct Token* toks, size_t len)
@@ -547,102 +822,30 @@ static int pp_push_tok_seq(struct Preprocessor* pp, const struct Token* toks, si
     int rc = 0;
     for (size_t i = 0; i < len; ++i)
     {
-        if (pp->prev_macrodef_idx_p1)
-        {
-            if (toks[i].type == TOKEN_SYM1('('))
-            {
-                struct MacroExpand* exp = array_push_zeroes(&pp->macro_fn_exp, sizeof(struct MacroExpand));
-                exp->prev_paren_count = pp->paren_count;
-                exp->macro_arg_offsets_offset = array_size(&pp->macro_arg_offsets, sizeof(size_t));
-                exp->macrodef_offset = pp->prev_macrodef_idx_p1 - 1;
-                array_push_size_t(&pp->macro_arg_offsets, array_size(&pp->toks, sizeof(struct Token)) - 1);
-                pp->paren_count = 0;
-                pp->prev_macrodef_idx_p1 = 0;
-                continue;
-            }
-            pp->prev_macrodef_idx_p1 = 0;
-        }
-        if (toks[i].type == TOKEN_SYM1('('))
-        {
-            ++pp->paren_count;
-        }
-        else if (toks[i].type == TOKEN_SYM1(')'))
-        {
-            if (pp->paren_count)
-                --pp->paren_count;
-            else if (pp->macro_fn_exp.sz != 0)
-            {
-                // complete macro fn call
-                struct Array tmp = {};
-                struct MacroExpand* exp = array_back(&pp->macro_fn_exp, sizeof(struct MacroExpand));
-                size_t fn_tok_offset = ((size_t*)pp->macro_arg_offsets.data)[exp->macro_arg_offsets_offset];
-                array_push_size_t(&pp->macro_arg_offsets, array_size(&pp->toks, sizeof(struct Token)));
-                UNWRAP(pp_subst_macro_args(pp, &tmp, exp));
-                pp->macro_arg_offsets.sz = exp->macro_arg_offsets_offset * sizeof(size_t);
-                array_pop(&pp->macro_fn_exp, sizeof(struct MacroExpand));
-                // pop off macro token and all argument sequences
-                pp->toks.sz = fn_tok_offset * sizeof(struct Token);
-                struct MacroDef* def = (struct MacroDef*)&pp->defs_info + exp->macrodef_offset;
-                UNWRAP(pp_expand_macro(
-                    pp, pp_sp_str(pp, def->sp_offset), def->sp_len, tmp.data, array_size(&tmp, sizeof(struct Token))));
-                array_destroy(&tmp);
-                continue;
-            }
-        }
-        else if (toks[i].type == TOKEN_SYM1(',') && !pp->paren_count && pp->macro_fn_exp.sz != 0)
-        {
-            // next macro fn arg
-            array_push_size_t(&pp->macro_arg_offsets, array_size(&pp->toks, sizeof(struct Token)));
-            array_push(&pp->toks, toks + i, sizeof(toks[i]));
-            continue;
-        }
-
-        if (!toks[i].noreplace && toks[i].basic_type == LEX_IDENT)
-        {
-            // look up macro
-            const char* s = pp_token_str(pp, toks + i);
-            size_t tok_len = strlen(s);
-            if (sstk_find(&pp->macro_stack, s, tok_len) != SIZE_MAX)
-            {
-                struct Token* tk = array_push(&pp->toks, toks + i, sizeof(toks[i]));
-                tk->noreplace = 1;
-                continue;
-            }
-            {
-                size_t* v = sm_get(&pp->defines_map, s);
-                if (v)
-                {
-                    struct MacroDef* def = (struct MacroDef*)pp->defs_info.data + *v;
-                    if (def->is_function)
-                    {
-                        pp->prev_macrodef_idx_p1 = *v + 1;
-                    }
-                    else
-                    {
-                        UNWRAP(pp_expand_macro(pp,
-                                               s,
-                                               tok_len,
-                                               (struct Token*)pp->defs_tokens.data + def->tok_seq_offset,
-                                               def->tok_seq_extent));
-                        continue;
-                    }
-                }
-            }
-        }
+        if (toks[i].basic_type == LEX_PLACEHOLDER) continue;
         array_push(&pp->toks, toks + i, sizeof(toks[i]));
+        UNWRAP(pp_handle_tok(pp));
     }
 fail:
     return rc;
 }
 
-static int pp_expand_macro(
-    struct Preprocessor* pp, const char* id, size_t id_sz, struct Token const* tks, size_t extent)
+static int pp_eval_tok_seq(struct Preprocessor* pp, size_t cur, size_t stop)
 {
     int rc = 0;
-    const size_t sstk_orig_size = sstk_size(&pp->macro_stack);
-    sstk_push(&pp->macro_stack, id, id_sz);
-    rc = pp_push_tok_seq(pp, tks, extent);
-    sstk_shrink(&pp->macro_stack, sstk_orig_size);
+    for (; cur < stop; ++cur)
+    {
+        struct Token* tok = array_alloc(&pp->toks, sizeof(struct Token));
+        *tok = ((struct Token*)pp->toks.data)[cur];
+        UNWRAP(pp_handle_tok(pp));
+    }
+    if (pp->exp.paren_count > 0)
+    {
+        UNWRAP(parser_tok_error(array_back(&pp->toks, sizeof(struct Token)),
+                                "error: incomplete argument list in macro call\n"));
+    }
+    pp->exp.prev_macrodef_idx_p1 = 0;
+fail:
     return rc;
 }
 
@@ -681,32 +884,36 @@ static int pp_sublex_on_token(Lexer* l)
         // drop tokens inside #if false
         return 0;
     }
-    struct Token tk;
-    pp_form_token(pp, l, &tk);
-    rc = pp_push_tok_seq(pp, &tk, 1);
+
+    pp_form_token(pp, l, array_alloc(&pp->toks, sizeof(struct Token)));
+    rc = pp_handle_tok(pp);
 fail:
     return rc;
 }
 
-void preproc_init(struct Preprocessor* pp, const char* include_paths)
+struct Preprocessor* preproc_alloc(const char* include_paths)
 {
+    struct Preprocessor* pp = my_malloc(sizeof(struct Preprocessor));
     memset(pp, 0, sizeof(struct Preprocessor));
     pp->include_paths = include_paths;
     array_push_byte(&pp->stringpool, '\0');
+    return pp;
 }
 
 static int lex_file(FILE* f, Lexer* l)
 {
-    int rc;
+    int rc = 0;
     char buf[1024];
     size_t sz;
     while (1)
     {
         sz = fread(buf, 1, sizeof(buf), f);
         if (!sz) break;
-        if ((rc = lex(l, buf, sz))) return rc;
+        UNWRAP(lex(l, buf, sz));
     }
-    return end_lex(l);
+    rc = end_lex(l);
+fail:
+    return rc;
 }
 
 int preproc_file(struct Preprocessor* pp, FILE* f, const char* filename)
@@ -715,7 +922,14 @@ int preproc_file(struct Preprocessor* pp, FILE* f, const char* filename)
     pp->cur_file = pp_find_insert_file(&pp->filenames, filename);
     struct ParsedFile* file = (struct ParsedFile*)pp->filenames.data + pp->cur_file;
     int rc = 0;
-    if (!file->pragma_once)
+    if (file->pragma_once)
+    {
+        struct Token* tok = array_push_zeroes(&pp->toks, sizeof(struct Token));
+        tok->type = LEX_EOF;
+        tok->basic_type = LEX_EOF;
+        tok->rc.file = file->filename;
+    }
+    else
     {
         struct SubLexer sublex;
         sublex.self = pp;
@@ -728,7 +942,7 @@ int preproc_file(struct Preprocessor* pp, FILE* f, const char* filename)
     return rc;
 }
 
-void preproc_destroy(struct Preprocessor* pp)
+void preproc_free(struct Preprocessor* pp)
 {
     struct ParsedFile* b = pp->filenames.data;
     for (size_t i = 0; i < array_size(&pp->filenames, sizeof(struct ParsedFile)); ++i)
@@ -747,4 +961,8 @@ void preproc_destroy(struct Preprocessor* pp)
     array_destroy(&pp->toks);
     array_destroy(&pp->stringpool);
     sstk_destroy(&pp->macro_stack);
+    my_free(pp);
 }
+
+const struct Token* preproc_tokens(const struct Preprocessor* pp) { return pp->toks.data; }
+const char* preproc_stringpool(const struct Preprocessor* pp) { return pp->stringpool.data; }

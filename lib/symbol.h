@@ -14,7 +14,7 @@ struct DeclSpecs
 {
     struct Expr kind;
 
-    struct Token* tok;
+    const struct Token* tok;
     struct Decl* type;
     const char* name;
     struct Attribute attr;
@@ -53,7 +53,7 @@ struct RegMap
 struct DeclPtr
 {
     struct Expr kind;
-    struct Token* tok;
+    const struct Token* tok;
     struct Expr* type;
     struct Attribute attr;
     int is_const : 1;
@@ -64,7 +64,7 @@ struct DeclPtr
 struct DeclFn
 {
     struct Expr kind;
-    struct Token* tok;
+    const struct Token* tok;
     struct Expr* type;
     size_t offset;
     size_t extent;
@@ -73,7 +73,7 @@ struct DeclFn
 struct DeclArr
 {
     struct Expr kind;
-    struct Token* tok;
+    const struct Token* tok;
     struct Expr* type;
     struct Expr* arity;
 };
@@ -82,7 +82,7 @@ struct Decl
 {
     struct Expr kind;
 
-    struct Token* id;
+    const struct Token* id;
     const char* name;
     struct Attribute attr;
     struct DeclSpecs* specs;
@@ -104,6 +104,6 @@ struct Decl
     size_t align;
 };
 
-struct RowCol* decl_to_rc(struct Decl*);
+const struct RowCol* decl_to_rc(const struct Decl*);
 
 struct Decl* decl_get_def(struct Decl*);

@@ -122,11 +122,13 @@ int main(int argc, const char* const* argv)
     }
     else
     {
-        const struct Token* data = fe.pp->toks.data;
-        for (size_t i = 0; i < array_size(&fe.pp->toks, sizeof(struct Token)); ++i)
+        const struct Token* data = preproc_tokens(fe.pp);
+        do
         {
-            printf("%-21s : %s\n", lexstate_to_string(data[i].basic_type), pp_token_str(fe.pp, data + i));
-        }
+            printf("%-21s : %s\n", lexstate_to_string(data->basic_type), pp_token_str(fe.pp, data));
+            if (data->basic_type == LEX_EOF) break;
+            ++data;
+        } while (1);
     }
     fe_destroy(&fe);
     if (args.output) fclose(f);

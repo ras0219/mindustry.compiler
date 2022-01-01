@@ -18,8 +18,7 @@
 void fe_init(struct FrontEnd* fe, const char* include_paths)
 {
     memset(fe, 0, sizeof(struct FrontEnd));
-    fe->pp = (struct Preprocessor*)my_malloc(sizeof(struct Preprocessor));
-    preproc_init(fe->pp, include_paths);
+    fe->pp = preproc_alloc(include_paths);
 
     fe->parser = (struct Parser*)my_malloc(sizeof(struct Parser));
     parser_init(fe->parser);
@@ -43,8 +42,7 @@ void fe_destroy(struct FrontEnd* fe)
     free(fe->elab);
     parser_destroy(fe->parser);
     free(fe->parser);
-    preproc_destroy(fe->pp);
-    free(fe->pp);
+    preproc_free(fe->pp);
 }
 
 int fe_preproc(struct FrontEnd* fe, const char* filename)
@@ -66,7 +64,7 @@ int fe_lex_file(struct FrontEnd* fe, const char* filename)
 {
     int rc = 0;
     UNWRAP(fe_preproc(fe, filename));
-    UNWRAP(parser_parse(fe->parser, (struct Token*)fe->pp->toks.data, (const char*)fe->pp->stringpool.data));
+    UNWRAP(parser_parse(fe->parser, preproc_tokens(fe->pp), preproc_stringpool(fe->pp)));
     UNWRAP(elaborate(fe->elab));
     UNWRAP(be_compile(fe->be));
     UNWRAP(cg_emit(fe->cg, fe->fout));

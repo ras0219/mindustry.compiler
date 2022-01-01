@@ -68,7 +68,7 @@ static char token_expect_comma_or_cparen(Parser* p, const struct Token* tk)
     }
     return parser_ferror(&tk->rc, "error: expected ',' or ')'\n"), '\0';
 }
-static struct Token* token_consume_sym(Parser* p, struct Token* tk, char sym)
+static const struct Token* token_consume_sym(Parser* p, const struct Token* tk, char sym)
 {
     if (token_is_sym(p, tk, sym))
     {
@@ -119,7 +119,7 @@ enum Precedence op_precedence(const char* op)
 
 static int op_precedence_assoc_right(enum Precedence p) { return p == PRECEDENCE_ASSIGN; }
 
-static struct ExprOp* parse_alloc_expr_op(Parser* p, struct Token* tok, struct Expr* lhs, struct Expr* rhs)
+static struct ExprOp* parse_alloc_expr_op(Parser* p, const struct Token* tok, struct Expr* lhs, struct Expr* rhs)
 {
     struct ExprOp* e = (struct ExprOp*)pool_alloc(&p->ast_pools[EXPR_OP], sizeof(struct ExprOp));
     e->kind.kind = EXPR_OP;
@@ -129,9 +129,9 @@ static struct ExprOp* parse_alloc_expr_op(Parser* p, struct Token* tok, struct E
     return e;
 }
 
-struct RowCol* decl_to_rc(struct Decl* decl) { return &decl->id->rc; }
+const struct RowCol* decl_to_rc(const struct Decl* decl) { return &decl->id->rc; }
 
-static struct ExprSym* parse_alloc_expr_sym(Parser* p, struct Token* tok, struct Decl* decl)
+static struct ExprSym* parse_alloc_expr_sym(Parser* p, const struct Token* tok, struct Decl* decl)
 {
     struct ExprSym* e = (struct ExprSym*)pool_alloc(&p->ast_pools[EXPR_SYM], sizeof(struct ExprSym));
     e->kind.kind = EXPR_SYM;
@@ -139,7 +139,7 @@ static struct ExprSym* parse_alloc_expr_sym(Parser* p, struct Token* tok, struct
     e->decl = decl;
     return e;
 }
-static struct ExprLit* parse_alloc_expr_lit(Parser* p, struct Token* tok)
+static struct ExprLit* parse_alloc_expr_lit(Parser* p, const struct Token* tok)
 {
     struct ExprLit* e = (struct ExprLit*)pool_alloc(&p->ast_pools[EXPR_LIT], sizeof(struct ExprLit));
     e->kind.kind = EXPR_LIT;
@@ -155,7 +155,8 @@ static struct ExprCast* parse_alloc_expr_cast(Parser* p, struct Decl* type, stru
     e->type = type;
     return e;
 }
-static struct ExprCall* parse_alloc_expr_call(Parser* p, struct Token* tok, struct Expr* fn, size_t off, size_t ext)
+static struct ExprCall* parse_alloc_expr_call(
+    Parser* p, const struct Token* tok, struct Expr* fn, size_t off, size_t ext)
 {
     struct ExprCall* e = (struct ExprCall*)pool_alloc(&p->ast_pools[EXPR_CALL], sizeof(struct ExprCall));
     e->kind.kind = EXPR_CALL;
@@ -166,18 +167,21 @@ static struct ExprCall* parse_alloc_expr_call(Parser* p, struct Token* tok, stru
     return e;
 }
 
-static struct Token* parse_expr(Parser* p, struct Token* cur_tok, struct Expr** ppe, int precedence);
+static const struct Token* parse_expr(Parser* p, const struct Token* cur_tok, struct Expr** ppe, int precedence);
 
-static struct Token* parse_expr_post_unary(Parser* p, struct Token* cur_tok, struct Expr* lhs, struct Expr** ppe)
+static const struct Token* parse_expr_post_unary(Parser* p,
+                                                 const struct Token* cur_tok,
+                                                 struct Expr* lhs,
+                                                 struct Expr** ppe)
 {
     if (cur_tok->type == LEX_SYMBOL)
     {
-        struct Token* tok_op = cur_tok;
+        const struct Token* tok_op = cur_tok;
         const char* op = token_str(p, tok_op);
 
         if (op[0] == '(')
         {
-            struct Token* tk = ++cur_tok;
+            const struct Token* tk = ++cur_tok;
             struct ExprCall* op_expr;
             if (tk->type == LEX_SYMBOL && token_str(p, tk)[0] == ')')
             {
@@ -247,7 +251,7 @@ static struct Token* parse_expr_post_unary(Parser* p, struct Token* cur_tok, str
     *ppe = (struct Expr*)lhs;
     return cur_tok;
 }
-static int parse_is_token_a_type(Parser* p, struct Token* tok)
+static int parse_is_token_a_type(Parser* p, const struct Token* tok)
 {
     switch (tok->type)
     {
@@ -267,10 +271,10 @@ static int parse_is_token_a_type(Parser* p, struct Token* tok)
     }
 }
 
-static struct Token* parse_type(Parser* p, struct Token* cur_tok, struct Decl** pdecl);
-static struct Token* parse_expr_unary_atom(Parser* p, struct Token* cur_tok, struct Expr** ppe);
+static const struct Token* parse_type(Parser* p, const struct Token* cur_tok, struct Decl** pdecl);
+static const struct Token* parse_expr_unary_atom(Parser* p, const struct Token* cur_tok, struct Expr** ppe);
 
-static struct Token* parse_paren_unary(Parser* p, struct Token* cur_tok, struct Expr** ppe)
+static const struct Token* parse_paren_unary(Parser* p, const struct Token* cur_tok, struct Expr** ppe)
 {
     struct Expr* lhs;
     if (parse_is_token_a_type(p, cur_tok))
@@ -291,7 +295,7 @@ fail:
     return cur_tok;
 }
 
-static struct Token* parse_expr_unary_atom(Parser* p, struct Token* cur_tok, struct Expr** ppe)
+static const struct Token* parse_expr_unary_atom(Parser* p, const struct Token* cur_tok, struct Expr** ppe)
 {
     switch (cur_tok->type)
     {
@@ -312,7 +316,7 @@ static struct Token* parse_expr_unary_atom(Parser* p, struct Token* cur_tok, str
         }
         case LEX_IDENT:
         {
-            struct Token* lhs = cur_tok++;
+            const struct Token* lhs = cur_tok++;
             const char* lhs_str = token_str(p, lhs);
             struct Binding* const lhs_bind = scope_find(&p->scope, lhs_str);
             if (!lhs_bind || !lhs_bind->sym)
@@ -349,12 +353,12 @@ static struct Token* parse_expr_unary_atom(Parser* p, struct Token* cur_tok, str
     }
     return parser_ferror(&cur_tok->rc, "error: expected expression\n"), NULL;
 }
-static struct Token* parse_expr_continue(
-    Parser* p, struct Token* cur_tok, struct Expr* lhs, struct Expr** ppe, enum Precedence precedence)
+static const struct Token* parse_expr_continue(
+    Parser* p, const struct Token* cur_tok, struct Expr* lhs, struct Expr** ppe, enum Precedence precedence)
 {
     if (cur_tok->type == LEX_SYMBOL)
     {
-        struct Token* tok_op = cur_tok;
+        const struct Token* tok_op = cur_tok;
         const char* op = token_str(p, tok_op);
         enum Precedence op_prec = op_precedence(op);
         if (op_prec)
@@ -399,7 +403,7 @@ static struct Token* parse_expr_continue(
 fail:
     return cur_tok;
 }
-static struct Token* parse_expr(Parser* p, struct Token* cur_tok, struct Expr** ppe, int precedence)
+static const struct Token* parse_expr(Parser* p, const struct Token* cur_tok, struct Expr** ppe, int precedence)
 {
     struct Expr* lhs;
     if (!(cur_tok = parse_expr_unary_atom(p, cur_tok, &lhs))) return NULL;
@@ -415,7 +419,7 @@ enum AttrKind
 };
 
 #if 0
-static struct Token* parse_attribute(Parser* p, struct Token* cur_tok, struct Attribute* attr)
+static const struct Token* parse_attribute(Parser* p, const struct Token* cur_tok, struct Attribute* attr)
 {
     enum AttrKind kind;
     if (cur_tok->type != LEX_IDENT) goto error;
@@ -466,7 +470,7 @@ error:
     return parser_ferror(&cur_tok->rc, "error: ill-formed attribute\n"), NULL;
 }
 #endif
-static struct Token* parse_attribute_plist(Parser* p, struct Token* cur_tok, struct Attribute* attr)
+static const struct Token* parse_attribute_plist(Parser* p, const struct Token* cur_tok, struct Attribute* attr)
 {
     if (!(cur_tok = token_consume_sym(p, cur_tok, '('))) return NULL;
     if (!(cur_tok = token_consume_sym(p, cur_tok, '('))) return NULL;
@@ -508,7 +512,7 @@ static struct Token* parse_attribute_plist(Parser* p, struct Token* cur_tok, str
     return token_consume_sym(p, cur_tok, ')');
 }
 
-static struct Token* parse_declspecs(Parser* p, struct Token* cur_tok, struct DeclSpecs** pspecs)
+static const struct Token* parse_declspecs(Parser* p, const struct Token* cur_tok, struct DeclSpecs** pspecs)
 {
     struct DeclSpecs specs = {.kind = AST_DECLSPEC};
 
@@ -636,16 +640,16 @@ enum ExpectIdentifier
     EXPECT_ANY,
 };
 
-static struct Token* parse_stmt(Parser* p, struct Token* cur_tok, struct Expr** p_expr);
-static struct Token* parse_stmts(Parser* p, struct Token* cur_tok, struct Expr** p_expr);
+static const struct Token* parse_stmt(Parser* p, const struct Token* cur_tok, struct Expr** p_expr);
+static const struct Token* parse_stmts(Parser* p, const struct Token* cur_tok, struct Expr** p_expr);
 
-static struct Token* parse_declarator(Parser* p,
-                                      struct Token* cur_tok,
-                                      struct DeclSpecs* specs,
-                                      struct Decl** pdecl,
-                                      enum ExpectIdentifier expect_identifier);
+static const struct Token* parse_declarator(Parser* p,
+                                            const struct Token* cur_tok,
+                                            struct DeclSpecs* specs,
+                                            struct Decl** pdecl,
+                                            enum ExpectIdentifier expect_identifier);
 
-static struct Token* parse_declarator_fnargs(Parser* p, struct Token* cur_tok, struct DeclFn** out_declfn)
+static const struct Token* parse_declarator_fnargs(Parser* p, const struct Token* cur_tok, struct DeclFn** out_declfn)
 {
     struct DeclFn* fn = *out_declfn = pool_alloc(&p->ast_pools[AST_DECLFN], sizeof(struct DeclFn));
     memset(fn, 0, sizeof(struct DeclFn));
@@ -696,7 +700,7 @@ fail:
     return cur_tok;
 }
 
-static struct Token* parse_declarator_arr(Parser* p, struct Token* cur_tok, struct DeclArr** out_declarr)
+static const struct Token* parse_declarator_arr(Parser* p, const struct Token* cur_tok, struct DeclArr** out_declarr)
 {
     struct DeclArr* arr = *out_declarr = pool_alloc(&p->ast_pools[AST_DECLARR], sizeof(struct DeclArr));
     memset(arr, 0, sizeof(struct DeclFn));
@@ -716,12 +720,12 @@ static struct Token* parse_declarator_arr(Parser* p, struct Token* cur_tok, stru
 fail:
     return cur_tok;
 }
-static struct Token* parse_declarator1(Parser* p,
-                                       struct Token* cur_tok,
-                                       struct Token** out_id,
-                                       struct Expr** out_type,
-                                       struct Expr*** out_p_basetype,
-                                       enum ExpectIdentifier expect_identifier)
+static const struct Token* parse_declarator1(Parser* p,
+                                             const struct Token* cur_tok,
+                                             const struct Token** out_id,
+                                             struct Expr** out_type,
+                                             struct Expr*** out_p_basetype,
+                                             enum ExpectIdentifier expect_identifier)
 {
     struct Expr* base_expr = NULL;
     struct Expr** out_base_expr = NULL;
@@ -825,11 +829,11 @@ static struct Decl* parse_alloc_decl(Parser* p, struct DeclSpecs* specs)
     return decl;
 }
 
-static struct Token* parse_declarator(Parser* p,
-                                      struct Token* cur_tok,
-                                      struct DeclSpecs* specs,
-                                      struct Decl** pdecl,
-                                      enum ExpectIdentifier expect_identifier)
+static const struct Token* parse_declarator(Parser* p,
+                                            const struct Token* cur_tok,
+                                            struct DeclSpecs* specs,
+                                            struct Decl** pdecl,
+                                            enum ExpectIdentifier expect_identifier)
 {
     struct Decl* decl = *pdecl = parse_alloc_decl(p, specs);
     struct Decl* const prev_fn = p->fn;
@@ -875,7 +879,7 @@ fail:
     return cur_tok;
 }
 
-static struct Token* parse_type(Parser* p, struct Token* cur_tok, struct Decl** pdecl)
+static const struct Token* parse_type(Parser* p, const struct Token* cur_tok, struct Decl** pdecl)
 {
     const size_t scope_sz = scope_size(&p->scope);
     struct DeclSpecs* specs;
@@ -885,7 +889,7 @@ static struct Token* parse_type(Parser* p, struct Token* cur_tok, struct Decl** 
     return cur_tok;
 }
 
-static struct Token* parse_integral_constant_expr(struct Parser* p, struct Token* cur_tok)
+static const struct Token* parse_integral_constant_expr(struct Parser* p, const struct Token* cur_tok)
 {
     if (cur_tok->type != LEX_NUMBER) PARSER_FAIL_TOK(cur_tok + 1, "error: expected constant integer expression\n");
     ++cur_tok;
@@ -893,10 +897,10 @@ fail:
     return cur_tok;
 }
 
-static struct Token* parse_decl(Parser* p, struct Token* cur_tok, struct Array* pdecls)
+static const struct Token* parse_decl(Parser* p, const struct Token* cur_tok, struct Array* pdecls)
 {
     struct DeclSpecs* specs;
-    struct Token* const declspec_tok = cur_tok;
+    const struct Token* const declspec_tok = cur_tok;
     if (!(cur_tok = parse_declspecs(p, cur_tok, &specs))) return NULL;
     if (specs->is_struct || specs->is_union || specs->is_enum)
     {
@@ -923,7 +927,7 @@ static struct Token* parse_decl(Parser* p, struct Token* cur_tok, struct Array* 
     {
         const size_t scope_sz = scope_size(&p->scope);
         struct Decl* pdecl;
-        struct Token* const declarator_tok = cur_tok;
+        const struct Token* const declarator_tok = cur_tok;
         if (!(cur_tok = parse_declarator(p, cur_tok, specs, &pdecl, TOP_DECLARATOR))) return NULL;
         if (!pdecl->name) abort();
         array_push_ptr(pdecls, pdecl);
@@ -985,7 +989,7 @@ fail:
     return cur_tok;
 }
 
-static struct Token* parse_conditional(Parser* p, struct Token* cur_tok, struct Expr** p_cond)
+static const struct Token* parse_conditional(Parser* p, const struct Token* cur_tok, struct Expr** p_cond)
 {
     if (!(cur_tok = token_consume_sym(p, cur_tok, '('))) return NULL;
 
@@ -996,7 +1000,7 @@ static struct Token* parse_conditional(Parser* p, struct Token* cur_tok, struct 
 
 static struct Expr s_stmt_none = {.kind = STMT_NONE};
 
-static struct Token* parse_stmt_decl(Parser* p, struct Token* cur_tok, struct Expr** p_expr)
+static const struct Token* parse_stmt_decl(Parser* p, const struct Token* cur_tok, struct Expr** p_expr)
 {
     struct Array arr_decls;
     array_init(&arr_decls);
@@ -1016,7 +1020,7 @@ fail:
     return cur_tok;
 }
 
-static struct Token* parse_stmts(Parser* p, struct Token* cur_tok, struct Expr** p_expr)
+static const struct Token* parse_stmts(Parser* p, const struct Token* cur_tok, struct Expr** p_expr)
 {
     struct Array arr_stmts = {};
     do
@@ -1036,7 +1040,7 @@ fail:
     return cur_tok;
 }
 
-static struct Token* parse_stmt(Parser* p, struct Token* cur_tok, struct Expr** p_expr)
+static const struct Token* parse_stmt(Parser* p, const struct Token* cur_tok, struct Expr** p_expr)
 {
     if (parse_is_token_a_type(p, cur_tok))
     {
@@ -1256,7 +1260,7 @@ __attribute__((unused)) static void* find_with_stride(void* arr_start, size_t ar
     return NULL;
 }
 
-int parser_parse(struct Parser* p, struct Token* cur_tok, const char* tk_strs)
+int parser_parse(struct Parser* p, const struct Token* cur_tok, const char* tk_strs)
 {
     p->tk_strdata = tk_strs;
 

@@ -45,5 +45,5 @@ enum Precedence op_precedence(const char* op);
 void parser_init(struct Parser* p);
 void parser_destroy(struct Parser* p);
 // tk array must terminate with LEX_EOF
-int parser_parse(struct Parser* p, struct Token* tk, const char* tk_strs);
+int parser_parse(struct Parser* p, const struct Token* tk, const char* tk_strs);
 const char* token_str(struct Parser* p, const struct Token* tk);

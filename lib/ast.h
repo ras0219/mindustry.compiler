@@ -110,7 +110,7 @@ struct ExprCall
 struct StmtReturn
 {
     struct Expr kind;
-    struct Token* tok;
+    const struct Token* tok;
     // may be null
     struct Expr* expr;
 };
@@ -131,7 +131,7 @@ struct StmtIf
 struct StmtGoto
 {
     struct Expr kind;
-    struct Token* dst;
+    const struct Token* dst;
 };
 struct StmtLoop
 {
@@ -154,18 +154,18 @@ struct StmtBlock
 struct StmtLabel
 {
     struct Expr kind;
-    struct Token* tok;
+    const struct Token* tok;
     struct Expr* stmt;
 };
 struct StmtBreak
 {
     struct Expr kind;
-    struct Token* tok;
+    const struct Token* tok;
 };
 struct StmtContinue
 {
     struct Expr kind;
-    struct Token* tok;
+    const struct Token* tok;
 };
 
 const struct RowCol* expr_to_rc(const struct Expr* expr);
