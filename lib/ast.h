@@ -83,6 +83,7 @@ struct ExprField
     struct Expr kind;
     int is_arrow : 1;
     const struct Token* tok;
+    const struct Token* field_tok;
     const char* fieldname;
     struct Expr* lhs;
     struct Decl* decl;

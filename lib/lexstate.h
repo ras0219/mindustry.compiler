@@ -10,6 +10,8 @@
     Y(LEX_LONG, "long")                                                                                                \
     Y(LEX_UNSIGNED, "unsigned")                                                                                        \
     Y(LEX_SIGNED, "signed")                                                                                            \
+    Y(LEX_FLOAT, "float")                                                                                              \
+    Y(LEX_DOUBLE, "double")                                                                                            \
     Y(LEX_VOID, "void")                                                                                                \
     Y(LEX_GOTO, "goto")                                                                                                \
     Y(LEX_RETURN, "return")                                                                                            \
@@ -34,13 +36,16 @@
     Y(LEX_AUTO, "auto")                                                                                                \
     Y(LEX_TYPEDEF, "typedef")                                                                                          \
     Y(LEX_UURESTRICT, "__restrict")                                                                                    \
+    Y(LEX_UUINT64, "__int64")                                                                                          \
     Y(LEX_RESTRICT, "restrict")                                                                                        \
     Y(LEX_UUVALIST, "__builtin_va_list")                                                                               \
     Y(LEX_UUFORCEINLINE, "__forceinline")                                                                              \
+    Y(LEX_INLINE, "inline")                                                                                            \
     Y(LEX_STDCALL, "__stdcall")                                                                                        \
     Y(LEX_ATTRIBUTE, "__attribute__")                                                                                  \
-    Y(LEX_MSTRING, "__string")                                                                                         \
-    Y(LEX_UNIT, "__unit")                                                                                              \
+    Y(LEX_DECLSPEC, "__declspec")                                                                                      \
+    Y(LEX_UPRAGMA, "_Pragma")                                                                                          \
+    Y(LEX_UUPRAGMA, "__pragma")                                                                                        \
     Y(LEX_CDECL, "__cdecl")
 
 #define X_LEX_STATES(Z)                                                                                                \

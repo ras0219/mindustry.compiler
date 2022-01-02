@@ -55,22 +55,10 @@ typedef struct Parser Parser;
     } while (0)
 
 const char* token_str(Parser* p, const struct Token* tk) { return p->tk_strdata + tk->sp_offset; }
-static int token_is_sym(Parser* p, const struct Token* tk, char sym)
-{
-    return tk->type == LEX_SYMBOL && token_str(p, tk)[0] == sym;
-}
-static char token_expect_comma_or_cparen(Parser* p, const struct Token* tk)
-{
-    if (tk->type == LEX_SYMBOL)
-    {
-        const char ch = token_str(p, tk)[0];
-        if (ch == ')' || ch == ',') return ch;
-    }
-    return parser_ferror(&tk->rc, "error: expected ',' or ')'\n"), '\0';
-}
+static int token_is_sym(Parser* p, const struct Token* tk, char sym) { return tk->type == TOKEN_SYM1(sym); }
 static const struct Token* token_consume_sym(Parser* p, const struct Token* tk, char sym)
 {
-    if (token_is_sym(p, tk, sym))
+    if (tk->type == TOKEN_SYM1(sym))
     {
         return tk + 1;
     }
@@ -79,40 +67,24 @@ static const struct Token* token_consume_sym(Parser* p, const struct Token* tk, 
 
 static int symbol_is_equivalent_redecl(struct Decl* orig, struct Decl* redecl) { return 1; }
 
-enum Precedence op_precedence(const char* op)
+enum Precedence op_precedence(unsigned int tok_type)
 {
-    switch (op[0])
+    switch (tok_type)
     {
-        case '=':
-            if (op[1] == '=')
-                return PRECEDENCE_EQUALITY;
-            else
-                return PRECEDENCE_ASSIGN;
-        case '!':
-            if (op[1] == '=')
-                return PRECEDENCE_EQUALITY;
-            else
-                return PRECEDENCE_ERROR;
-        case '|':
-            if (op[1] == '|')
-                return PRECEDENCE_OR;
-            else
-                return PRECEDENCE_ERROR;
-        case '&':
-            if (op[1] == '&')
-                return PRECEDENCE_AND;
-            else
-                return PRECEDENCE_ERROR;
-        case '>':
-        case '<': return PRECEDENCE_RELATION;
-        case '+':
-            if (op[1] == '+') return PRECEDENCE_ERROR;
-        case '-':
-            return PRECEDENCE_ADD;
-            if (op[1] == '-') return PRECEDENCE_ERROR;
-        case '*':
-        case '%':
-        case '/': return PRECEDENCE_MULT;
+        case TOKEN_SYM1('='): return PRECEDENCE_ASSIGN;
+        case TOKEN_SYM2('<', '='):
+        case TOKEN_SYM2('>', '='):
+        case TOKEN_SYM1('<'):
+        case TOKEN_SYM1('>'): return PRECEDENCE_RELATION;
+        case TOKEN_SYM2('!', '='):
+        case TOKEN_SYM2('=', '='): return PRECEDENCE_EQUALITY;
+        case TOKEN_SYM2('|', '|'): return PRECEDENCE_OR;
+        case TOKEN_SYM2('&', '&'): return PRECEDENCE_AND;
+        case TOKEN_SYM1('+'):
+        case TOKEN_SYM1('-'): return PRECEDENCE_ADD;
+        case TOKEN_SYM1('*'):
+        case TOKEN_SYM1('/'):
+        case TOKEN_SYM1('%'): return PRECEDENCE_MULT;
         default: return PRECEDENCE_ERROR;
     }
 }
@@ -174,98 +146,109 @@ static const struct Token* parse_expr_post_unary(Parser* p,
                                                  struct Expr* lhs,
                                                  struct Expr** ppe)
 {
-    if (cur_tok->type == LEX_SYMBOL)
+top:
+    const struct Token* tok_op = cur_tok;
+    if (cur_tok->type == TOKEN_SYM1('('))
     {
-        const struct Token* tok_op = cur_tok;
-        const char* op = token_str(p, tok_op);
-
-        if (op[0] == '(')
+        ++cur_tok;
+        if (cur_tok->type == TOKEN_SYM1(')'))
         {
-            const struct Token* tk = ++cur_tok;
-            struct ExprCall* op_expr;
-            if (tk->type == LEX_SYMBOL && token_str(p, tk)[0] == ')')
-            {
-                ++cur_tok;
-                op_expr = parse_alloc_expr_call(p, tok_op, lhs, 0, 0);
-            }
-            else
-            {
+            ++cur_tok;
+            lhs = (struct Expr*)parse_alloc_expr_call(p, tok_op, lhs, 0, 0);
+        }
+        else
+        {
 #define PARAM_COUNT 16
-                struct Expr* arg_exprs[PARAM_COUNT];
-                size_t i = 0;
-                do
-                {
-                    if (i == PARAM_COUNT)
-                        return parser_ferror(
-                                   &cur_tok->rc, "error: too many arguments for function (%d supported)", PARAM_COUNT),
-                               NULL;
-                    if (!(cur_tok = parse_expr(p, cur_tok, arg_exprs + i++, PRECEDENCE_ASSIGN))) return NULL;
-                    char ch = token_expect_comma_or_cparen(p, cur_tok++);
-                    if (ch == ',')
-                        continue;
-                    else if (ch == ')')
-                        break;
-                    else
-                        return NULL;
-                } while (1);
-                size_t offset = p->expr_seqs.sz / sizeof(struct Expr*);
-                size_t extent = i;
-                array_push(&p->expr_seqs, arg_exprs, i * sizeof(struct Expr*));
-                op_expr = parse_alloc_expr_call(p, tok_op, lhs, offset, extent);
-            }
-            return parse_expr_post_unary(p, cur_tok, (struct Expr*)op_expr, ppe);
-        }
-        else if (op[0] == '[')
-        {
-            struct ExprOp* e = parse_alloc_expr_op(p, cur_tok++, lhs, NULL);
-            if (!(cur_tok = parse_expr(p, cur_tok, &e->rhs, PRECEDENCE_COMMA))) return NULL;
-            if (!(cur_tok = token_consume_sym(p, cur_tok, ']'))) return NULL;
-            return parse_expr_post_unary(p, cur_tok, (struct Expr*)e, ppe);
-        }
-        else if (op[0] == '+' && op[1] == '+')
-        {
-            struct ExprOp* e = parse_alloc_expr_op(p, cur_tok, lhs, NULL);
-            return parse_expr_post_unary(p, cur_tok + 1, (struct Expr*)e, ppe);
-        }
-        else if (op[0] == '-' && op[1] == '-')
-        {
-            struct ExprOp* e = parse_alloc_expr_op(p, cur_tok, lhs, NULL);
-            return parse_expr_post_unary(p, cur_tok + 1, (struct Expr*)e, ppe);
-        }
-        else if ((op[0] == '.' && op[1] == '\0') || (op[0] == '-' && op[1] == '>'))
-        {
-            struct ExprField* e = (struct ExprField*)pool_alloc(&p->ast_pools[EXPR_FIELD], sizeof(struct ExprField));
-            e->kind.kind = EXPR_FIELD;
-            e->is_arrow = op[0] == '-';
-            e->tok = cur_tok++;
-            if (cur_tok->type != LEX_IDENT)
+            struct Expr* arg_exprs[PARAM_COUNT];
+            size_t i = 0;
+            do
             {
-                return parser_tok_error(cur_tok, "error: expected field name"), NULL;
-            }
-            e->fieldname = token_str(p, cur_tok);
-            e->lhs = lhs;
-            e->decl = NULL;
-            return parse_expr_post_unary(p, cur_tok + 1, (struct Expr*)e, ppe);
+                if (i == PARAM_COUNT)
+                    return parser_ferror(
+                               &cur_tok->rc, "error: too many arguments for function (%d supported)\n", PARAM_COUNT),
+                           NULL;
+                fprintf(stderr, "in call: %s, %u\n", lexstate_to_string(cur_tok->type), cur_tok->type);
+                PARSER_DO(parse_expr(p, cur_tok, arg_exprs + i++, PRECEDENCE_ASSIGN));
+                if (cur_tok->type == TOKEN_SYM1(','))
+                {
+                    ++cur_tok;
+                    continue;
+                }
+                if (cur_tok->type == TOKEN_SYM1(')'))
+                {
+                    ++cur_tok;
+                    break;
+                }
+                PARSER_FAIL("error: expected ',' or ')'\n");
+            } while (1);
+            size_t offset = p->expr_seqs.sz / sizeof(struct Expr*);
+            size_t extent = i;
+            array_push(&p->expr_seqs, arg_exprs, i * sizeof(struct Expr*));
+            lhs = (struct Expr*)parse_alloc_expr_call(p, tok_op, lhs, offset, extent);
         }
+        goto top;
+    }
+    if (cur_tok->type == TOKEN_SYM1('['))
+    {
+        struct ExprOp* e = parse_alloc_expr_op(p, cur_tok++, lhs, NULL);
+        PARSER_DO(parse_expr(p, cur_tok, &e->rhs, PRECEDENCE_COMMA));
+        PARSER_DO(token_consume_sym(p, cur_tok, ']'));
+        lhs = (struct Expr*)e;
+        goto top;
+    }
+
+    if (cur_tok->type == TOKEN_SYM2('+', '+'))
+    {
+        lhs = (struct Expr*)parse_alloc_expr_op(p, cur_tok, lhs, NULL);
+        ++cur_tok;
+        goto top;
+    }
+    if (cur_tok->type == TOKEN_SYM2('-', '-'))
+    {
+        lhs = (struct Expr*)parse_alloc_expr_op(p, cur_tok, lhs, NULL);
+        ++cur_tok;
+        goto top;
+    }
+    if (cur_tok->type == TOKEN_SYM2('-', '>') || cur_tok->type == TOKEN_SYM1('.'))
+    {
+        struct ExprField* e = (struct ExprField*)pool_alloc(&p->ast_pools[EXPR_FIELD], sizeof(struct ExprField));
+        e->kind.kind = EXPR_FIELD;
+        e->is_arrow = cur_tok->type == TOKEN_SYM2('-', '>');
+        e->tok = cur_tok++;
+        if (cur_tok->type != LEX_IDENT)
+        {
+            PARSER_FAIL("error: expected field name\n");
+        }
+        e->field_tok = cur_tok;
+        e->fieldname = token_str(p, cur_tok);
+        e->lhs = lhs;
+        e->decl = NULL;
+        lhs = (struct Expr*)e;
+        ++cur_tok;
+        goto top;
     }
     *ppe = (struct Expr*)lhs;
+fail:
     return cur_tok;
 }
 static int parse_is_token_a_type(Parser* p, const struct Token* tok)
 {
     switch (tok->type)
     {
-        case LEX_MSTRING:
         case LEX_INT:
         case LEX_CHAR:
         case LEX_LONG:
         case LEX_SHORT:
         case LEX_UNSIGNED:
         case LEX_SIGNED:
-        case LEX_UNIT:
         case LEX_VOLATILE:
         case LEX_CONST:
         case LEX_STRUCT:
+        case LEX_UNION:
+        case LEX_ENUM:
+        case LEX_FLOAT:
+        case LEX_DOUBLE:
+        case LEX_UUINT64:
         case LEX_VOID: return 1;
         default: return 0;
     }
@@ -297,23 +280,20 @@ fail:
 
 static const struct Token* parse_expr_unary_atom(Parser* p, const struct Token* cur_tok, struct Expr** ppe)
 {
+top:
     switch (cur_tok->type)
     {
-        case LEX_SYMBOL:
+        case TOKEN_SYM1('!'):
+        case TOKEN_SYM1('&'):
+        case TOKEN_SYM1('*'):
         {
-            const char* op = token_str(p, cur_tok);
-            if ((op[0] == '!' || op[0] == '&' || op[0] == '*') && op[1] == '\0')
-            {
-                struct ExprOp* e = parse_alloc_expr_op(p, cur_tok, NULL, NULL);
-                *ppe = (struct Expr*)e;
-                return parse_expr_unary_atom(p, cur_tok + 1, &e->lhs);
-            }
-            else if (op[0] == '(' && op[1] == '\0')
-            {
-                return parse_paren_unary(p, cur_tok + 1, ppe);
-            }
-            break;
+            struct ExprOp* e = parse_alloc_expr_op(p, cur_tok, NULL, NULL);
+            *ppe = (struct Expr*)e;
+            ppe = &e->lhs;
+            ++cur_tok;
+            goto top;
         }
+        case TOKEN_SYM1('('): return parse_paren_unary(p, cur_tok + 1, ppe);
         case LEX_IDENT:
         {
             const struct Token* lhs = cur_tok++;
@@ -347,7 +327,9 @@ static const struct Token* parse_expr_unary_atom(Parser* p, const struct Token* 
                     return parse_expr_post_unary(p, cur_tok, (struct Expr*)e, ppe);
                 }
             }
-            return parse_expr_unary_atom(p, cur_tok + 1, &e->lhs);
+            ppe = &e->lhs;
+            ++cur_tok;
+            goto top;
         }
         default: break;
     }
@@ -356,48 +338,44 @@ static const struct Token* parse_expr_unary_atom(Parser* p, const struct Token* 
 static const struct Token* parse_expr_continue(
     Parser* p, const struct Token* cur_tok, struct Expr* lhs, struct Expr** ppe, enum Precedence precedence)
 {
-    if (cur_tok->type == LEX_SYMBOL)
+    const struct Token* tok_op = cur_tok;
+    enum Precedence op_prec = op_precedence(tok_op->type);
+    if (op_prec != PRECEDENCE_ERROR)
     {
-        const struct Token* tok_op = cur_tok;
-        const char* op = token_str(p, tok_op);
-        enum Precedence op_prec = op_precedence(op);
-        if (op_prec)
+        if (precedence <= op_prec && op_precedence_assoc_right(op_prec))
         {
-            if (precedence <= op_prec && op_precedence_assoc_right(op_prec))
+            if (tok_op->type == TOKEN_SYM1('='))
             {
-                if (op[0] == '=' && op[1] == '\0' && precedence <= PRECEDENCE_ASSIGN)
-                {
-                    struct ExprOp* op_expr = parse_alloc_expr_op(p, tok_op, lhs, NULL);
-                    *ppe = (struct Expr*)op_expr;
-                    PARSER_DO(parse_expr(p, cur_tok + 1, &op_expr->rhs, PRECEDENCE_ASSIGN));
-                }
-                else
-                {
-                    *ppe = lhs;
-                }
-                return cur_tok;
+                struct ExprOp* op_expr = parse_alloc_expr_op(p, tok_op, lhs, NULL);
+                *ppe = (struct Expr*)op_expr;
+                PARSER_DO(parse_expr(p, cur_tok + 1, &op_expr->rhs, PRECEDENCE_ASSIGN));
             }
-            else if (precedence < op_prec)
+            else
             {
-                struct Expr* rhs;
-                PARSER_DO(parse_expr(p, cur_tok + 1, &rhs, op_prec));
-                struct ExprOp* op_expr = parse_alloc_expr_op(p, tok_op, lhs, rhs);
-                return parse_expr_continue(p, cur_tok, (struct Expr*)op_expr, ppe, precedence);
+                *ppe = lhs;
             }
-        }
-        else if (op[0] == '?')
-        {
-            // ternary operator
-            struct ExprOp* op_expr = parse_alloc_expr_op(p, tok_op, lhs, NULL);
-            *ppe = (struct Expr*)op_expr;
-            struct Expr* on_true;
-            PARSER_DO(parse_expr(p, cur_tok + 1, &on_true, PRECEDENCE_ASSIGN));
-            struct ExprOp* switch_expr = parse_alloc_expr_op(p, cur_tok, on_true, NULL);
-            op_expr->rhs = &switch_expr->kind;
-            PARSER_DO(token_consume_sym(p, cur_tok, ':'));
-            PARSER_DO(parse_expr(p, cur_tok, &switch_expr->rhs, PRECEDENCE_COMMA));
             return cur_tok;
         }
+        else if (precedence < op_prec)
+        {
+            struct Expr* rhs;
+            PARSER_DO(parse_expr(p, cur_tok + 1, &rhs, op_prec));
+            struct ExprOp* op_expr = parse_alloc_expr_op(p, tok_op, lhs, rhs);
+            return parse_expr_continue(p, cur_tok, (struct Expr*)op_expr, ppe, precedence);
+        }
+    }
+    else if (tok_op->type == TOKEN_SYM1('?'))
+    {
+        // ternary operator
+        struct ExprOp* op_expr = parse_alloc_expr_op(p, tok_op, lhs, NULL);
+        *ppe = (struct Expr*)op_expr;
+        struct Expr* on_true;
+        PARSER_DO(parse_expr(p, cur_tok + 1, &on_true, PRECEDENCE_ASSIGN));
+        struct ExprOp* switch_expr = parse_alloc_expr_op(p, cur_tok, on_true, NULL);
+        op_expr->rhs = &switch_expr->kind;
+        PARSER_DO(token_consume_sym(p, cur_tok, ':'));
+        PARSER_DO(parse_expr(p, cur_tok, &switch_expr->rhs, PRECEDENCE_COMMA));
+        return cur_tok;
     }
     *ppe = lhs;
 fail:
@@ -470,6 +448,25 @@ error:
     return parser_ferror(&cur_tok->rc, "error: ill-formed attribute\n"), NULL;
 }
 #endif
+static const struct Token* parse_msdeclspec(Parser* p, const struct Token* cur_tok, struct Attribute* attr)
+{
+    PARSER_DO(token_consume_sym(p, cur_tok, '('));
+    int level = 1;
+    while (level)
+    {
+        if (cur_tok->type == LEX_EOF)
+        {
+            PARSER_FAIL("error: expected ')' in __declspec\n");
+        }
+        else if (cur_tok->type == TOKEN_SYM1('('))
+            ++level;
+        else if (cur_tok->type == TOKEN_SYM1(')'))
+            --level;
+        ++cur_tok;
+    }
+fail:
+    return cur_tok;
+}
 static const struct Token* parse_attribute_plist(Parser* p, const struct Token* cur_tok, struct Attribute* attr)
 {
     if (!(cur_tok = token_consume_sym(p, cur_tok, '('))) return NULL;
@@ -523,6 +520,11 @@ static const struct Token* parse_declspecs(Parser* p, const struct Token* cur_to
             PARSER_DO(parse_attribute_plist(p, cur_tok + 1, &specs.attr));
             continue;
         }
+        else if (cur_tok->type == LEX_DECLSPEC)
+        {
+            PARSER_DO(parse_msdeclspec(p, cur_tok + 1, &specs.attr));
+            continue;
+        }
         else if (cur_tok->type == LEX_IDENT)
         {
             // already found core type
@@ -541,34 +543,85 @@ static const struct Token* parse_declspecs(Parser* p, const struct Token* cur_to
         {
             specs.is_struct = 1;
             specs.tok = cur_tok++;
-            if (cur_tok->type != LEX_IDENT) PARSER_FAIL("error: expected identifier for struct\n");
+            if (cur_tok->type != LEX_IDENT) continue;
+            specs.tok = cur_tok;
             specs.name = token_str(p, cur_tok);
         }
         else if (cur_tok->type == LEX_ENUM)
         {
             specs.is_enum = 1;
             specs.tok = cur_tok++;
-            if (cur_tok->type != LEX_IDENT) PARSER_FAIL("error: expected identifier for enum\n");
+            if (cur_tok->type != LEX_IDENT) continue;
+            specs.tok = cur_tok;
             specs.name = token_str(p, cur_tok);
         }
         else if (cur_tok->type == LEX_UNION)
         {
             specs.is_union = 1;
             specs.tok = cur_tok++;
-            if (cur_tok->type != LEX_IDENT) PARSER_FAIL("error: expected identifier for union\n");
+            if (cur_tok->type != LEX_IDENT) continue;
+            specs.tok = cur_tok;
             specs.name = token_str(p, cur_tok);
         }
-        else if (cur_tok->type == LEX_VOID || cur_tok->type == LEX_INT || cur_tok->type == LEX_BOOL ||
-                 cur_tok->type == LEX_CHAR || cur_tok->type == LEX_LONG || cur_tok->type == LEX_SHORT ||
-                 cur_tok->type == LEX_MSTRING || cur_tok->type == LEX_UNIT || cur_tok->type == LEX_UUVALIST)
+        else if (cur_tok->type == LEX_VOID || cur_tok->type == LEX_BOOL || cur_tok->type == LEX_UUVALIST ||
+                 cur_tok->type == LEX_FLOAT || cur_tok->type == LEX_UUVALIST || cur_tok->type == LEX_DOUBLE ||
+                 cur_tok->type == LEX_CHAR || cur_tok->type == LEX_INT || cur_tok->type == LEX_UUINT64)
         {
             if (specs.tok)
             {
-                PARSER_FAIL("error: repeated core declaration specifiers are not allowed\n");
+                PARSER_FAIL("error: repeated type declaration specifiers are not allowed (was '%s', got '%s')\n",
+                            token_str(p, specs.tok),
+                            token_str(p, cur_tok));
             }
             specs.tok = cur_tok;
         }
-        else if (cur_tok->type == LEX_SYMBOL && strcmp(token_str(p, cur_tok), "...") == 0)
+        else if (cur_tok->type == LEX_SIGNED || cur_tok->type == LEX_UNSIGNED || cur_tok->type == LEX_LONG ||
+                 cur_tok->type == LEX_SHORT)
+        {
+            if (specs.tok)
+            {
+                PARSER_FAIL("error: repeated type declaration specifiers are not allowed (was '%s', got '%s')\n",
+                            token_str(p, specs.tok),
+                            token_str(p, cur_tok));
+            }
+            int len = 0;
+            if (cur_tok->type == LEX_SIGNED || cur_tok->type == LEX_UNSIGNED)
+            {
+                specs.is_signed = cur_tok->type == LEX_SIGNED;
+                specs.is_unsigned = cur_tok->type == LEX_UNSIGNED;
+                ++len;
+            }
+            if (cur_tok[len].type == LEX_LONG)
+            {
+                ++len;
+                if (cur_tok[len].type == LEX_LONG)
+                {
+                    specs.is_longlong = 1;
+                    ++len;
+                }
+                else
+                {
+                    specs.is_long = 1;
+                }
+                if (cur_tok[len].type == LEX_INT || cur_tok[len].type == LEX_DOUBLE) ++len;
+            }
+            else if (cur_tok[len].type == LEX_SHORT)
+            {
+                ++len;
+                specs.is_short = 1;
+                if (cur_tok[len].type == LEX_INT) ++len;
+            }
+            else if (cur_tok[len].type == LEX_CHAR || cur_tok[len].type == LEX_UUINT64 || cur_tok[len].type == LEX_INT)
+            {
+                ++len;
+            }
+            if (len == 0) abort();
+
+            specs.tok = cur_tok + len - 1;
+            cur_tok += len;
+            continue;
+        }
+        else if (cur_tok->type == TOKEN_SYM3('.', '.', '.'))
         {
             if (specs.tok)
             {
@@ -591,9 +644,17 @@ static const struct Token* parse_declspecs(Parser* p, const struct Token* cur_to
             if (specs.is_extern) PARSER_FAIL("error: repeated 'extern' declaration specifiers are not allowed\n");
             specs.is_extern = 1;
         }
+        else if (cur_tok->type == LEX_INLINE)
+        {
+            if (specs.is_inline) PARSER_FAIL("error: repeated 'inline' declaration specifiers are not allowed\n");
+            specs.is_inline = 1;
+        }
         else if (cur_tok->type == LEX_STDCALL)
         {
             specs.is_stdcall = 1;
+        }
+        else if (cur_tok->type == LEX_CDECL)
+        {
         }
         else if (cur_tok->type == LEX_TYPEDEF)
         {
@@ -605,23 +666,16 @@ static const struct Token* parse_declspecs(Parser* p, const struct Token* cur_to
             if (specs.is_volatile) PARSER_FAIL("error: repeated 'volatile' declaration specifiers are not allowed\n");
             specs.is_volatile = 1;
         }
-        else if (cur_tok->type == LEX_UNSIGNED)
-        {
-            if (specs.is_unsigned) PARSER_FAIL("error: repeated 'unsigned' declaration specifiers are not allowed\n");
-            specs.is_unsigned = 1;
-        }
-        else if (cur_tok->type == LEX_SIGNED)
-        {
-            if (specs.is_signed) PARSER_FAIL("error: repeated 'signed' declaration specifiers are not allowed\n");
-            specs.is_signed = 1;
-        }
         else if (cur_tok->type == LEX_UUFORCEINLINE)
         {
             // ignore
         }
         else
         {
-            if (!specs.tok) PARSER_FAIL("error: expected type\n");
+            if (!specs.tok)
+            {
+                PARSER_FAIL("error: expected type\n");
+            }
             break;
         }
         ++cur_tok;
@@ -656,9 +710,13 @@ static const struct Token* parse_declarator_fnargs(Parser* p, const struct Token
     fn->kind.kind = AST_DECLFN;
     fn->tok = cur_tok;
     ++cur_tok;
-    if (token_is_sym(p, cur_tok, ')'))
+    if (cur_tok->type == TOKEN_SYM1(')'))
     {
         ++cur_tok;
+    }
+    else if (cur_tok->type == LEX_VOID && cur_tok[1].type == TOKEN_SYM1(')'))
+    {
+        cur_tok += 2;
     }
     else
     {
@@ -676,19 +734,15 @@ static const struct Token* parse_declarator_fnargs(Parser* p, const struct Token
             PARSER_DO(parse_declarator(p, cur_tok, arg_specs, arg_decl, EXPECT_ANY));
             (*arg_decl)->arg_index = fn->extent;
 
-            if (cur_tok->type == LEX_SYMBOL)
+            if (cur_tok->type == TOKEN_SYM1(','))
             {
-                const char ch = token_str(p, cur_tok)[0];
-                if (ch == ',')
-                {
-                    ++cur_tok;
-                    continue;
-                }
-                else if (ch == ')')
-                {
-                    ++cur_tok;
-                    break;
-                }
+                ++cur_tok;
+                continue;
+            }
+            else if (cur_tok->type == TOKEN_SYM1(')'))
+            {
+                ++cur_tok;
+                break;
             }
             PARSER_FAIL("error: expected ',' and further parameter declarations or ')'\n");
         }
@@ -707,7 +761,7 @@ static const struct Token* parse_declarator_arr(Parser* p, const struct Token* c
     arr->kind.kind = AST_DECLARR;
     arr->tok = cur_tok;
     ++cur_tok;
-    if (token_is_sym(p, cur_tok, ']'))
+    if (cur_tok->type == TOKEN_SYM1(']'))
     {
         ++cur_tok;
     }
@@ -729,7 +783,8 @@ static const struct Token* parse_declarator1(Parser* p,
 {
     struct Expr* base_expr = NULL;
     struct Expr** out_base_expr = NULL;
-    if (token_is_sym(p, cur_tok, '*'))
+    if (cur_tok->type == LEX_CDECL) ++cur_tok;
+    if (cur_tok->type == TOKEN_SYM1('*'))
     {
         struct DeclPtr* base_ptr = pool_alloc(&p->ast_pools[AST_DECLPTR], sizeof(struct DeclPtr));
         memset(base_ptr, 0, sizeof(struct DeclPtr));
@@ -739,7 +794,7 @@ static const struct Token* parse_declarator1(Parser* p,
         ++cur_tok;
         while (1)
         {
-            if (token_is_sym(p, cur_tok, '*'))
+            if (cur_tok->type == TOKEN_SYM1('*'))
             {
                 struct DeclPtr* p2 = pool_alloc(&p->ast_pools[AST_DECLPTR], sizeof(struct DeclPtr));
                 memset(p2, 0, sizeof(struct DeclPtr));
@@ -769,25 +824,33 @@ static const struct Token* parse_declarator1(Parser* p,
         }
         base_expr = &base_ptr->kind;
     }
-    if (token_is_sym(p, cur_tok, '('))
+    if (cur_tok->type == TOKEN_SYM1('('))
     {
         PARSER_DO(parse_declarator1(p, cur_tok + 1, out_id, out_type, &out_type, expect_identifier));
         PARSER_DO(token_consume_sym(p, cur_tok, ')'));
     }
-    else if (expect_identifier != EXPECT_NO_IDENTIFIER)
+    else
     {
-        if (cur_tok->type == LEX_IDENT)
+        if (cur_tok->type == LEX_CDECL)
         {
-            *out_id = cur_tok++;
+            ++cur_tok;
         }
-        else if (expect_identifier == TOP_DECLARATOR)
+        if (expect_identifier != EXPECT_NO_IDENTIFIER)
         {
-            PARSER_FAIL("error: expected identifier\n");
+            if (cur_tok->type == LEX_IDENT)
+            {
+                *out_id = cur_tok++;
+            }
+            else if (expect_identifier == TOP_DECLARATOR)
+            {
+                PARSER_FAIL("error: expected identifier in declaration\n");
+            }
         }
     }
+
     do
     {
-        if (token_is_sym(p, cur_tok, '('))
+        if (cur_tok->type == TOKEN_SYM1('('))
         {
             struct DeclFn* declfn = NULL;
             PARSER_DO(parse_declarator_fnargs(p, cur_tok, &declfn));
@@ -795,7 +858,7 @@ static const struct Token* parse_declarator1(Parser* p,
             out_type = &declfn->type;
             continue;
         }
-        else if (token_is_sym(p, cur_tok, '['))
+        else if (cur_tok->type == TOKEN_SYM1('['))
         {
             struct DeclArr* declarr = NULL;
             PARSER_DO(parse_declarator_arr(p, cur_tok, &declarr));
@@ -842,6 +905,11 @@ static const struct Token* parse_declarator(Parser* p,
     {
         ++cur_tok;
         PARSER_DO(parse_attribute_plist(p, cur_tok, &decl->attr));
+    }
+    while (cur_tok->type == LEX_DECLSPEC)
+    {
+        ++cur_tok;
+        PARSER_DO(parse_msdeclspec(p, cur_tok, &decl->attr));
     }
     struct Expr** p_basetype = NULL;
     PARSER_DO(parse_declarator1(p, cur_tok, &decl->id, &decl->type, &p_basetype, expect_identifier));
@@ -901,20 +969,20 @@ static const struct Token* parse_decl(Parser* p, const struct Token* cur_tok, st
 {
     struct DeclSpecs* specs;
     const struct Token* const declspec_tok = cur_tok;
-    if (!(cur_tok = parse_declspecs(p, cur_tok, &specs))) return NULL;
+    PARSER_DO(parse_declspecs(p, cur_tok, &specs));
     if (specs->is_struct || specs->is_union || specs->is_enum)
     {
         if (token_is_sym(p, cur_tok, ';') || token_is_sym(p, cur_tok, '{'))
         {
             struct Decl* decl = parse_alloc_decl(p, specs);
-            decl->id = specs->tok + 1;
-            decl->name = token_str(p, decl->id);
+            decl->id = specs->tok;
+            decl->name = specs->name;
             array_push_ptr(pdecls, decl);
             if (token_is_sym(p, cur_tok, '{'))
             {
                 const size_t scope_sz = scope_size(&p->scope);
-                cur_tok = parse_stmts(p, cur_tok + 1, &decl->init);
-                if (cur_tok) cur_tok = token_consume_sym(p, cur_tok, '}');
+                PARSER_DO(parse_stmts(p, cur_tok + 1, &decl->init));
+                PARSER_DO(token_consume_sym(p, cur_tok, '}'));
                 scope_shrink(&p->scope, scope_sz);
             }
             if (token_is_sym(p, cur_tok, ';'))
@@ -931,53 +999,46 @@ static const struct Token* parse_decl(Parser* p, const struct Token* cur_tok, st
         if (!(cur_tok = parse_declarator(p, cur_tok, specs, &pdecl, TOP_DECLARATOR))) return NULL;
         if (!pdecl->name) abort();
         array_push_ptr(pdecls, pdecl);
-        if (cur_tok->type == LEX_SYMBOL)
+        if (cur_tok->type == TOKEN_SYM1('{'))
         {
-            const char* s = token_str(p, cur_tok);
-            const char ch = s[0];
-            if (ch == '{')
-            {
-                p->fn = pdecl;
-                PARSER_DO(parse_stmts(p, cur_tok + 1, &pdecl->init));
-                PARSER_DO(token_consume_sym(p, cur_tok, '}'));
-                p->fn = NULL;
-                // Remove function arguments from the scope
-                scope_shrink(&p->scope, scope_sz);
-                scope_insert(&p->scope, pdecl->name, pdecl);
-                return cur_tok;
-            }
-
-            if (ch == ':' && s[1] == 0)
-            {
-                PARSER_DO_WITH(parse_integral_constant_expr(p, cur_tok + 1), "       in bitfield declaration\n");
-            }
-
-            if (ch == '=' && s[1] == 0)
-            {
-                PARSER_DO(parse_expr(p, cur_tok + 1, &pdecl->init, PRECEDENCE_ASSIGN));
-            }
-            // Pop scope changes
+            p->fn = pdecl;
+            PARSER_DO(parse_stmts(p, cur_tok + 1, &pdecl->init));
+            PARSER_DO(token_consume_sym(p, cur_tok, '}'));
+            p->fn = NULL;
+            // Remove function arguments from the scope
             scope_shrink(&p->scope, scope_sz);
-            if (specs->is_typedef)
-            {
-                scope_insert(&p->type_scope, pdecl->name, pdecl);
-            }
-            else
-            {
-                scope_insert(&p->scope, pdecl->name, pdecl);
-            }
+            scope_insert(&p->scope, pdecl->name, pdecl);
+            return cur_tok;
+        }
 
-            if (cur_tok->type != LEX_SYMBOL) return parser_ferror(&cur_tok->rc, "error: expected ',' or ';'\n"), NULL;
-            const char ch2 = *token_str(p, cur_tok);
-            if (ch2 == ',')
-            {
-                ++cur_tok;
-                continue;
-            }
-            else if (ch2 == ';')
-            {
-                return cur_tok + 1;
-            }
+        if (cur_tok->type == TOKEN_SYM1(':'))
+        {
+            PARSER_DO_WITH(parse_integral_constant_expr(p, cur_tok + 1), "       in bitfield declaration\n");
+        }
+
+        if (cur_tok->type == TOKEN_SYM1('='))
+        {
+            PARSER_DO(parse_expr(p, cur_tok + 1, &pdecl->init, PRECEDENCE_ASSIGN));
+        }
+        // Pop scope changes
+        scope_shrink(&p->scope, scope_sz);
+        if (specs->is_typedef)
+        {
+            scope_insert(&p->type_scope, pdecl->name, pdecl);
+        }
+        else
+        {
+            scope_insert(&p->scope, pdecl->name, pdecl);
+        }
+
+        if (cur_tok->type == TOKEN_SYM1(','))
+        {
+            ++cur_tok;
+            continue;
+        }
+        else if (cur_tok->type == TOKEN_SYM1(';'))
+        {
+            return cur_tok + 1;
         }
         parser_tok_error(
             declspec_tok, "error: unterminated declaration of %zu item(s)\n", array_size(pdecls, sizeof(struct Decl*)));

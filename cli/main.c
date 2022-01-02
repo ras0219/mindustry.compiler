@@ -15,7 +15,7 @@
 
 int usage()
 {
-    fprintf(stderr, "Usage: mindustry.compiler [-o <output>] [-I <path>] [-c] <file.c>\n");
+    fprintf(stderr, "Usage: mindustry.compiler [-D <macro>] [-E env.txt] [-o <output>] [-I <path>] [-c] <file.c>\n");
     return 1;
 }
 
@@ -23,15 +23,21 @@ struct Arguments
 {
     const char* input;
     const char* output;
+    const char* env_file;
     struct Array inc;
     char fCompile;
+    struct Array macro_name;
 };
 
 static int parse_arguments(int argc, const char* const* argv, struct Arguments* out)
 {
     for (int i = 1; i < argc; ++i)
     {
-        if (*argv[i] == '-' || *argv[i] == '/')
+        if (*argv[i] == '-'
+#ifdef _WIN32
+            || *argv[i] == '/'
+#endif
+        )
         {
             if (strcmp(argv[i] + 1, "c") == 0)
             {
@@ -57,7 +63,7 @@ static int parse_arguments(int argc, const char* const* argv, struct Arguments* 
                 ++i;
                 if (i == argc)
                 {
-                    fprintf(stderr, "error: expected filename after %s\n", argv[i - 1]);
+                    fprintf(stderr, "error: expected path after %s\n", argv[i - 1]);
                     return usage();
                 }
                 if (out->inc.sz)
@@ -65,6 +71,32 @@ static int parse_arguments(int argc, const char* const* argv, struct Arguments* 
                     array_push_byte(&out->inc, ';');
                 }
                 array_appends(&out->inc, argv[i]);
+            }
+            else if (strcmp(argv[i] + 1, "E") == 0)
+            {
+                ++i;
+                if (i == argc)
+                {
+                    fprintf(stderr, "error: expected filename after %s\n", argv[i - 1]);
+                    return usage();
+                }
+                if (out->env_file)
+                {
+                    fprintf(stderr, "error: env file already specified\n");
+                    return usage();
+                }
+                out->env_file = argv[i];
+            }
+            else if (strcmp(argv[i] + 1, "D") == 0)
+            {
+                ++i;
+                if (i == argc)
+                {
+                    fprintf(stderr, "error: expected macro name after %s\n", argv[i - 1]);
+                    return usage();
+                }
+                array_appends(&out->macro_name, argv[i]);
+                array_push_byte(&out->macro_name, 0);
             }
             else
             {
@@ -83,12 +115,37 @@ static int parse_arguments(int argc, const char* const* argv, struct Arguments* 
         }
     }
 
-    if (out->inc.sz)
+    if (out->env_file)
     {
-        array_push_byte(&out->inc, ';');
+        FILE* f = fopen(out->env_file, "r");
+        if (!f)
+        {
+            perror(out->env_file);
+            return 1;
+        }
+        char buf[1024];
+        size_t read = fread(buf, 1, 1024, f);
+        if (read)
+        {
+            if (out->inc.sz)
+            {
+                array_push_byte(&out->inc, ';');
+            }
+            array_push(&out->inc, buf, read);
+        }
+        if (ferror(f)) return 1;
+        fclose(f);
     }
+
     char* inc = getenv("INCLUDE");
-    if (inc) array_appends(&out->inc, inc);
+    if (inc)
+    {
+        if (out->inc.sz)
+        {
+            array_push_byte(&out->inc, ';');
+        }
+        array_appends(&out->inc, inc);
+    }
     array_push_byte(&out->inc, 0);
 
     if (!out->input)
@@ -118,7 +175,7 @@ int main(int argc, const char* const* argv)
     }
 
     struct FrontEnd fe;
-    fe_init(&fe, args.inc.data);
+    fe_init(&fe, args.inc.data, args.macro_name.data, args.macro_name.sz);
     fe.fout = f;
     rc = fe_lex_file(&fe, args.input);
     fe_destroy(&fe);

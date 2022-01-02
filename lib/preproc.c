@@ -33,6 +33,9 @@ enum PreprocessorState
     PP_UNDEF,
     PP_IFDEF,
     PP_IFNDEF,
+    PP_IF_EXPECT_END,
+    PP_ELIF_EXPECT_END,
+    PP_IFDEF_EXPECT_END,
     PP_IF,
     PP_ELIF,
     PP_ELSE,
@@ -45,12 +48,23 @@ struct StringStk
     struct Array lengths;
     struct Array data;
 };
+static void sstk_destroy(struct StringStk* ss)
+{
+    array_destroy(&ss->lengths);
+    array_destroy(&ss->data);
+}
 
 struct MacroExpand
 {
     size_t paren_count;
     size_t macro_arg_offsets_start;
     size_t prev_macrodef_idx_p1;
+};
+
+struct ParsedFile
+{
+    int pragma_once;
+    char* filename;
 };
 
 struct Preprocessor
@@ -60,6 +74,7 @@ struct Preprocessor
     void (*on_include_cb)(struct Preprocessor*, const char* filename, FILE* f);
 
     char cur_if_false;
+    struct Array if_eval;
     struct Array if_stack;
     struct RowCol dir_rc;
     char to_include[128];
@@ -82,19 +97,38 @@ struct Preprocessor
 
     struct StringStk macro_stack;
     struct Array macro_fn_exp;
-    // Array<size_t>, points to the token before the beginning of the arg sequence
+    // Array<size_t>
     struct Array macro_arg_offsets;
     struct Array macro_tmp_buf;
 
     struct Array toks;
     struct Array stringpool;
+    unsigned int debug_print_tokens : 1;
 };
-
-struct ParsedFile
+void preproc_free(struct Preprocessor* pp)
 {
-    int pragma_once;
-    char* filename;
-};
+    struct ParsedFile* b = pp->filenames.data;
+    for (size_t i = 0; i < array_size(&pp->filenames, sizeof(struct ParsedFile)); ++i)
+    {
+        my_free(b[i].filename);
+    }
+    array_destroy(&pp->if_eval);
+    array_destroy(&pp->if_stack);
+    array_destroy(&pp->files_open);
+    array_destroy(&pp->filenames);
+    sm_destroy(&pp->defines_map);
+    sstk_destroy(&pp->def_arg_names);
+    array_destroy(&pp->defs_info);
+    array_destroy(&pp->defs_tokens);
+    sstk_destroy(&pp->macro_stack);
+    array_destroy(&pp->macro_fn_exp);
+    array_destroy(&pp->macro_arg_offsets);
+    array_destroy(&pp->macro_tmp_buf);
+    array_destroy(&pp->toks);
+    array_destroy(&pp->stringpool);
+    my_free(pp);
+}
+
 static int pp_sublex_on_token(Lexer* l);
 
 // returns SIZE_MAX on not found
@@ -133,11 +167,6 @@ static void sstk_shrink(struct StringStk* ss, size_t count)
 {
     ss->data.sz = count ? ((size_t*)ss->lengths.data)[count - 1] : 0;
     ss->lengths.sz = count * sizeof(size_t);
-}
-static void sstk_destroy(struct StringStk* ss)
-{
-    array_destroy(&ss->data);
-    array_destroy(&ss->lengths);
 }
 
 __forceinline static const char* pp_sp_str(const struct Preprocessor* pp, size_t offset)
@@ -195,7 +224,8 @@ static void pp_form_token(struct Preprocessor* p, struct Lexer* l, struct Token*
         {
             if (s_keywords_table[i].len == l->sz && memcmp(l->tok, s_keywords_table[i].txt, l->sz) == 0)
             {
-                tk->type = l->state;
+                tk->type = s_keywords_table[i].state;
+                break;
             }
         }
     }
@@ -297,8 +327,6 @@ static int pp_handle_directive(struct Preprocessor* pp, Lexer* l)
             if (l->state == LEX_IDENT)
             {
                 pp->dir_rc = l->tok_rc;
-                parser_fprint_rc(stderr, pp->dir_rc);
-                fprintf(stderr, "%s: %d\n", l->tok, pp->cur_if_false);
                 HANDLE_DIRECTIVE("ifdef", PP_IFDEF);
                 HANDLE_DIRECTIVE("if", PP_IF);
                 HANDLE_DIRECTIVE("else", PP_ELSE);
@@ -441,23 +469,31 @@ static int pp_handle_directive(struct Preprocessor* pp, Lexer* l)
         case PP_IFDEF:
         case PP_IFNDEF:
         {
-            int i = pp->preproc == PP_IFDEF;
+            char i = pp->preproc == PP_IFDEF;
             if (l->state != LEX_IDENT)
             {
                 return parser_ferror(&l->tok_rc, "error: expected macro name in #if%sdef\n", i ? "" : "n");
             }
 
-            i ^= sm_get(&pp->defines_map, l->tok) != NULL;
-
-            fprintf(stderr, "%s:%d: --- ifdef %zu\n", pp->dir_rc.file, pp->dir_rc.row, pp->if_stack.sz);
-            array_push(&pp->if_stack, &pp->cur_if_false, 1);
-            pp->cur_if_false |= i;
-
-            pp->preproc = PP_EXPECT_END;
+            i ^= sm_get(&pp->defines_map, l->tok) == NULL;
+            array_push_byte(&pp->if_eval, i);
+            pp->preproc = PP_IFDEF_EXPECT_END;
             return 0;
         }
-        case PP_IF:
         case PP_ELIF:
+            if (pp->if_stack.sz == 0)
+            {
+                return parser_ferror(&pp->dir_rc, "error: unexpected #elif outside #if\n");
+            }
+            pp->preproc = PP_ELIF_EXPECT_END;
+            array_push_byte(&pp->if_eval, 0);
+            return 0;
+        case PP_IF:
+            pp->preproc = PP_IF_EXPECT_END;
+            array_push_byte(&pp->if_eval, 0);
+            return 0;
+        case PP_IF_EXPECT_END:
+        case PP_ELIF_EXPECT_END:
         case PP_ELSE:
         case PP_ENDIF:
         case PP_IGNORE: return 0;
@@ -486,11 +522,18 @@ static int pp_handle_directive(struct Preprocessor* pp, Lexer* l)
         }
         case PP_INCLUDE_EXPECT_END:
             return parser_ferror(&l->tok_rc, "error: expected end of include directive: %s\n", l->tok);
+        case PP_IFDEF_EXPECT_END:
         case PP_EXPECT_END: return parser_ferror(&l->tok_rc, "error: expected end of directive: %s\n", l->tok);
         case PP_PRAGMA:
             if (l->state == LEX_IDENT)
             {
                 HANDLE_DIRECTIVE("once", PP_PRAGMA_ONCE);
+                HANDLE_DIRECTIVE("region", PP_IGNORE);
+                HANDLE_DIRECTIVE("endregion", PP_IGNORE);
+                HANDLE_DIRECTIVE("pack", PP_IGNORE);
+                HANDLE_DIRECTIVE("warning", PP_IGNORE);
+                HANDLE_DIRECTIVE("push_macro", PP_IGNORE);
+                HANDLE_DIRECTIVE("pop_macro", PP_IGNORE);
             }
             return parser_ferror(&l->tok_rc, "error: unknown pragma directive: %s\n", l->tok);
         case PP_PRAGMA_ONCE: return parser_ferror(&l->tok_rc, "error: expected end of directive: %s\n", l->tok);
@@ -543,9 +586,7 @@ static int pp_include_file(struct Preprocessor* pp, struct Lexer* l)
     }
 
     size_t cur_if_sz = pp->if_stack.sz;
-    fprintf(stderr, "including %s\n", filename);
     UNWRAP(preproc_file(pp, f, filename));
-    fprintf(stderr, "end include %s\n", filename);
     // pop EOF from included file
     array_pop(&pp->toks, sizeof(struct Token));
     if (pp->if_stack.sz != cur_if_sz)
@@ -570,17 +611,15 @@ static int pp_flush_directive(struct Preprocessor* pp, Lexer* l)
         case PP_IFNDEF: return parser_ferror(&pp->dir_rc, "error: expected macro name after #ifndef\n");
         case PP_DEFINE: return parser_ferror(&pp->dir_rc, "error: expected macro name after #define\n");
         case PP_UNDEF: return parser_ferror(&pp->dir_rc, "error: expected macro name after #undef\n");
-        case PP_IF:
-            if (!pp->cur_if_false)
-                fprintf(stderr, "%s:%d: --- if %zu\n", pp->dir_rc.file, pp->dir_rc.row, pp->if_stack.sz);
-            array_push(&pp->if_stack, &pp->cur_if_false, 1);
-            pp->cur_if_false = 1;
-            break;
-        case PP_ELIF:
-            if (pp->if_stack.sz == 0)
-            {
-                return parser_ferror(&pp->dir_rc, "error: unexpected #elif outside #if\n");
-            }
+        case PP_IF: return parser_ferror(&pp->dir_rc, "error: expected macro condition after #if\n");
+        case PP_ELIF: return parser_ferror(&pp->dir_rc, "error: expected macro condition after #elif\n");
+        case PP_IFDEF_EXPECT_END:
+        case PP_IF_EXPECT_END: array_push(&pp->if_stack, &pp->cur_if_false, 1);
+        case PP_ELIF_EXPECT_END:
+            if (pp->if_eval.sz != 1) abort();
+            pp->cur_if_false =
+                !pp->cur_if_false | ((char*)pp->if_stack.data)[pp->if_stack.sz - 1] | !*(char*)pp->if_eval.data;
+            pp->if_eval.sz = 0;
             break;
         case PP_ELSE:
             if (pp->if_stack.sz == 0)
@@ -596,7 +635,6 @@ static int pp_flush_directive(struct Preprocessor* pp, Lexer* l)
             }
             pp->cur_if_false = ((char*)pp->if_stack.data)[pp->if_stack.sz - 1];
             array_pop(&pp->if_stack, 1);
-            fprintf(stderr, "%s:%d: --- endif %zu\n", pp->dir_rc.file, pp->dir_rc.row, pp->if_stack.sz);
             break;
         case PP_DEFINE_CONT_FIRST:
         case PP_DEFINE_CONT:
@@ -607,7 +645,6 @@ static int pp_flush_directive(struct Preprocessor* pp, Lexer* l)
             sm_insert(&pp->defines_map,
                       pp_sp_str(pp, def->sp_offset),
                       array_size(&pp->defs_info, sizeof(struct MacroDef)) - 1);
-            fprintf(stderr, "defining %s\n", pp_sp_str(pp, def->sp_offset));
             break;
         }
         case PP_DEFINE_FN:
@@ -692,8 +729,19 @@ static int pp_complete_fn_macro(struct Preprocessor* pp)
     }
     const size_t extent = def->tok_seq_extent;
     struct Token* const data = (struct Token*)pp->defs_tokens.data + def->tok_seq_offset;
+
+    int pragma_paren_nesting = 0;
     for (size_t i = 0; i < extent; ++i)
     {
+        if (pragma_paren_nesting)
+        {
+            if (data[i].type == TOKEN_SYM1('('))
+                ++pragma_paren_nesting;
+            else if (data[i].type == TOKEN_SYM1(')'))
+                --pragma_paren_nesting;
+            continue;
+        }
+
         if (data[i].basic_type == LEX_MACRO_ARG_BEGIN)
         {
             size_t* const macro_arg_data = (size_t*)pp->macro_arg_offsets.data + exp.macro_arg_offsets_start;
@@ -766,6 +814,14 @@ static int pp_complete_fn_macro(struct Preprocessor* pp)
         }
         else if (data[i].type == TOKEN_SYM1('#') || data[i].type == TOKEN_SYM2('#', '#'))
         {
+        }
+        else if (data[i].type == LEX_UPRAGMA || data[i].type == LEX_UUPRAGMA)
+        {
+            // ignore pragmas
+            pragma_paren_nesting = 1;
+            if (i + 1 != extent) ++i;
+            fprintf(stderr, "skipping pragma\n");
+            continue;
         }
         else
         {
@@ -864,9 +920,28 @@ fail:
 static int pp_push_tok_seq(struct Preprocessor* pp, const struct Token* toks, size_t len)
 {
     int rc = 0;
+    int pragma_paren_nesting = 0;
     for (size_t i = 0; i < len; ++i)
     {
-        if (toks[i].basic_type == LEX_PLACEHOLDER) continue;
+        if (pragma_paren_nesting)
+        {
+            if (toks[i].type == TOKEN_SYM1('('))
+                ++pragma_paren_nesting;
+            else if (toks[i].type == TOKEN_SYM1(')'))
+                --pragma_paren_nesting;
+            continue;
+        }
+
+        if (toks[i].basic_type == LEX_PLACEHOLDER)
+            continue;
+        else if (toks[i].type == LEX_UPRAGMA || toks[i].type == LEX_UUPRAGMA)
+        {
+            // ignore pragmas
+            pragma_paren_nesting = 1;
+            if (i + 1 != len) ++i;
+            fprintf(stderr, "skipping pragma\n");
+            continue;
+        }
         array_push(&pp->toks, toks + i, sizeof(toks[i]));
         UNWRAP(pp_handle_tok(pp));
     }
@@ -898,12 +973,26 @@ static int pp_sublex_on_token(Lexer* l)
     int rc = 0;
     struct SubLexer* sublex = (struct SubLexer*)l;
     struct Preprocessor* pp = sublex->self;
-    if (l->tok[0] == '#') fprintf(stderr, "found hash: %u, %u\n", pp->in_directive, l->not_first);
+
     if (pp->in_directive && !l->not_first)
     {
         pp->in_directive = 0;
         UNWRAP(pp_flush_directive(pp, l));
     }
+
+    if (pp->debug_print_tokens)
+    {
+        fprintf(stderr,
+                "%s:%d:%d: %10s: %u, %u, %s\n",
+                l->tok_rc.file,
+                l->tok_rc.row,
+                l->tok_rc.col,
+                lexstate_to_string(l->state),
+                pp->in_directive,
+                l->not_first,
+                l->tok);
+    }
+
     if (l->state == LEX_COMMENT)
     {
         // drop comments
@@ -920,7 +1009,6 @@ static int pp_sublex_on_token(Lexer* l)
     }
     if (!l->not_first && l->state == LEX_SYMBOL && l->tok[0] == '#' && l->tok[1] == '\0')
     {
-        fprintf(stderr, "begin directive\n");
         // beginning of directive
         pp->in_directive = 1;
         return 0;
@@ -998,26 +1086,12 @@ int preproc_file(struct Preprocessor* pp, FILE* f, const char* filename)
     return rc;
 }
 
-void preproc_free(struct Preprocessor* pp)
+int preproc_define(struct Preprocessor* pp, const char* macro)
 {
-    struct ParsedFile* b = pp->filenames.data;
-    for (size_t i = 0; i < array_size(&pp->filenames, sizeof(struct ParsedFile)); ++i)
-    {
-        my_free(b[i].filename);
-    }
-    array_destroy(&pp->filenames);
-    array_destroy(&pp->files_open);
-    sm_destroy(&pp->defines_map);
-    sstk_destroy(&pp->def_arg_names);
-    array_destroy(&pp->defs_info);
-    array_destroy(&pp->defs_tokens);
-    array_destroy(&pp->macro_fn_exp);
-    array_destroy(&pp->macro_arg_offsets);
-    array_destroy(&pp->macro_tmp_buf);
-    array_destroy(&pp->toks);
-    array_destroy(&pp->stringpool);
-    sstk_destroy(&pp->macro_stack);
-    my_free(pp);
+    struct MacroDef def = {.rc.file = "<command line>"};
+    sm_insert(&pp->defines_map, macro, array_size(&pp->defs_info, sizeof(struct MacroDef)));
+    array_push(&pp->defs_info, &def, sizeof(def));
+    return 0;
 }
 
 const struct Token* preproc_tokens(const struct Preprocessor* pp) { return pp->toks.data; }

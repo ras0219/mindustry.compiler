@@ -15,10 +15,17 @@
 #include "tok.h"
 #include "unwrap.h"
 
-void fe_init(struct FrontEnd* fe, const char* include_paths)
+void fe_init(struct FrontEnd* fe, const char* include_paths, const char* macro_names, size_t macro_names_sz)
 {
     memset(fe, 0, sizeof(struct FrontEnd));
     fe->pp = preproc_alloc(include_paths);
+
+    for (size_t i = 0; i < macro_names_sz;)
+    {
+        preproc_define(fe->pp, macro_names + i);
+        size_t name_len = strlen(macro_names + i);
+        i += name_len + 1;
+    }
 
     fe->parser = (struct Parser*)my_malloc(sizeof(struct Parser));
     parser_init(fe->parser);

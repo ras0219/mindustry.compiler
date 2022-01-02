@@ -17,7 +17,7 @@ struct FrontEnd
     FILE* fout;
 };
 
-void fe_init(struct FrontEnd* fe, const char* include_paths);
+void fe_init(struct FrontEnd* fe, const char* include_paths, const char* macro_names, size_t macro_names_sz);
 void fe_destroy(struct FrontEnd* fe);
 int fe_preproc(struct FrontEnd* fe, const char* filename);
 int fe_lex_file(struct FrontEnd* fe, const char* filename);

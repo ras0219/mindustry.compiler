@@ -116,7 +116,7 @@ int main(int argc, const char* const* argv)
     }
 
     struct FrontEnd fe;
-    fe_init(&fe, args.inc.data);
+    fe_init(&fe, args.inc.data, NULL, 0);
     fe.fout = f;
     rc = fe_preproc(&fe, args.input);
     if (rc)

@@ -19,21 +19,23 @@ struct DeclSpecs
     const char* name;
     struct Attribute attr;
 
-    int is_struct : 1;
-    int is_enum : 1;
-    int is_union : 1;
-    int is_const : 1;
-    int is_volatile : 1;
-    int is_unsigned : 1;
-    int is_signed : 1;
+    unsigned int is_struct : 1;
+    unsigned int is_enum : 1;
+    unsigned int is_union : 1;
+    unsigned int is_const : 1;
+    unsigned int is_volatile : 1;
+    unsigned int is_unsigned : 1;
+    unsigned int is_long : 1;
+    unsigned int is_longlong : 1;
+    unsigned int is_short : 1;
+    unsigned int is_signed : 1;
 
-    int is_register : 1;
-    int is_extern : 1;
-    int is_static : 1;
-
-    int is_typedef : 1;
-
-    int is_stdcall : 1;
+    unsigned int is_register : 1;
+    unsigned int is_extern : 1;
+    unsigned int is_inline : 1;
+    unsigned int is_static : 1;
+    unsigned int is_typedef : 1;
+    unsigned int is_stdcall : 1;
 };
 
 struct RegMap

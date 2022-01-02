@@ -40,7 +40,7 @@ enum Precedence
     PRECEDENCE_MULT,
 };
 
-enum Precedence op_precedence(const char* op);
+enum Precedence op_precedence(unsigned int tok_type);
 
 void parser_init(struct Parser* p);
 void parser_destroy(struct Parser* p);

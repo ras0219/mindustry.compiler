@@ -378,11 +378,10 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
             {
                 HANDLE_BACKSLASH_NL();
                 const char ch = buf[i];
-                if (ch == '\n')
+                if (ch == '\r' || ch == '\n')
                 {
                     l->sz = 0;
                     if (rc = emit_token(l)) return rc;
-                    advance_rowcol(&l->rc, buf[i++]);
                     goto LEX_START;
                 }
             }
