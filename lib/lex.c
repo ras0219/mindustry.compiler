@@ -52,7 +52,7 @@ static int push_tok_char(Lexer* l, char ch)
 {
     if (l->sz == sizeof(l->tok) - 1)
     {
-        return parser_ferror(&l->rc, "error: overflowed identifier buffer\n"), 1;
+        return parser_ferror(&l->rc, "error: overflowed token buffer\n"), 1;
     }
     l->tok[l->sz++] = ch;
     return 0;
@@ -84,7 +84,7 @@ static int symbol_is_compound(char c1, char c2)
 __forceinline static int handle_backslash_nl(struct Lexer* const l, const char* const buf, size_t const sz, size_t* p_i)
 {
     size_t i = *p_i;
-    while (sz != i)
+    while (i != sz)
     {
         const char ch = buf[i];
         if (ch == '\\')
@@ -154,7 +154,6 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
         l->ws_sensitive = 0;
         case LEX_START:
         {
-            if (i == sz) return 0;
             if (!l->ws_sensitive)
             {
                 for (; i < sz; advance_rowcol(&l->rc, buf[i++]))
@@ -172,11 +171,11 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
                         l->not_first = 0;
                         continue;
                     }
+                    l->ws_sensitive = 1;
                     break;
                 }
-                if (i == sz) return 0;
-                l->ws_sensitive = 1;
             }
+            if (i == sz) return 0;
             HANDLE_BACKSLASH_NL();
             const char ch = buf[i];
             l->tok_rc = l->rc;
@@ -235,8 +234,7 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
                 if (ch == closing_ch)
                 {
                     if (rc = emit_token(l)) return rc;
-                    advance_rowcol(&l->rc, closing_ch);
-                    ++i;
+                    advance_rowcol(&l->rc, buf[i++]);
                     goto LEX_START;
                 }
             }
@@ -449,6 +447,8 @@ int end_lex(Lexer* l)
     {
         if (rc = emit_token(l)) return rc;
     }
+    l->ws_before = 1;
+    l->not_first = 0;
     l->tok_rc = l->rc;
     l->state = LEX_EOF;
     return emit_token(l);

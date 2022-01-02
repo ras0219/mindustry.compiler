@@ -5,8 +5,6 @@
 #include "array.h"
 #include "rowcol.h"
 
-#define MAX_TOKEN_SIZE 128
-
 struct Lexer
 {
     int (*f_on_token)(struct Lexer*);
@@ -23,7 +21,7 @@ struct Lexer
     // length of tok
     size_t sz;
     // null-terminated when calling f_on_token
-    char tok[MAX_TOKEN_SIZE];
+    char tok[1024];
 };
 
 typedef struct Lexer Lexer;

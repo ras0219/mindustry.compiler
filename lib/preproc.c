@@ -1,6 +1,9 @@
 #include "preproc.h"
 
 #include <string.h>
+#ifndef _WIN32
+#include <sys/errno.h>
+#endif
 
 #include "array.h"
 #include "errors.h"
@@ -28,6 +31,8 @@ enum PreprocessorState
     PP_DEFINE_FN_COMMA,
     PP_DEFINE_FN_ELLIPSIS,
     PP_UNDEF,
+    PP_IFDEF,
+    PP_IFNDEF,
     PP_IF,
     PP_ELIF,
     PP_ELSE,
@@ -292,11 +297,13 @@ static int pp_handle_directive(struct Preprocessor* pp, Lexer* l)
             if (l->state == LEX_IDENT)
             {
                 pp->dir_rc = l->tok_rc;
-                HANDLE_DIRECTIVE("ifdef", PP_IF);
+                parser_fprint_rc(stderr, pp->dir_rc);
+                fprintf(stderr, "%s: %d\n", l->tok, pp->cur_if_false);
+                HANDLE_DIRECTIVE("ifdef", PP_IFDEF);
                 HANDLE_DIRECTIVE("if", PP_IF);
                 HANDLE_DIRECTIVE("else", PP_ELSE);
                 HANDLE_DIRECTIVE("elif", PP_ELIF);
-                HANDLE_DIRECTIVE("ifndef", PP_IF);
+                HANDLE_DIRECTIVE("ifndef", PP_IFNDEF);
                 HANDLE_DIRECTIVE("endif", PP_ENDIF);
                 if (pp->cur_if_false)
                 {
@@ -312,6 +319,7 @@ static int pp_handle_directive(struct Preprocessor* pp, Lexer* l)
                 HANDLE_DIRECTIVE("pragma", PP_PRAGMA);
                 HANDLE_DIRECTIVE("define", PP_DEFINE);
                 HANDLE_DIRECTIVE("undef", PP_UNDEF);
+                HANDLE_DIRECTIVE("error", PP_IGNORE);
             }
             return parser_ferror(&l->tok_rc, "error: unknown preprocessor directive: '#%s'\n", l->tok);
         case PP_DEFINE:
@@ -425,9 +433,29 @@ static int pp_handle_directive(struct Preprocessor* pp, Lexer* l)
             {
                 return parser_ferror(&l->tok_rc, "error: expected macro name in #undef\n");
             }
+
             sm_remove(&pp->defines_map, l->tok);
             pp->preproc = PP_EXPECT_END;
             return 0;
+
+        case PP_IFDEF:
+        case PP_IFNDEF:
+        {
+            int i = pp->preproc == PP_IFDEF;
+            if (l->state != LEX_IDENT)
+            {
+                return parser_ferror(&l->tok_rc, "error: expected macro name in #if%sdef\n", i ? "" : "n");
+            }
+
+            i ^= sm_get(&pp->defines_map, l->tok) != NULL;
+
+            fprintf(stderr, "%s:%d: --- ifdef %zu\n", pp->dir_rc.file, pp->dir_rc.row, pp->if_stack.sz);
+            array_push(&pp->if_stack, &pp->cur_if_false, 1);
+            pp->cur_if_false |= i;
+
+            pp->preproc = PP_EXPECT_END;
+            return 0;
+        }
         case PP_IF:
         case PP_ELIF:
         case PP_ELSE:
@@ -470,6 +498,65 @@ static int pp_handle_directive(struct Preprocessor* pp, Lexer* l)
     abort();
 }
 
+static int pp_include_file(struct Preprocessor* pp, struct Lexer* l)
+{
+    int rc = 0;
+    FILE* f = NULL;
+    const size_t parent_sz = path_parent_span(pp->dir_rc.file);
+    if (parent_sz + pp->to_include_sz >= 256) abort();
+    char filename[256];
+    memcpy(filename, pp->dir_rc.file, parent_sz);
+    memcpy(filename + parent_sz, pp->to_include, pp->to_include_sz + 1);
+
+    f = fopen(filename, "r");
+    if (!f)
+    {
+        const char* inc = pp->include_paths;
+        const size_t inc_size = strlen(inc);
+
+        for (size_t i_start = 0; i_start < inc_size;)
+        {
+            const char* i_end = (const char*)memchr(inc + i_start, ';', inc_size - i_start);
+            const size_t n = (i_end ? i_end - inc : inc_size) - i_start;
+            if (n >= sizeof(filename)) abort();
+            memcpy(filename, inc + i_start, n);
+            snprintf(filename + n, sizeof(filename) - n, "/%s", pp->to_include);
+            f = fopen(filename, "r");
+            if (f) break;
+            i_start += n + 1;
+        }
+    }
+    if (!f)
+    {
+        memcpy(filename, pp->dir_rc.file, parent_sz);
+        memcpy(filename + parent_sz, pp->to_include, pp->to_include_sz + 1);
+
+        if (errno == ENOENT)
+        {
+            UNWRAP(parser_ferror(&pp->dir_rc, "error: could not open %s: No such file or directory\n", filename));
+        }
+
+        char buf[128];
+        snprintf(buf, 128, "%s: failed to open", pp->to_include);
+        perror(buf);
+        UNWRAP(1);
+    }
+
+    size_t cur_if_sz = pp->if_stack.sz;
+    fprintf(stderr, "including %s\n", filename);
+    UNWRAP(preproc_file(pp, f, filename));
+    fprintf(stderr, "end include %s\n", filename);
+    // pop EOF from included file
+    array_pop(&pp->toks, sizeof(struct Token));
+    if (pp->if_stack.sz != cur_if_sz)
+    {
+        UNWRAP(parser_ferror(&pp->dir_rc, "error: mismatched ifdef levels after including %s\n", filename));
+    }
+fail:
+    if (f) fclose(f);
+    return rc;
+}
+
 static int pp_flush_directive(struct Preprocessor* pp, Lexer* l)
 {
     enum PreprocessorState const s = pp->preproc;
@@ -479,9 +566,13 @@ static int pp_flush_directive(struct Preprocessor* pp, Lexer* l)
         case PP_EXPECT_END:
         case PP_IGNORE:
         case PP_INIT: break;
+        case PP_IFDEF: return parser_ferror(&pp->dir_rc, "error: expected macro name after #ifdef\n");
+        case PP_IFNDEF: return parser_ferror(&pp->dir_rc, "error: expected macro name after #ifndef\n");
         case PP_DEFINE: return parser_ferror(&pp->dir_rc, "error: expected macro name after #define\n");
         case PP_UNDEF: return parser_ferror(&pp->dir_rc, "error: expected macro name after #undef\n");
         case PP_IF:
+            if (!pp->cur_if_false)
+                fprintf(stderr, "%s:%d: --- if %zu\n", pp->dir_rc.file, pp->dir_rc.row, pp->if_stack.sz);
             array_push(&pp->if_stack, &pp->cur_if_false, 1);
             pp->cur_if_false = 1;
             break;
@@ -496,7 +587,7 @@ static int pp_flush_directive(struct Preprocessor* pp, Lexer* l)
             {
                 return parser_ferror(&pp->dir_rc, "error: unexpected #else outside #if\n");
             }
-            pp->cur_if_false = ((char*)pp->if_stack.data)[pp->if_stack.sz - 1];
+            pp->cur_if_false = !pp->cur_if_false | ((char*)pp->if_stack.data)[pp->if_stack.sz - 1];
             break;
         case PP_ENDIF:
             if (pp->if_stack.sz == 0)
@@ -505,6 +596,7 @@ static int pp_flush_directive(struct Preprocessor* pp, Lexer* l)
             }
             pp->cur_if_false = ((char*)pp->if_stack.data)[pp->if_stack.sz - 1];
             array_pop(&pp->if_stack, 1);
+            fprintf(stderr, "%s:%d: --- endif %zu\n", pp->dir_rc.file, pp->dir_rc.row, pp->if_stack.sz);
             break;
         case PP_DEFINE_CONT_FIRST:
         case PP_DEFINE_CONT:
@@ -515,6 +607,7 @@ static int pp_flush_directive(struct Preprocessor* pp, Lexer* l)
             sm_insert(&pp->defines_map,
                       pp_sp_str(pp, def->sp_offset),
                       array_size(&pp->defs_info, sizeof(struct MacroDef)) - 1);
+            fprintf(stderr, "defining %s\n", pp_sp_str(pp, def->sp_offset));
             break;
         }
         case PP_DEFINE_FN:
@@ -523,58 +616,9 @@ static int pp_flush_directive(struct Preprocessor* pp, Lexer* l)
         case PP_DEFINE_FN_ELLIPSIS:
             return parser_ferror(&pp->dir_rc, "error: unterminated function-like macro definition\n");
         case PP_INCLUDE: return parser_ferror(&pp->dir_rc, "error: expected header to include\n");
-        case PP_INCLUDE_EXPECT_END:
-        {
-            const size_t parent_sz = path_parent_span(pp->dir_rc.file);
-            if (parent_sz + pp->to_include_sz >= 256) abort();
-            char filename[256];
-            memcpy(filename, pp->dir_rc.file, parent_sz);
-            memcpy(filename + parent_sz, pp->to_include, pp->to_include_sz + 1);
-
-            FILE* f = fopen(filename, "r");
-            if (!f)
-            {
-                const char* inc = pp->include_paths;
-                const size_t inc_size = strlen(inc);
-
-                for (size_t i_start = 0; i_start < inc_size;)
-                {
-                    const char* i_end = (const char*)memchr(inc + i_start, ';', inc_size - i_start);
-                    const size_t n = (i_end ? i_end - inc : inc_size) - i_start;
-                    if (n >= sizeof(filename)) abort();
-                    memcpy(filename, inc + i_start, n);
-                    snprintf(filename + n, sizeof(filename) - n, "/%s", pp->to_include);
-                    f = fopen(filename, "r");
-                    if (f) break;
-                    i_start += n + 1;
-                }
-            }
-            if (!f)
-            {
-                char buf[128];
-                snprintf(buf, 128, "%s: failed to open", pp->to_include);
-                perror(buf);
-                return 1;
-            }
-
-            int rc = preproc_file(pp, f, filename);
-            if (!rc)
-            {
-                // pop EOF from included file
-                if (pp->toks.sz > 0 &&
-                    ((struct Token*)pp->toks.data)[array_size(&pp->toks, sizeof(struct Token)) - 1].type == LEX_EOF)
-                {
-                    array_pop(&pp->toks, sizeof(struct Token));
-                }
-            }
-            fclose(f);
-            return rc;
-        }
+        case PP_INCLUDE_EXPECT_END: return pp_include_file(pp, l);
         case PP_PRAGMA: return parser_ferror(&pp->dir_rc, "error: expected pragma directive: %s\n", l->tok);
-        case PP_PRAGMA_ONCE:
-            ((struct ParsedFile*)pp->filenames.data)[pp->cur_file].pragma_once = 1;
-            pp->preproc = PP_INIT;
-            return 0;
+        case PP_PRAGMA_ONCE: ((struct ParsedFile*)pp->filenames.data)[pp->cur_file].pragma_once = 1; return 0;
     }
     return 0;
 }
@@ -854,6 +898,7 @@ static int pp_sublex_on_token(Lexer* l)
     int rc = 0;
     struct SubLexer* sublex = (struct SubLexer*)l;
     struct Preprocessor* pp = sublex->self;
+    if (l->tok[0] == '#') fprintf(stderr, "found hash: %u, %u\n", pp->in_directive, l->not_first);
     if (pp->in_directive && !l->not_first)
     {
         pp->in_directive = 0;
@@ -875,6 +920,7 @@ static int pp_sublex_on_token(Lexer* l)
     }
     if (!l->not_first && l->state == LEX_SYMBOL && l->tok[0] == '#' && l->tok[1] == '\0')
     {
+        fprintf(stderr, "begin directive\n");
         // beginning of directive
         pp->in_directive = 1;
         return 0;
@@ -911,7 +957,8 @@ static int lex_file(FILE* f, Lexer* l)
         if (!sz) break;
         UNWRAP(lex(l, buf, sz));
     }
-    rc = end_lex(l);
+    UNWRAP(ferror(f));
+    UNWRAP(end_lex(l));
 fail:
     return rc;
 }
@@ -937,6 +984,15 @@ int preproc_file(struct Preprocessor* pp, FILE* f, const char* filename)
         array_push_ptr(&pp->files_open, file->filename);
         rc = lex_file(f, &sublex.lexer);
         array_pop_ptr(&pp->files_open);
+    }
+    if (rc == 0)
+    {
+        if (pp->toks.sz == 0 ||
+            ((struct Token*)pp->toks.data)[array_size(&pp->toks, sizeof(struct Token)) - 1].type != LEX_EOF)
+        {
+            fprintf(stderr, "internal compiler error after parsing %s\n", filename);
+            abort();
+        }
     }
     pp->cur_file = prev_cur_file;
     return rc;

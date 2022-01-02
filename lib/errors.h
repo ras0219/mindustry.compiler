@@ -14,3 +14,4 @@ int parser_ice(const struct RowCol* rc);
 int parser_ice_tok(const struct Token* tok);
 void parser_print_errors(FILE* f);
 void parser_clear_errors();
+void parser_fprint_rc(FILE* f, struct RowCol rc);

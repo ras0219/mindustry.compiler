@@ -68,3 +68,5 @@ int parser_ice(const struct RowCol* rc)
 }
 void parser_clear_errors() { s_error_buf_used = 0; }
 void parser_print_errors(FILE* f) { fprintf(f, "%.*s", (int)s_error_buf_used, s_error_buffer); }
+
+void parser_fprint_rc(FILE* f, struct RowCol rc) { fprintf(f, "%s:%d:%d: ", rc.file, rc.row, rc.col); }
