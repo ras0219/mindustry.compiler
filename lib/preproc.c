@@ -1,5 +1,6 @@
 #include "preproc.h"
 
+#include <limits.h>
 #include <string.h>
 #ifndef _WIN32
 #include <sys/errno.h>
@@ -33,11 +34,9 @@ enum PreprocessorState
     PP_UNDEF,
     PP_IFDEF,
     PP_IFNDEF,
-    PP_IF_EXPECT_END,
-    PP_ELIF_EXPECT_END,
-    PP_IFDEF_EXPECT_END,
     PP_IF,
     PP_ELIF,
+    PP_IFDEF_EXPECT_END,
     PP_ELSE,
     PP_ENDIF,
     PP_IGNORE,
@@ -59,6 +58,11 @@ struct MacroExpand
     size_t paren_count;
     size_t macro_arg_offsets_start;
     size_t prev_macrodef_idx_p1;
+
+    unsigned int defined_is_op : 1;
+    unsigned int prev_was_defined : 1;
+    unsigned int prev_was_defined_paren : 1;
+    unsigned int prev_was_defined_paren_id : 1;
 };
 
 struct ParsedFile
@@ -73,9 +77,10 @@ struct Preprocessor
 
     void (*on_include_cb)(struct Preprocessor*, const char* filename, FILE* f);
 
-    char cur_if_false;
-    struct Array if_eval;
-    struct Array if_stack;
+    unsigned int if_true_depth;
+    unsigned int if_false_depth;
+
+    size_t if_expr_begin;
     struct RowCol dir_rc;
     char to_include[128];
     size_t to_include_sz;
@@ -104,6 +109,8 @@ struct Preprocessor
     struct Array toks;
     struct Array stringpool;
     unsigned int debug_print_tokens : 1;
+    unsigned int debug_print_ifs : 1;
+    unsigned int debug_print_defines : 1;
 };
 void preproc_free(struct Preprocessor* pp)
 {
@@ -112,8 +119,6 @@ void preproc_free(struct Preprocessor* pp)
     {
         my_free(b[i].filename);
     }
-    array_destroy(&pp->if_eval);
-    array_destroy(&pp->if_stack);
     array_destroy(&pp->files_open);
     array_destroy(&pp->filenames);
     sm_destroy(&pp->defines_map);
@@ -129,7 +134,13 @@ void preproc_free(struct Preprocessor* pp)
     my_free(pp);
 }
 
+#define STREQ_LIT(STR, LEN, LIT) ((LEN) == sizeof(LIT) - 1 && memcmp((STR), LIT, (LEN)) == 0)
+
 static int pp_sublex_on_token(Lexer* l);
+
+static int pp_push_tok_seq(struct Preprocessor* pp, const struct Token* toks, size_t len);
+
+static int pp_eval_tok_seq(struct Preprocessor* pp, size_t cur, const size_t stop);
 
 // returns SIZE_MAX on not found
 static size_t sstk_find(struct StringStk* ss, const char* str, size_t len)
@@ -191,6 +202,8 @@ static size_t pp_sp_alloc_concat(struct Preprocessor* p, size_t s1, size_t s2)
 static size_t pp_sp_alloc(struct Preprocessor* p, const char* s, size_t n)
 {
     if (n == 0) return 0;
+    int ch0 = *s;
+    if (n == 1 && 0 <= ch0 && ch0 < 128) return ch0 * 2;
     char* ch = (char*)array_alloc(&p->stringpool, n + 1);
     memcpy(ch, s, n);
     ch[n] = 0;
@@ -207,8 +220,6 @@ struct KeywordEntry
 #define KEYWORD(STATE, TXT) {TXT, sizeof(TXT) - 1, STATE},
 
 static const struct KeywordEntry s_keywords_table[] = {X_LEX_KEYWORDS(KEYWORD)};
-
-#define STREQ_LIT(STR, LEN, LIT) ((LEN) == sizeof(LIT) - 1 && memcmp((STR), LIT, (LEN)) == 0)
 
 static void pp_form_token(struct Preprocessor* p, struct Lexer* l, struct Token* tk)
 {
@@ -319,6 +330,334 @@ struct MacroDef
     size_t sp_len;
 };
 
+#define X_MACRO_IF_OP(Y)                                                                                               \
+    Y(MACRO_OP_DEFINED, "defined", 5)                                                                                  \
+    Y(MACRO_OP_NOT, "defined", 5)                                                                                      \
+    Y(MACRO_OP_OR, "||", 5)                                                                                            \
+    Y(MACRO_OP_AND, "&&", 5)                                                                                           \
+    Y(MACRO_OP_OPAREN, "(", 5)
+
+enum MacroIfOp
+{
+#define Y_COMMA(E, ...) E,
+    X_MACRO_IF_OP(Y_COMMA)
+#undef Y_COMMA
+};
+
+// static enum MacroIfOp lex_to_if_op(struct Lexer* l)
+// {
+// #define Y_STREQ(E, LIT, ...) \
+//     if (STREQ_LIT(l->tok, l->sz, LIT)) return E;
+//     X_MACRO_IF_OP(Y_STREQ)
+// #undef Y_STREQ
+//     return 0;
+// }
+
+static int conv_to_uint64(const char* s, uint64_t* out, const struct RowCol* rc)
+{
+    uint64_t v = 0;
+    size_t i = 0;
+    if (s[0] == '0')
+    {
+        // octal, hex, binary, or zero
+        if (s[1] == 'x' || s[1] == 'X')
+        {
+            // hex
+            for (i = 2; s[i]; ++i)
+            {
+                v = (((v & (UINT64_MAX >> 4))) << 4);
+                if (s[i] >= '0' && s[i] <= '9')
+                    v += s[i] - '0';
+                else if (s[i] >= 'a' && s[i] <= 'f')
+                    v += s[i] - 'a' + 10;
+                else if (s[i] >= 'A' && s[i] <= 'F')
+                    v += s[i] - 'A' + 10;
+                else
+                    break;
+            }
+        }
+        else if (s[1] == 'b' || s[1] == 'B')
+        {
+            // binary
+            for (i = 2; s[i]; ++i)
+            {
+                v = (((v & (UINT64_MAX >> 1))) << 1);
+                if (s[i] == '0')
+                    ;
+                else if (s[i] == '1')
+                    v += 1;
+                else
+                    break;
+            }
+        }
+        else if (s[1] >= '0' && s[1] <= '9')
+        {
+            // octal
+            for (i = 1; s[i]; ++i)
+            {
+                v = (((v & (UINT64_MAX >> 3))) << 3);
+                if (s[i] >= '0' && s[i] <= '7')
+                    v += s[i] - '0';
+                else
+                    break;
+            }
+        }
+        else if (s[1] == '\0')
+        {
+            i = 1;
+        }
+    }
+    else
+    {
+        for (; s[i]; ++i)
+        {
+            v = (((v & (UINT64_MAX >> 4))) * 10);
+            if (s[i] >= '0' && s[i] <= '9')
+                v += s[i] - '0';
+            else
+                break;
+        }
+    }
+    if (s[i] == 'L')
+    {
+        ++i;
+    }
+    if (s[i] == 'U')
+    {
+        ++i;
+    }
+    if (s[i] != '\0')
+    {
+        return parser_ferror(rc, "error: unexpected character in number literal: '%c'\n", s[i]);
+    }
+
+    *out = v;
+    return 0;
+}
+
+static const struct Token* pp_parse_if_expr(struct Preprocessor* pp, const struct Token* cur, int* out_value)
+{
+    unsigned int add_op = 0;
+    int add_value = 0;
+    unsigned int mul_op = 0;
+    int mul_value = 0;
+    unsigned int relop = 0;
+    int rel_value = 0;
+    unsigned int eqop = 0;
+    int eq_value = 0;
+    int or_value = 0;
+    int and_value = 1;
+    int invert = 0;
+top:
+    if (cur->type == TOKEN_SYM1('('))
+    {
+        cur = pp_parse_if_expr(pp, cur + 1, out_value);
+        if (!cur) return NULL;
+        if (cur->type != TOKEN_SYM1(')'))
+        {
+            parser_tok_error(cur, "error: expected ')' in macro condition\n");
+            return NULL;
+        }
+        ++cur;
+    }
+    else if (cur->type == LEX_NUMBER)
+    {
+        uint64_t u;
+        if (conv_to_uint64(pp_token_str(pp, cur), &u, &cur->rc)) return NULL;
+        if (u > INT_MAX) return parser_tok_error(cur, "error: literal value exceeded INT_MAX: %llu\n", u), NULL;
+        *out_value = u;
+        ++cur;
+    }
+    else if (cur->basic_type == LEX_IDENT)
+    {
+        *out_value = 0;
+        ++cur;
+    }
+    else if (cur->type == TOKEN_SYM1('!'))
+    {
+        ++invert;
+        ++cur;
+        goto top;
+    }
+    else
+    {
+        parser_tok_error(cur, "error: expected primary expression in macro condition\n");
+        return NULL;
+    }
+
+    if (invert)
+    {
+        *out_value = (invert & 1) ^ (*out_value != 0);
+    }
+
+    if (mul_op)
+    {
+        int64_t v;
+        switch (mul_op)
+        {
+            case TOKEN_SYM1('*'): v = (int64_t)mul_value * (int64_t)*out_value; break;
+            case TOKEN_SYM1('/'):
+                if (*out_value == 0) abort();
+                v = (int64_t)mul_value / (int64_t)*out_value;
+                break;
+            case TOKEN_SYM1('%'):
+                if (*out_value <= 0) abort();
+                v = (int64_t)mul_value % (int64_t)*out_value;
+                break;
+            default: abort();
+        }
+        if (v > INT_MAX || v < INT_MIN) abort();
+        *out_value = v;
+    }
+    mul_op = 0;
+    switch (cur->type)
+    {
+        case TOKEN_SYM1('*'):
+        case TOKEN_SYM1('/'):
+        case TOKEN_SYM1('%'):
+            mul_op = cur->type;
+            mul_value = *out_value;
+            ++cur;
+            goto top;
+        default: break;
+    }
+
+    if (add_op)
+    {
+        int64_t v;
+        switch (add_op)
+        {
+            case TOKEN_SYM1('+'): v = (int64_t)add_value + (int64_t)*out_value; break;
+            case TOKEN_SYM1('-'): v = (int64_t)add_value - (int64_t)*out_value; break;
+            default: abort();
+        }
+        if (v > INT_MAX || v < INT_MIN) abort();
+        *out_value = v;
+    }
+    add_op = 0;
+    switch (cur->type)
+    {
+        case TOKEN_SYM1('+'):
+        case TOKEN_SYM1('-'):
+            add_op = cur->type;
+            add_value = *out_value;
+            ++cur;
+            goto top;
+        default: break;
+    }
+
+    if (relop)
+    {
+        switch (relop)
+        {
+            case TOKEN_SYM1('<'): *out_value = rel_value < *out_value; break;
+            case TOKEN_SYM1('>'): *out_value = rel_value > *out_value; break;
+            case TOKEN_SYM2('<', '='): *out_value = rel_value <= *out_value; break;
+            case TOKEN_SYM2('>', '='): *out_value = rel_value >= *out_value; break;
+            default: abort();
+        }
+    }
+    relop = 0;
+    switch (cur->type)
+    {
+        case TOKEN_SYM1('<'):
+        case TOKEN_SYM1('>'):
+        case TOKEN_SYM2('<', '='):
+        case TOKEN_SYM2('>', '='):
+            relop = cur->type;
+            rel_value = *out_value;
+            ++cur;
+            goto top;
+        default: break;
+    }
+
+    if (eqop)
+    {
+        switch (eqop)
+        {
+            case TOKEN_SYM2('=', '='): *out_value = eq_value == *out_value; break;
+            case TOKEN_SYM2('!', '='): *out_value = eq_value != *out_value; break;
+            default: abort();
+        }
+    }
+    eqop = 0;
+    switch (cur->type)
+    {
+        case TOKEN_SYM2('=', '='):
+        case TOKEN_SYM2('!', '='):
+            eqop = cur->type;
+            eq_value = *out_value;
+            ++cur;
+            goto top;
+        default: break;
+    }
+
+    if (*out_value) *out_value = 1;
+
+    if (!and_value) *out_value = 0;
+    and_value = 1;
+    if (cur->type == TOKEN_SYM2('&', '&'))
+    {
+        ++cur;
+        and_value = *out_value;
+        goto top;
+    }
+
+    if (or_value) *out_value = 1;
+    or_value = 0;
+    if (cur->type == TOKEN_SYM2('|', '|'))
+    {
+        ++cur;
+        or_value = *out_value;
+        goto top;
+    }
+    return cur;
+}
+
+// increments either if_false_depth or if_true_depth
+static int pp_flush_expr(struct Preprocessor* pp)
+{
+    int rc = 0;
+    struct MacroExpand exp = pp->exp;
+    memset(&pp->exp, 0, sizeof(pp->exp));
+    pp->exp.defined_is_op = 1;
+    size_t expansion_start = array_size(&pp->toks, sizeof(struct Token));
+    UNWRAP(pp_eval_tok_seq(pp, pp->if_expr_begin, expansion_start));
+    {
+        size_t expansion_end = array_size(&pp->toks, sizeof(struct Token));
+
+        if (expansion_start == expansion_end)
+        {
+            return parser_tok_error(array_back(&pp->toks, sizeof(struct Token)), "error: expected macro expression\n");
+        }
+        struct Token* back = array_push_zeroes(&pp->toks, sizeof(struct Token));
+        back->type = back->basic_type = LEX_EOF;
+
+        int value = 0;
+        const struct Token* cur = pp_parse_if_expr(pp, (struct Token*)pp->toks.data + expansion_start, &value);
+
+        if (!cur)
+        {
+            UNWRAP(1);
+        }
+        if (cur->type != LEX_EOF)
+        {
+            UNWRAP(parser_tok_error(cur, "error: expected end of macro condition\n"));
+        }
+
+        if (value)
+            ++pp->if_true_depth;
+        else
+            ++pp->if_false_depth;
+        if (pp->debug_print_ifs)
+        {
+            fprintf(stderr, "%s:%d: #if %s\n", pp->dir_rc.file, pp->dir_rc.row, value ? "true" : "false");
+        }
+        pp->exp = exp;
+    }
+fail:
+    return rc;
+}
 static int pp_handle_directive(struct Preprocessor* pp, Lexer* l)
 {
     switch (pp->preproc)
@@ -328,12 +667,42 @@ static int pp_handle_directive(struct Preprocessor* pp, Lexer* l)
             {
                 pp->dir_rc = l->tok_rc;
                 HANDLE_DIRECTIVE("ifdef", PP_IFDEF);
-                HANDLE_DIRECTIVE("if", PP_IF);
-                HANDLE_DIRECTIVE("else", PP_ELSE);
-                HANDLE_DIRECTIVE("elif", PP_ELIF);
                 HANDLE_DIRECTIVE("ifndef", PP_IFNDEF);
-                HANDLE_DIRECTIVE("endif", PP_ENDIF);
-                if (pp->cur_if_false)
+                if (STREQ_LIT(l->tok, l->sz, "if"))
+                {
+                    pp->if_expr_begin = array_size(&pp->toks, sizeof(struct Token));
+                    pp->preproc = PP_IF;
+                    return 0;
+                }
+                if (STREQ_LIT(l->tok, l->sz, "endif"))
+                {
+                    if (pp->if_false_depth + pp->if_true_depth == 0)
+                    {
+                        return parser_ferror(&pp->dir_rc, "error: unexpected #endif outside #if\n");
+                    }
+                    pp->preproc = PP_ENDIF;
+                    return 0;
+                }
+                if (STREQ_LIT(l->tok, l->sz, "else"))
+                {
+                    if (pp->if_false_depth + pp->if_true_depth == 0)
+                    {
+                        return parser_ferror(&pp->dir_rc, "error: unexpected #else outside #if\n");
+                    }
+                    pp->preproc = PP_ELSE;
+                    return 0;
+                }
+                if (STREQ_LIT(l->tok, l->sz, "elif"))
+                {
+                    if (pp->if_false_depth + pp->if_true_depth == 0)
+                    {
+                        return parser_ferror(&pp->dir_rc, "error: unexpected #elif outside #if\n");
+                    }
+                    pp->if_expr_begin = array_size(&pp->toks, sizeof(struct Token));
+                    pp->preproc = PP_ELIF;
+                    return 0;
+                }
+                if (pp->if_false_depth)
                 {
                     pp->preproc = PP_IGNORE;
                     return 0;
@@ -347,7 +716,12 @@ static int pp_handle_directive(struct Preprocessor* pp, Lexer* l)
                 HANDLE_DIRECTIVE("pragma", PP_PRAGMA);
                 HANDLE_DIRECTIVE("define", PP_DEFINE);
                 HANDLE_DIRECTIVE("undef", PP_UNDEF);
-                HANDLE_DIRECTIVE("error", PP_IGNORE);
+                if (STREQ_LIT(l->tok, l->sz, "error") || STREQ_LIT(l->tok, l->sz, "warning"))
+                {
+                    fprintf(stderr, "%s:%d: #%s\n", l->tok_rc.file, l->tok_rc.row, l->tok);
+                    pp->preproc = PP_IGNORE;
+                    return 0;
+                }
             }
             return parser_ferror(&l->tok_rc, "error: unknown preprocessor directive: '#%s'\n", l->tok);
         case PP_DEFINE:
@@ -462,6 +836,10 @@ static int pp_handle_directive(struct Preprocessor* pp, Lexer* l)
                 return parser_ferror(&l->tok_rc, "error: expected macro name in #undef\n");
             }
 
+            if (pp->debug_print_defines)
+            {
+                fprintf(stderr, "%s:%d: #undef %s\n", pp->dir_rc.file, pp->dir_rc.row, l->tok);
+            }
             sm_remove(&pp->defines_map, l->tok);
             pp->preproc = PP_EXPECT_END;
             return 0;
@@ -469,33 +847,37 @@ static int pp_handle_directive(struct Preprocessor* pp, Lexer* l)
         case PP_IFDEF:
         case PP_IFNDEF:
         {
-            char i = pp->preproc == PP_IFDEF;
             if (l->state != LEX_IDENT)
             {
-                return parser_ferror(&l->tok_rc, "error: expected macro name in #if%sdef\n", i ? "" : "n");
+                return parser_ferror(
+                    &l->tok_rc, "error: expected macro name in #if%sdef\n", pp->preproc == PP_IFDEF ? "" : "n");
             }
 
-            i ^= sm_get(&pp->defines_map, l->tok) == NULL;
-            array_push_byte(&pp->if_eval, i);
+            if (!pp->if_false_depth)
+            {
+                ++pp->if_true_depth;
+                if ((sm_get(&pp->defines_map, l->tok) != NULL) ^ (pp->preproc == PP_IFDEF))
+                    pp->if_false_depth++;
+                else
+                    pp->if_true_depth++;
+                if (pp->debug_print_ifs)
+                {
+                    fprintf(stderr,
+                            "%s:%d: #if %s\n",
+                            pp->dir_rc.file,
+                            pp->dir_rc.row,
+                            pp->if_false_depth ? "false" : "true");
+                }
+            }
+            else
+            {
+                pp->if_false_depth += 2;
+            }
             pp->preproc = PP_IFDEF_EXPECT_END;
             return 0;
         }
-        case PP_ELIF:
-            if (pp->if_stack.sz == 0)
-            {
-                return parser_ferror(&pp->dir_rc, "error: unexpected #elif outside #if\n");
-            }
-            pp->preproc = PP_ELIF_EXPECT_END;
-            array_push_byte(&pp->if_eval, 0);
-            return 0;
         case PP_IF:
-            pp->preproc = PP_IF_EXPECT_END;
-            array_push_byte(&pp->if_eval, 0);
-            return 0;
-        case PP_IF_EXPECT_END:
-        case PP_ELIF_EXPECT_END:
-        case PP_ELSE:
-        case PP_ENDIF:
+        case PP_ELIF: pp_form_token(pp, l, array_alloc(&pp->toks, sizeof(struct Token))); return 0;
         case PP_IGNORE: return 0;
         case PP_INCLUDE:
         {
@@ -522,6 +904,8 @@ static int pp_handle_directive(struct Preprocessor* pp, Lexer* l)
         }
         case PP_INCLUDE_EXPECT_END:
             return parser_ferror(&l->tok_rc, "error: expected end of include directive: %s\n", l->tok);
+        case PP_ELSE:
+        case PP_ENDIF:
         case PP_IFDEF_EXPECT_END:
         case PP_EXPECT_END: return parser_ferror(&l->tok_rc, "error: expected end of directive: %s\n", l->tok);
         case PP_PRAGMA:
@@ -585,11 +969,11 @@ static int pp_include_file(struct Preprocessor* pp, struct Lexer* l)
         UNWRAP(1);
     }
 
-    size_t cur_if_sz = pp->if_stack.sz;
+    size_t cur_if_sz = pp->if_true_depth;
     UNWRAP(preproc_file(pp, f, filename));
     // pop EOF from included file
     array_pop(&pp->toks, sizeof(struct Token));
-    if (pp->if_stack.sz != cur_if_sz)
+    if (pp->if_true_depth != cur_if_sz || pp->if_false_depth != 0)
     {
         UNWRAP(parser_ferror(&pp->dir_rc, "error: mismatched ifdef levels after including %s\n", filename));
     }
@@ -600,10 +984,12 @@ fail:
 
 static int pp_flush_directive(struct Preprocessor* pp, Lexer* l)
 {
+    int rc = 0;
     enum PreprocessorState const s = pp->preproc;
     pp->preproc = PP_INIT;
     switch (s)
     {
+        case PP_IFDEF_EXPECT_END:
         case PP_EXPECT_END:
         case PP_IGNORE:
         case PP_INIT: break;
@@ -611,30 +997,59 @@ static int pp_flush_directive(struct Preprocessor* pp, Lexer* l)
         case PP_IFNDEF: return parser_ferror(&pp->dir_rc, "error: expected macro name after #ifndef\n");
         case PP_DEFINE: return parser_ferror(&pp->dir_rc, "error: expected macro name after #define\n");
         case PP_UNDEF: return parser_ferror(&pp->dir_rc, "error: expected macro name after #undef\n");
-        case PP_IF: return parser_ferror(&pp->dir_rc, "error: expected macro condition after #if\n");
-        case PP_ELIF: return parser_ferror(&pp->dir_rc, "error: expected macro condition after #elif\n");
-        case PP_IFDEF_EXPECT_END:
-        case PP_IF_EXPECT_END: array_push(&pp->if_stack, &pp->cur_if_false, 1);
-        case PP_ELIF_EXPECT_END:
-            if (pp->if_eval.sz != 1) abort();
-            pp->cur_if_false =
-                !pp->cur_if_false | ((char*)pp->if_stack.data)[pp->if_stack.sz - 1] | !*(char*)pp->if_eval.data;
-            pp->if_eval.sz = 0;
-            break;
-        case PP_ELSE:
-            if (pp->if_stack.sz == 0)
+        case PP_ELIF:
+            if (pp->if_false_depth == 1)
             {
-                return parser_ferror(&pp->dir_rc, "error: unexpected #else outside #if\n");
+                --pp->if_false_depth;
+                rc = pp_flush_expr(pp);
             }
-            pp->cur_if_false = !pp->cur_if_false | ((char*)pp->if_stack.data)[pp->if_stack.sz - 1];
+            else if (!pp->if_false_depth)
+            {
+                pp->if_true_depth -= 2;
+                pp->if_false_depth += 2;
+            }
+            array_shrink(&pp->toks, pp->if_expr_begin, sizeof(struct Token));
+            return rc;
+        case PP_IF:
+            if (!pp->if_false_depth)
+            {
+                pp->if_true_depth += 1;
+                rc = pp_flush_expr(pp);
+            }
+            else
+                pp->if_false_depth += 2;
+            array_shrink(&pp->toks, pp->if_expr_begin, sizeof(struct Token));
+            return rc;
+        case PP_ELSE:
+            if (pp->if_false_depth >= 2)
+            {
+                return 0;
+            }
+            else if (pp->if_false_depth == 1)
+            {
+                --pp->if_false_depth;
+                ++pp->if_true_depth;
+            }
+            else
+            {
+                pp->if_true_depth -= 2;
+                pp->if_false_depth += 2;
+            }
             break;
         case PP_ENDIF:
-            if (pp->if_stack.sz == 0)
+            if (pp->if_false_depth >= 2)
             {
-                return parser_ferror(&pp->dir_rc, "error: unexpected #endif outside #if\n");
+                pp->if_false_depth -= 2;
             }
-            pp->cur_if_false = ((char*)pp->if_stack.data)[pp->if_stack.sz - 1];
-            array_pop(&pp->if_stack, 1);
+            else if (pp->if_false_depth)
+            {
+                --pp->if_false_depth;
+                --pp->if_true_depth;
+            }
+            else
+            {
+                pp->if_true_depth -= 2;
+            }
             break;
         case PP_DEFINE_CONT_FIRST:
         case PP_DEFINE_CONT:
@@ -642,9 +1057,12 @@ static int pp_flush_directive(struct Preprocessor* pp, Lexer* l)
             sstk_shrink(&pp->def_arg_names, 0);
             struct MacroDef* def = array_back(&pp->defs_info, sizeof(struct MacroDef));
             def->tok_seq_extent = array_size(&pp->defs_tokens, sizeof(struct Token)) - def->tok_seq_offset;
-            sm_insert(&pp->defines_map,
-                      pp_sp_str(pp, def->sp_offset),
-                      array_size(&pp->defs_info, sizeof(struct MacroDef)) - 1);
+            const char* s = pp_sp_str(pp, def->sp_offset);
+            if (pp->debug_print_defines)
+            {
+                fprintf(stderr, "%s:%d: #define %s\n", pp->dir_rc.file, pp->dir_rc.row, s);
+            }
+            sm_insert(&pp->defines_map, s, array_size(&pp->defs_info, sizeof(struct MacroDef)) - 1);
             break;
         }
         case PP_DEFINE_FN:
@@ -659,10 +1077,6 @@ static int pp_flush_directive(struct Preprocessor* pp, Lexer* l)
     }
     return 0;
 }
-
-static int pp_push_tok_seq(struct Preprocessor* pp, const struct Token* toks, size_t len);
-
-static int pp_eval_tok_seq(struct Preprocessor* pp, size_t cur, const size_t stop);
 
 static int pp_concat_token(struct Preprocessor* pp, struct Token* dst, const struct Token* src)
 {
@@ -805,9 +1219,7 @@ static int pp_complete_fn_macro(struct Preprocessor* pp)
             for (size_t i = def->arity; i < num_args; ++i)
             {
                 size_t* const macro_arg_data = (size_t*)pp->macro_arg_offsets.data + exp.macro_arg_offsets_start;
-                size_t const arg_idx = data[i].type - LEX_MACRO_ARG_BEGIN;
-                UNWRAP(
-                    pp_eval_tok_seq(pp, macro_arg_data[arg_idx] - (i > def->arity), macro_arg_data[arg_idx + 1] - 1));
+                UNWRAP(pp_eval_tok_seq(pp, macro_arg_data[i] - (i > def->arity), macro_arg_data[i + 1] - 1));
             }
             array_push(&tmp, (struct Token*)pp->toks.data + res_start, pp->toks.sz - res_start * sizeof(struct Token));
             array_shrink(&pp->toks, res_start, sizeof(struct Token));
@@ -881,13 +1293,84 @@ static int pp_handle_tok(struct Preprocessor* pp)
         }
         pp->exp.prev_macrodef_idx_p1 = 0;
     }
+    if (pp->exp.prev_was_defined)
+    {
+        pp->exp.prev_was_defined = 0;
+        if (tok->type == TOKEN_SYM1('('))
+        {
+            pp->exp.prev_was_defined_paren = 1;
+            return 0;
+        }
+        if (tok->basic_type == LEX_IDENT)
+        {
+            memset(tok - 1, 0, sizeof(struct Token));
+            tok[-1].rc = tok->rc;
+            tok[-1].basic_type = LEX_NUMBER;
+            tok[-1].type = LEX_NUMBER;
+            if (sm_get(&pp->defines_map, pp_token_str(pp, tok)))
+            {
+                tok[-1].sp_offset = pp_sp_alloc(pp, "1", 1);
+            }
+            else
+            {
+                tok[-1].sp_offset = pp_sp_alloc(pp, "0", 1);
+            }
+            array_pop(&pp->toks, sizeof(struct Token));
+            return 0;
+        }
+    }
+    if (pp->exp.prev_was_defined_paren)
+    {
+        pp->exp.prev_was_defined_paren = 0;
+        if (tok->basic_type == LEX_IDENT)
+        {
+            memset(tok - 2, 0, sizeof(struct Token));
+            tok[-2].rc = tok->rc;
+            tok[-2].basic_type = LEX_NUMBER;
+            tok[-2].type = LEX_NUMBER;
+            if (sm_get(&pp->defines_map, pp_token_str(pp, tok)))
+            {
+                tok[-2].sp_offset = pp_sp_alloc(pp, "1", 1);
+            }
+            else
+            {
+                tok[-2].sp_offset = pp_sp_alloc(pp, "0", 1);
+            }
+            pp->exp.prev_was_defined_paren_id = 1;
+            return 0;
+        }
+        else
+        {
+            return parser_tok_error(tok, "error: expected identifier in defined() operator call\n");
+        }
+    }
+    if (pp->exp.prev_was_defined_paren_id)
+    {
+        pp->exp.prev_was_defined_paren_id = 0;
+        if (tok->type == TOKEN_SYM1(')'))
+        {
+            // pop '(', <id>, ')'
+            array_pop(&pp->toks, sizeof(struct Token));
+            array_pop(&pp->toks, sizeof(struct Token));
+            array_pop(&pp->toks, sizeof(struct Token));
+            return 0;
+        }
+        else
+        {
+            return parser_tok_error(tok, "error: expected ')' in defined() operator call\n");
+        }
+    }
 
     if (!tok->noreplace && tok->basic_type == LEX_IDENT)
     {
         // look up macro
         const char* s = pp_token_str(pp, tok);
         size_t tok_len = strlen(s);
-        if (sstk_find(&pp->macro_stack, s, tok_len) != SIZE_MAX)
+        if (pp->exp.defined_is_op && STREQ_LIT(s, tok_len, "defined"))
+        {
+            pp->exp.prev_was_defined = 1;
+        }
+        else if (sstk_find(&pp->macro_stack, s, tok_len) != SIZE_MAX)
         {
             tok->noreplace = 1;
         }
@@ -983,12 +1466,13 @@ static int pp_sublex_on_token(Lexer* l)
     if (pp->debug_print_tokens)
     {
         fprintf(stderr,
-                "%s:%d:%d: %10s: %u, %u, %s\n",
+                "%s:%d:%d: %10s: %u, %u, %u, %s\n",
                 l->tok_rc.file,
                 l->tok_rc.row,
                 l->tok_rc.col,
                 lexstate_to_string(l->state),
                 pp->in_directive,
+                pp->if_false_depth,
                 l->not_first,
                 l->tok);
     }
@@ -1013,14 +1497,21 @@ static int pp_sublex_on_token(Lexer* l)
         pp->in_directive = 1;
         return 0;
     }
-    if (pp->cur_if_false)
+    if (pp->if_false_depth)
     {
         // drop tokens inside #if false
         return 0;
     }
 
-    pp_form_token(pp, l, array_alloc(&pp->toks, sizeof(struct Token)));
-    rc = pp_handle_tok(pp);
+    {
+        size_t sz = array_size(&pp->toks, sizeof(struct Token));
+        pp_form_token(pp, l, array_alloc(&pp->toks, sizeof(struct Token)));
+        UNWRAP(pp_handle_tok(pp));
+        for (; sz < array_size(&pp->toks, sizeof(struct Token)); ++sz)
+        {
+            ((struct Token*)pp->toks.data)[sz].rc = l->tok_rc;
+        }
+    }
 fail:
     return rc;
 }
@@ -1029,8 +1520,20 @@ struct Preprocessor* preproc_alloc(const char* include_paths)
 {
     struct Preprocessor* pp = my_malloc(sizeof(struct Preprocessor));
     memset(pp, 0, sizeof(struct Preprocessor));
+    pp->debug_print_ifs = 1;
+    pp->debug_print_defines = 1;
     pp->include_paths = include_paths;
-    array_push_byte(&pp->stringpool, '\0');
+    char* sp = array_alloc(&pp->stringpool, 256);
+    for (size_t i = 0; i < 128; ++i)
+    {
+        sp[i * 2] = i;
+        sp[i * 2 + 1] = 0;
+    }
+    struct Token* tok_one = array_push_zeroes(&pp->defs_tokens, sizeof(struct Token));
+    tok_one->type = LEX_NUMBER;
+    tok_one->basic_type = LEX_NUMBER;
+    tok_one->rc.file = "<builtin>";
+    tok_one->sp_offset = '0' * 2;
     return pp;
 }
 
@@ -1073,24 +1576,27 @@ int preproc_file(struct Preprocessor* pp, FILE* f, const char* filename)
         rc = lex_file(f, &sublex.lexer);
         array_pop_ptr(&pp->files_open);
     }
-    if (rc == 0)
+    UNWRAP(rc);
+    if (pp->toks.sz == 0 ||
+        ((struct Token*)pp->toks.data)[array_size(&pp->toks, sizeof(struct Token)) - 1].type != LEX_EOF)
     {
-        if (pp->toks.sz == 0 ||
-            ((struct Token*)pp->toks.data)[array_size(&pp->toks, sizeof(struct Token)) - 1].type != LEX_EOF)
-        {
-            fprintf(stderr, "internal compiler error after parsing %s\n", filename);
-            abort();
-        }
+        fprintf(stderr, "internal compiler error after parsing %s\n", filename);
+        abort();
     }
+fail:
     pp->cur_file = prev_cur_file;
     return rc;
 }
 
 int preproc_define(struct Preprocessor* pp, const char* macro)
 {
-    struct MacroDef def = {.rc.file = "<command line>"};
+    struct MacroDef def = {
+        .rc.file = "<command line>",
+        .tok_seq_extent = 1,
+    };
     sm_insert(&pp->defines_map, macro, array_size(&pp->defs_info, sizeof(struct MacroDef)));
     array_push(&pp->defs_info, &def, sizeof(def));
+
     return 0;
 }
 

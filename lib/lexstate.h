@@ -2,17 +2,33 @@
 
 #include "fwd.h"
 
-#define X_LEX_KEYWORDS(Y)                                                                                              \
+#define X_LEX_TYPE_KEYWORDS(Y)                                                                                         \
     Y(LEX_INT, "int")                                                                                                  \
     Y(LEX_BOOL, "_Bool")                                                                                               \
-    Y(LEX_SHORT, "short")                                                                                              \
     Y(LEX_CHAR, "char")                                                                                                \
-    Y(LEX_LONG, "long")                                                                                                \
-    Y(LEX_UNSIGNED, "unsigned")                                                                                        \
-    Y(LEX_SIGNED, "signed")                                                                                            \
     Y(LEX_FLOAT, "float")                                                                                              \
     Y(LEX_DOUBLE, "double")                                                                                            \
     Y(LEX_VOID, "void")                                                                                                \
+    Y(LEX_UUINT64, "__int64")                                                                                          \
+    /*Y(LEX_UUINT64T, "__int64_t")                                                                                     \
+    Y(LEX_UUUINT64T, "__uint64_t")                                                                                     \
+    Y(LEX_UUINT32T, "__int32_t")                                                                                       \
+    Y(LEX_UUUINT32T, "__uint32_t")                                                                                     \
+    Y(LEX_UUINT16T, "__int16_t")                                                                                       \
+    Y(LEX_UUUINT16T, "__uint16_t")                                                                                     \
+    Y(LEX_UUDARWIN_SIZET, "__darwin_size_t")                                                                           \
+    Y(LEX_UUDARWIN_NATURAL, "__darwin_natural_t")                                                                      \
+    Y(LEX_UUDARWIN_TIMET, "__darwin_time_t")                                                                           \
+    Y(LEX_UUDARWIN_VALIST, "__darwin_va_list")*/                                                                       \
+    Y(LEX_UUVALIST, "__builtin_va_list")
+
+#define X_LEX_KEYWORDS(Y)                                                                                              \
+    X_LEX_TYPE_KEYWORDS(Y)                                                                                             \
+    Y(LEX_SHORT, "short")                                                                                              \
+    Y(LEX_LONG, "long")                                                                                                \
+    Y(LEX_UNSIGNED, "unsigned")                                                                                        \
+    Y(LEX_SIGNED, "signed")                                                                                            \
+    Y(LEX_UUSIGNED, "__signed")                                                                                        \
     Y(LEX_GOTO, "goto")                                                                                                \
     Y(LEX_RETURN, "return")                                                                                            \
     Y(LEX_BREAK, "break")                                                                                              \
@@ -36,12 +52,11 @@
     Y(LEX_AUTO, "auto")                                                                                                \
     Y(LEX_TYPEDEF, "typedef")                                                                                          \
     Y(LEX_UURESTRICT, "__restrict")                                                                                    \
-    Y(LEX_UUINT64, "__int64")                                                                                          \
     Y(LEX_RESTRICT, "restrict")                                                                                        \
-    Y(LEX_UUVALIST, "__builtin_va_list")                                                                               \
     Y(LEX_UUFORCEINLINE, "__forceinline")                                                                              \
     Y(LEX_INLINE, "inline")                                                                                            \
     Y(LEX_STDCALL, "__stdcall")                                                                                        \
+    Y(LEX_UUASM, "__asm")                                                                                              \
     Y(LEX_ATTRIBUTE, "__attribute__")                                                                                  \
     Y(LEX_DECLSPEC, "__declspec")                                                                                      \
     Y(LEX_UPRAGMA, "_Pragma")                                                                                          \
@@ -52,6 +67,7 @@
     Z(LEX_START, "")                                                                                                   \
     Z(LEX_IDENT, "")                                                                                                   \
     Z(LEX_NUMBER, "")                                                                                                  \
+    Z(LEX_NUMBER_BEGIN, "")                                                                                            \
     Z(LEX_STRING, "")                                                                                                  \
     Z(LEX_STRING1, "")                                                                                                 \
     Z(LEX_HEADER, "")                                                                                                  \

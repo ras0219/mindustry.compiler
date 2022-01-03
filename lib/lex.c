@@ -5,6 +5,7 @@
 #include "lexstate.h"
 #include "string.h"
 #include "tok.h"
+#include "unwrap.h"
 
 static int is_ascii_alphu(int ch) { return ('a' <= ch && ch <= 'z') || ('A' <= ch && ch <= 'Z') || ch == '_'; }
 static int is_ascii_digit(int ch) { return '0' <= ch && ch <= '9'; }
@@ -25,9 +26,12 @@ static int emit_token(Lexer* l)
 
 static void advance_rowcol(struct RowCol* l, int ch)
 {
+#ifdef _WIN32
     if (ch == '\t')
         l->col = (l->col + 7) / 8 * 8 + 1; // round to next 8-width tab stop
-    else if (ch == '\n')
+    else
+#endif
+        if (ch == '\n')
     {
         l->row++;
         l->col = 1;
@@ -233,7 +237,7 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
 
                 if (ch == closing_ch)
                 {
-                    if (rc = emit_token(l)) return rc;
+                    UNWRAP(emit_token(l));
                     advance_rowcol(&l->rc, buf[i++]);
                     goto LEX_START;
                 }
@@ -276,6 +280,11 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
                         l->sz = 2;
                         continue;
                     }
+                    if (l->tok[0] == '.' && is_ascii_digit(ch))
+                    {
+                        // actually matches a digit
+                        goto LEX_NUMBER;
+                    }
                 }
                 else if (l->sz == 2)
                 {
@@ -287,13 +296,9 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
                             l->sz = 3;
                             continue;
                         }
-                        else
-                        {
-                            return parser_ferror(&l->rc, "error: expected third '.' in ellipsis\n");
-                        }
                     }
                 }
-                if (rc = emit_token(l)) return rc;
+                UNWRAP(emit_token(l));
                 goto LEX_START;
             }
             break;
@@ -307,7 +312,7 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
                 if (ch == '"')
                 {
                     // finish string
-                    if (rc = emit_token(l)) return rc;
+                    UNWRAP(emit_token(l));
                     advance_rowcol(&l->rc, buf[i++]);
                     goto LEX_START;
                 }
@@ -361,7 +366,7 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
                 else if (ch == '/' && l->sz == 1)
                 {
                     l->sz = 0;
-                    if (rc = emit_token(l)) return rc;
+                    UNWRAP(emit_token(l));
                     advance_rowcol(&l->rc, buf[i++]);
                     goto LEX_START;
                 }
@@ -381,7 +386,7 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
                 if (ch == '\r' || ch == '\n')
                 {
                     l->sz = 0;
-                    if (rc = emit_token(l)) return rc;
+                    UNWRAP(emit_token(l));
                     goto LEX_START;
                 }
             }
@@ -395,11 +400,11 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
                 const char ch = buf[i];
                 if (is_ascii_alnumu(ch))
                 {
-                    if (rc = push_tok_char(l, ch)) return rc;
+                    UNWRAP(push_tok_char(l, ch));
                 }
                 else
                 {
-                    if (rc = emit_token(l)) return rc;
+                    UNWRAP(emit_token(l));
                     goto LEX_START;
                 }
             }
@@ -411,46 +416,57 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
             {
                 HANDLE_BACKSLASH_NL();
                 const char ch = buf[i];
-                if (is_ascii_digit(ch))
+                if (is_ascii_alnumu(ch))
                 {
-                    if (l->sz == sizeof(l->tok) - 1)
-                    {
-                        if (rc = push_tok_char(l, ch)) return rc;
-                    }
-                    l->tok[l->sz++] = ch;
+                    UNWRAP(push_tok_char(l, ch));
                 }
                 else
                 {
-                    if (rc = emit_token(l)) return rc;
-                    goto LEX_START;
+                    const char back = l->tok[l->sz - 1];
+                    if (back != '\'' && (ch == '\'' || ch == '.'))
+                    {
+                        UNWRAP(push_tok_char(l, ch));
+                    }
+                    else if ((back == 'e' || back == 'E' || back == 'p' || back == 'P') && (ch == '+' || ch == '-'))
+                    {
+                        UNWRAP(push_tok_char(l, ch));
+                    }
+                    else
+                    {
+                        UNWRAP(emit_token(l));
+                        goto LEX_START;
+                    }
                 }
             }
             break;
         default: rc = parser_ferror(&l->rc, "error: unknown lexer state %u\n", l->state);
     }
+fail:
     return rc;
 }
 
 int end_lex(Lexer* l)
 {
+    int rc = 0;
     if (l->state == LEX_STRING || l->state == LEX_STRING1)
     {
-        return parser_ferror(&l->rc, "error: unexpected end of file in string literal\n"), 1;
+        UNWRAP(parser_ferror(&l->rc, "error: unexpected end of file in string literal\n"));
     }
     if (l->state == LEX_MULTILINE_COMMENT)
     {
-        return parser_ferror(&l->rc, "error: unexpected end of file inside comment\n"), 1;
+        UNWRAP(parser_ferror(&l->rc, "error: unexpected end of file inside comment\n"));
     }
-    int rc;
     if (l->sz > 0)
     {
-        if (rc = emit_token(l)) return rc;
+        UNWRAP(emit_token(l));
     }
     l->ws_before = 1;
     l->not_first = 0;
     l->tok_rc = l->rc;
     l->state = LEX_EOF;
-    return emit_token(l);
+    UNWRAP(emit_token(l));
+fail:
+    return rc;
 }
 
 const char* lexstate_to_string(unsigned int s)

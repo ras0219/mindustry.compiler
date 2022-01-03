@@ -146,7 +146,7 @@ static const struct Token* parse_expr_post_unary(Parser* p,
                                                  struct Expr* lhs,
                                                  struct Expr** ppe)
 {
-top:
+top:;
     const struct Token* tok_op = cur_tok;
     if (cur_tok->type == TOKEN_SYM1('('))
     {
@@ -231,26 +231,36 @@ top:
 fail:
     return cur_tok;
 }
+
+static int tok_type_is_fundamental(unsigned int type)
+{
+    switch (type)
+    {
+#define Y(E, ...) case E:
+        X_LEX_TYPE_KEYWORDS(Y)
+#undef Y
+        return 1;
+        default: return 0;
+    }
+    return 0;
+}
+
 static int parse_is_token_a_type(Parser* p, const struct Token* tok)
 {
     switch (tok->type)
     {
-        case LEX_INT:
-        case LEX_CHAR:
         case LEX_LONG:
         case LEX_SHORT:
         case LEX_UNSIGNED:
         case LEX_SIGNED:
+        case LEX_UUSIGNED:
         case LEX_VOLATILE:
         case LEX_CONST:
         case LEX_STRUCT:
         case LEX_UNION:
-        case LEX_ENUM:
-        case LEX_FLOAT:
-        case LEX_DOUBLE:
-        case LEX_UUINT64:
-        case LEX_VOID: return 1;
-        default: return 0;
+        case LEX_ENUM: return 1;
+        case LEX_IDENT: return NULL != scope_find(&p->type_scope, token_str(p, tok));
+        default: return tok_type_is_fundamental(tok->type);
     }
 }
 
@@ -563,9 +573,7 @@ static const struct Token* parse_declspecs(Parser* p, const struct Token* cur_to
             specs.tok = cur_tok;
             specs.name = token_str(p, cur_tok);
         }
-        else if (cur_tok->type == LEX_VOID || cur_tok->type == LEX_BOOL || cur_tok->type == LEX_UUVALIST ||
-                 cur_tok->type == LEX_FLOAT || cur_tok->type == LEX_UUVALIST || cur_tok->type == LEX_DOUBLE ||
-                 cur_tok->type == LEX_CHAR || cur_tok->type == LEX_INT || cur_tok->type == LEX_UUINT64)
+        else if (tok_type_is_fundamental(cur_tok->type))
         {
             if (specs.tok)
             {
@@ -575,8 +583,8 @@ static const struct Token* parse_declspecs(Parser* p, const struct Token* cur_to
             }
             specs.tok = cur_tok;
         }
-        else if (cur_tok->type == LEX_SIGNED || cur_tok->type == LEX_UNSIGNED || cur_tok->type == LEX_LONG ||
-                 cur_tok->type == LEX_SHORT)
+        else if (cur_tok->type == LEX_SIGNED || cur_tok->type == LEX_UUSIGNED || cur_tok->type == LEX_UNSIGNED ||
+                 cur_tok->type == LEX_LONG || cur_tok->type == LEX_SHORT)
         {
             if (specs.tok)
             {
@@ -585,33 +593,31 @@ static const struct Token* parse_declspecs(Parser* p, const struct Token* cur_to
                             token_str(p, cur_tok));
             }
             int len = 0;
-            if (cur_tok->type == LEX_SIGNED || cur_tok->type == LEX_UNSIGNED)
+            int count_signed = 0;
+            int count_unsigned = 0;
+            int count_long = 0;
+            int count_short = 0;
+            for (;; ++len)
             {
-                specs.is_signed = cur_tok->type == LEX_SIGNED;
-                specs.is_unsigned = cur_tok->type == LEX_UNSIGNED;
-                ++len;
-            }
-            if (cur_tok[len].type == LEX_LONG)
-            {
-                ++len;
-                if (cur_tok[len].type == LEX_LONG)
-                {
-                    specs.is_longlong = 1;
-                    ++len;
-                }
+                if (cur_tok[len].type == LEX_SIGNED || cur_tok[len].type == LEX_UUSIGNED)
+                    ++count_signed;
+                else if (cur_tok[len].type == LEX_UNSIGNED)
+                    ++count_unsigned;
+                else if (cur_tok[len].type == LEX_LONG)
+                    ++count_long;
+                else if (cur_tok[len].type == LEX_SHORT)
+                    ++count_short;
                 else
-                {
-                    specs.is_long = 1;
-                }
-                if (cur_tok[len].type == LEX_INT || cur_tok[len].type == LEX_DOUBLE) ++len;
+                    break;
             }
-            else if (cur_tok[len].type == LEX_SHORT)
-            {
-                ++len;
-                specs.is_short = 1;
-                if (cur_tok[len].type == LEX_INT) ++len;
-            }
-            else if (cur_tok[len].type == LEX_CHAR || cur_tok[len].type == LEX_UUINT64 || cur_tok[len].type == LEX_INT)
+            if (count_signed) specs.is_signed = 1;
+            if (count_unsigned) specs.is_unsigned = 1;
+            if (count_long == 1) specs.is_long = 1;
+            if (count_long == 2) specs.is_longlong = 1;
+            if (count_short) specs.is_short = 1;
+
+            if (cur_tok[len].type == LEX_DOUBLE || cur_tok[len].type == LEX_CHAR || cur_tok[len].type == LEX_UUINT64 ||
+                cur_tok[len].type == LEX_INT)
             {
                 ++len;
             }
@@ -643,6 +649,11 @@ static const struct Token* parse_declspecs(Parser* p, const struct Token* cur_to
         {
             if (specs.is_extern) PARSER_FAIL("error: repeated 'extern' declaration specifiers are not allowed\n");
             specs.is_extern = 1;
+        }
+        else if (cur_tok->type == LEX_STATIC)
+        {
+            if (specs.is_static) PARSER_FAIL("error: repeated 'static' declaration specifiers are not allowed\n");
+            specs.is_static = 1;
         }
         else if (cur_tok->type == LEX_INLINE)
         {
@@ -687,21 +698,13 @@ fail:
     return cur_tok;
 }
 
-enum ExpectIdentifier
-{
-    TOP_DECLARATOR,
-    EXPECT_NO_IDENTIFIER,
-    EXPECT_ANY,
-};
-
 static const struct Token* parse_stmt(Parser* p, const struct Token* cur_tok, struct Expr** p_expr);
 static const struct Token* parse_stmts(Parser* p, const struct Token* cur_tok, struct Expr** p_expr);
 
 static const struct Token* parse_declarator(Parser* p,
                                             const struct Token* cur_tok,
                                             struct DeclSpecs* specs,
-                                            struct Decl** pdecl,
-                                            enum ExpectIdentifier expect_identifier);
+                                            struct Decl** pdecl);
 
 static const struct Token* parse_declarator_fnargs(Parser* p, const struct Token* cur_tok, struct DeclFn** out_declfn)
 {
@@ -731,7 +734,7 @@ static const struct Token* parse_declarator_fnargs(Parser* p, const struct Token
             struct DeclSpecs* arg_specs;
             PARSER_DO(parse_declspecs(p, cur_tok, &arg_specs));
             struct Decl** arg_decl = arg_decls + fn->extent++;
-            PARSER_DO(parse_declarator(p, cur_tok, arg_specs, arg_decl, EXPECT_ANY));
+            PARSER_DO(parse_declarator(p, cur_tok, arg_specs, arg_decl));
             (*arg_decl)->arg_index = fn->extent;
 
             if (cur_tok->type == TOKEN_SYM1(','))
@@ -778,8 +781,7 @@ static const struct Token* parse_declarator1(Parser* p,
                                              const struct Token* cur_tok,
                                              const struct Token** out_id,
                                              struct Expr** out_type,
-                                             struct Expr*** out_p_basetype,
-                                             enum ExpectIdentifier expect_identifier)
+                                             struct Expr*** out_p_basetype)
 {
     struct Expr* base_expr = NULL;
     struct Expr** out_base_expr = NULL;
@@ -826,7 +828,7 @@ static const struct Token* parse_declarator1(Parser* p,
     }
     if (cur_tok->type == TOKEN_SYM1('('))
     {
-        PARSER_DO(parse_declarator1(p, cur_tok + 1, out_id, out_type, &out_type, expect_identifier));
+        PARSER_DO(parse_declarator1(p, cur_tok + 1, out_id, out_type, &out_type));
         PARSER_DO(token_consume_sym(p, cur_tok, ')'));
     }
     else
@@ -835,16 +837,13 @@ static const struct Token* parse_declarator1(Parser* p,
         {
             ++cur_tok;
         }
-        if (expect_identifier != EXPECT_NO_IDENTIFIER)
+        if (cur_tok->type == LEX_IDENT)
         {
-            if (cur_tok->type == LEX_IDENT)
-            {
-                *out_id = cur_tok++;
-            }
-            else if (expect_identifier == TOP_DECLARATOR)
-            {
-                PARSER_FAIL("error: expected identifier in declaration\n");
-            }
+            *out_id = cur_tok++;
+        }
+        else
+        {
+            *out_id = NULL;
         }
     }
 
@@ -895,8 +894,7 @@ static struct Decl* parse_alloc_decl(Parser* p, struct DeclSpecs* specs)
 static const struct Token* parse_declarator(Parser* p,
                                             const struct Token* cur_tok,
                                             struct DeclSpecs* specs,
-                                            struct Decl** pdecl,
-                                            enum ExpectIdentifier expect_identifier)
+                                            struct Decl** pdecl)
 {
     struct Decl* decl = *pdecl = parse_alloc_decl(p, specs);
     struct Decl* const prev_fn = p->fn;
@@ -912,18 +910,27 @@ static const struct Token* parse_declarator(Parser* p,
         PARSER_DO(parse_msdeclspec(p, cur_tok, &decl->attr));
     }
     struct Expr** p_basetype = NULL;
-    PARSER_DO(parse_declarator1(p, cur_tok, &decl->id, &decl->type, &p_basetype, expect_identifier));
+    PARSER_DO(parse_declarator1(p, cur_tok, &decl->id, &decl->type, &p_basetype));
     *p_basetype = &specs->kind;
-    while (cur_tok->type == LEX_ATTRIBUTE)
+    while (1)
     {
-        ++cur_tok;
-        PARSER_DO(parse_attribute_plist(p, cur_tok, &decl->attr));
+        if (cur_tok->type == LEX_ATTRIBUTE)
+        {
+            PARSER_DO(parse_attribute_plist(p, cur_tok + 1, &decl->attr));
+            continue;
+        }
+        else if (cur_tok->type == LEX_UUASM)
+        {
+            PARSER_DO(parse_msdeclspec(p, cur_tok + 1, &decl->attr));
+            continue;
+        }
+        break;
     }
     if (decl->id)
     {
         decl->name = token_str(p, decl->id);
         struct Binding* prev_sym = scope_find(&p->scope, decl->name);
-        fprintf(stderr, "decl: %s @ %zu\n", decl->name, p->scope.binds.sz);
+        fprintf(stderr, "%s:%d: decl: %s @ %zu\n", decl->id->rc.file, decl->id->rc.row, decl->name, p->scope.binds.sz);
         scope_insert(&p->scope, decl->name, decl);
         if (prev_sym)
         {
@@ -951,8 +958,14 @@ static const struct Token* parse_type(Parser* p, const struct Token* cur_tok, st
 {
     const size_t scope_sz = scope_size(&p->scope);
     struct DeclSpecs* specs;
-    if (!(cur_tok = parse_declspecs(p, cur_tok, &specs))) return NULL;
-    if (!(cur_tok = parse_declarator(p, cur_tok, specs, pdecl, EXPECT_NO_IDENTIFIER))) return NULL;
+    PARSER_DO(parse_declspecs(p, cur_tok, &specs));
+    PARSER_DO(parse_declarator(p, cur_tok, specs, pdecl));
+    if ((*pdecl)->id)
+    {
+        PARSER_FAIL_TOK((*pdecl)->id, "error: type expression should not have a declared identifier\n");
+    }
+
+fail:
     scope_shrink(&p->scope, scope_sz);
     return cur_tok;
 }
@@ -961,6 +974,28 @@ static const struct Token* parse_integral_constant_expr(struct Parser* p, const 
 {
     if (cur_tok->type != LEX_NUMBER) PARSER_FAIL_TOK(cur_tok + 1, "error: expected constant integer expression\n");
     ++cur_tok;
+fail:
+    return cur_tok;
+}
+
+static const struct Token* parse_enum_body(struct Parser* p, const struct Token* cur_tok, struct Expr** pexpr)
+{
+    while (cur_tok->type == LEX_IDENT)
+    {
+        ++cur_tok;
+        if (cur_tok->type == TOKEN_SYM1('='))
+        {
+            PARSER_DO_WITH(parse_integral_constant_expr(p, cur_tok + 1), "       in enum declaration\n");
+        }
+        if (cur_tok->type == TOKEN_SYM1(','))
+        {
+            ++cur_tok;
+        }
+        else
+        {
+            break;
+        }
+    }
 fail:
     return cur_tok;
 }
@@ -981,7 +1016,14 @@ static const struct Token* parse_decl(Parser* p, const struct Token* cur_tok, st
             if (token_is_sym(p, cur_tok, '{'))
             {
                 const size_t scope_sz = scope_size(&p->scope);
-                PARSER_DO(parse_stmts(p, cur_tok + 1, &decl->init));
+                if (specs->is_struct || specs->is_union)
+                {
+                    PARSER_DO(parse_stmts(p, cur_tok + 1, &decl->init));
+                }
+                else if (specs->is_enum)
+                {
+                    PARSER_DO(parse_enum_body(p, cur_tok + 1, &decl->init));
+                }
                 PARSER_DO(token_consume_sym(p, cur_tok, '}'));
                 scope_shrink(&p->scope, scope_sz);
             }
@@ -996,11 +1038,14 @@ static const struct Token* parse_decl(Parser* p, const struct Token* cur_tok, st
         const size_t scope_sz = scope_size(&p->scope);
         struct Decl* pdecl;
         const struct Token* const declarator_tok = cur_tok;
-        if (!(cur_tok = parse_declarator(p, cur_tok, specs, &pdecl, TOP_DECLARATOR))) return NULL;
-        if (!pdecl->name) abort();
+        PARSER_DO(parse_declarator(p, cur_tok, specs, &pdecl));
         array_push_ptr(pdecls, pdecl);
         if (cur_tok->type == TOKEN_SYM1('{'))
         {
+            if (!pdecl->id || !pdecl->name)
+            {
+                PARSER_FAIL_TOK(cur_tok, "error: anonymous function declaration not allowed\n");
+            }
             p->fn = pdecl;
             PARSER_DO(parse_stmts(p, cur_tok + 1, &pdecl->init));
             PARSER_DO(token_consume_sym(p, cur_tok, '}'));
@@ -1015,6 +1060,10 @@ static const struct Token* parse_decl(Parser* p, const struct Token* cur_tok, st
         {
             PARSER_DO_WITH(parse_integral_constant_expr(p, cur_tok + 1), "       in bitfield declaration\n");
         }
+        else if (!pdecl->name)
+        {
+            PARSER_FAIL_TOK(cur_tok, "error: only bitfield members can be anonymous\n");
+        }
 
         if (cur_tok->type == TOKEN_SYM1('='))
         {
@@ -1024,11 +1073,15 @@ static const struct Token* parse_decl(Parser* p, const struct Token* cur_tok, st
         scope_shrink(&p->scope, scope_sz);
         if (specs->is_typedef)
         {
+            if (!pdecl->name)
+            {
+                PARSER_FAIL_TOK(cur_tok, "error: anonymous typedef not allowed\n");
+            }
             scope_insert(&p->type_scope, pdecl->name, pdecl);
         }
         else
         {
-            scope_insert(&p->scope, pdecl->name, pdecl);
+            if (pdecl->name) scope_insert(&p->scope, pdecl->name, pdecl);
         }
 
         if (cur_tok->type == TOKEN_SYM1(','))

@@ -1,3 +1,5 @@
+#define __DARWIN_OS_INLINE static inline
+
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
