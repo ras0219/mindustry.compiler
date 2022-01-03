@@ -288,14 +288,23 @@ fail:
     return cur_tok;
 }
 
+#define X_PREFIX_UNARY_TOKS(Y)                                                                                         \
+    Y(TOKEN_SYM1('!'))                                                                                                 \
+    Y(TOKEN_SYM1('&'))                                                                                                 \
+    Y(TOKEN_SYM1('*'))                                                                                                 \
+    Y(TOKEN_SYM1('-'))                                                                                                 \
+    Y(TOKEN_SYM1('+'))                                                                                                 \
+    Y(TOKEN_SYM2('-', '-'))                                                                                            \
+    Y(TOKEN_SYM2('+', '+'))
+
 static const struct Token* parse_expr_unary_atom(Parser* p, const struct Token* cur_tok, struct Expr** ppe)
 {
 top:
     switch (cur_tok->type)
     {
-        case TOKEN_SYM1('!'):
-        case TOKEN_SYM1('&'):
-        case TOKEN_SYM1('*'):
+#define Y_CASE(V, ...) case V:
+        X_PREFIX_UNARY_TOKS(Y_CASE)
+#undef Y_CASE
         {
             struct ExprOp* e = parse_alloc_expr_op(p, cur_tok, NULL, NULL);
             *ppe = (struct Expr*)e;
@@ -317,6 +326,7 @@ top:
             return parse_expr_post_unary(p, cur_tok, (struct Expr*)lhs_expr, ppe);
         }
         case LEX_NUMBER:
+        case LEX_CHARLIT:
         case LEX_STRING:
         {
             struct ExprLit* lhs_expr = parse_alloc_expr_lit(p, cur_tok++);
@@ -655,7 +665,7 @@ static const struct Token* parse_declspecs(Parser* p, const struct Token* cur_to
             if (specs.is_static) PARSER_FAIL("error: repeated 'static' declaration specifiers are not allowed\n");
             specs.is_static = 1;
         }
-        else if (cur_tok->type == LEX_INLINE)
+        else if (cur_tok->type == LEX_INLINE || cur_tok->type == LEX_UUINLINE)
         {
             if (specs.is_inline) PARSER_FAIL("error: repeated 'inline' declaration specifiers are not allowed\n");
             specs.is_inline = 1;
@@ -1000,6 +1010,35 @@ fail:
     return cur_tok;
 }
 
+static struct Expr* pool_push_stmt_block(struct Parser* p, struct Array* arr)
+{
+    struct StmtBlock ret = {
+        .kind = STMT_BLOCK,
+        .offset = p->expr_seqs.sz / sizeof(struct Expr*),
+        .extent = arr->sz / sizeof(struct Expr*),
+    };
+    array_push(&p->expr_seqs, arr->data, arr->sz);
+    return pool_push(&p->ast_pools[STMT_BLOCK], &ret, sizeof(ret));
+}
+
+static const struct Token* parse_initializer_list(Parser* p, const struct Token* cur_tok, struct Expr** out_expr)
+{
+    struct Array exprs = {};
+    for (;;)
+    {
+        if (cur_tok->type == TOKEN_SYM1('}')) break;
+        PARSER_DO(parse_expr(p, cur_tok, array_alloc(&exprs, sizeof(struct Expr*)), PRECEDENCE_ASSIGN));
+        if (cur_tok->type == TOKEN_SYM1(','))
+            ++cur_tok;
+        else
+            break;
+    }
+    *out_expr = pool_push_stmt_block(p, &exprs);
+fail:
+    array_destroy(&exprs);
+    return cur_tok;
+}
+
 static const struct Token* parse_decl(Parser* p, const struct Token* cur_tok, struct Array* pdecls)
 {
     struct DeclSpecs* specs;
@@ -1031,6 +1070,7 @@ static const struct Token* parse_decl(Parser* p, const struct Token* cur_tok, st
             {
                 return cur_tok + 1;
             }
+            specs->type = decl;
         }
     }
     while (1)
@@ -1067,7 +1107,17 @@ static const struct Token* parse_decl(Parser* p, const struct Token* cur_tok, st
 
         if (cur_tok->type == TOKEN_SYM1('='))
         {
-            PARSER_DO(parse_expr(p, cur_tok + 1, &pdecl->init, PRECEDENCE_ASSIGN));
+            ++cur_tok;
+            if (cur_tok->type == TOKEN_SYM1('{'))
+            {
+                // brace initialization
+                PARSER_DO(parse_initializer_list(p, cur_tok + 1, &pdecl->init));
+                PARSER_DO(token_consume_sym(p, cur_tok, '}'));
+            }
+            else
+            {
+                PARSER_DO(parse_expr(p, cur_tok, &pdecl->init, PRECEDENCE_ASSIGN));
+            }
         }
         // Pop scope changes
         scope_shrink(&p->scope, scope_sz);
@@ -1162,6 +1212,8 @@ static const struct Token* parse_stmt(Parser* p, const struct Token* cur_tok, st
     }
     switch (cur_tok->type)
     {
+        case LEX_STATIC:
+        case LEX_AUTO:
         case LEX_REGISTER:
         {
             return parse_stmt_decl(p, cur_tok, p_expr);
@@ -1317,30 +1369,19 @@ static const struct Token* parse_stmt(Parser* p, const struct Token* cur_tok, st
             if (!(cur_tok = parse_expr(p, cur_tok, p_expr, PRECEDENCE_COMMA))) return NULL;
             return token_consume_sym(p, cur_tok, ';');
         }
-        case LEX_SYMBOL:
+        case TOKEN_SYM1(';'): *p_expr = &s_stmt_none; return cur_tok + 1;
+        case TOKEN_SYM1('('):
+#define Y_CASE(V, ...) case V:
+            X_PREFIX_UNARY_TOKS(Y_CASE)
+#undef Y_CASE
+            if (!(cur_tok = parse_expr(p, cur_tok, p_expr, PRECEDENCE_COMMA))) return NULL;
+            return token_consume_sym(p, cur_tok, ';');
+        case TOKEN_SYM1('{'):
         {
-            const char ch = token_str(p, cur_tok)[0];
-            if (ch == ';')
-            {
-                *p_expr = &s_stmt_none;
-                return cur_tok + 1;
-            }
-            else if (ch == '*' || ch == '(' || ch == '&')
-            {
-                if (!(cur_tok = parse_expr(p, cur_tok, p_expr, PRECEDENCE_COMMA))) return NULL;
-                return token_consume_sym(p, cur_tok, ';');
-            }
-            else if (ch == '{')
-            {
-                size_t scope_sz = scope_size(&p->scope);
-                if (!(cur_tok = parse_stmts(p, cur_tok + 1, p_expr))) return NULL;
-                scope_shrink(&p->scope, scope_sz);
-                return token_consume_sym(p, cur_tok, '}');
-            }
-            else
-            {
-                return parser_ferror(&cur_tok->rc, "error: expected statement\n"), NULL;
-            }
+            size_t scope_sz = scope_size(&p->scope);
+            if (!(cur_tok = parse_stmts(p, cur_tok + 1, p_expr))) return NULL;
+            scope_shrink(&p->scope, scope_sz);
+            return token_consume_sym(p, cur_tok, '}');
         }
         default: return parser_ferror(&cur_tok->rc, "error: expected statement\n"), NULL;
     }

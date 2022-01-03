@@ -55,6 +55,7 @@
     Y(LEX_RESTRICT, "restrict")                                                                                        \
     Y(LEX_UUFORCEINLINE, "__forceinline")                                                                              \
     Y(LEX_INLINE, "inline")                                                                                            \
+    Y(LEX_UUINLINE, "__inline")                                                                                        \
     Y(LEX_STDCALL, "__stdcall")                                                                                        \
     Y(LEX_UUASM, "__asm")                                                                                              \
     Y(LEX_ATTRIBUTE, "__attribute__")                                                                                  \
@@ -67,9 +68,8 @@
     Z(LEX_START, "")                                                                                                   \
     Z(LEX_IDENT, "")                                                                                                   \
     Z(LEX_NUMBER, "")                                                                                                  \
-    Z(LEX_NUMBER_BEGIN, "")                                                                                            \
     Z(LEX_STRING, "")                                                                                                  \
-    Z(LEX_STRING1, "")                                                                                                 \
+    Z(LEX_CHARLIT, "")                                                                                                 \
     Z(LEX_HEADER, "")                                                                                                  \
     Z(LEX_COMMENT, "")                                                                                                 \
     Z(LEX_MULTILINE_COMMENT, "")                                                                                       \

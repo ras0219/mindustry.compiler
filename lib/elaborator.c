@@ -117,6 +117,11 @@ static __forceinline struct Decl** tt_get_decl(const struct TypeTable* tt, size_
     return ((struct Decl**)tt->decls.data) + i;
 }
 
+static __forceinline struct DeclFn** tt_get_declfn(const struct TypeTable* tt, size_t i)
+{
+    return ((struct DeclFn**)tt->decls.data) + i;
+}
+
 static size_t findstr(const char* str, const char* const* heap, size_t heap_size)
 {
     size_t i = 0;
@@ -161,14 +166,16 @@ static __forceinline const char* tt_get_name(const struct TypeTable* tt, size_t 
 #define X_TYPE_BYTE_ARITH(Y)                                                                                           \
     X_TYPE_BYTE_INT(Y)                                                                                                 \
     Y(TYPE_BYTE_FLOAT, 'F')                                                                                            \
-    Y(TYPE_BYTE_DOUBLE, 'D')
+    Y(TYPE_BYTE_DOUBLE, 'D')                                                                                           \
+    Y(TYPE_BYTE_LDOUBLE, 'E')
 
 #define X_TYPE_BYTE(Y)                                                                                                 \
     Y(TYPE_BYTE_VOID, 'V')                                                                                             \
     X_TYPE_BYTE_ARITH(Y)                                                                                               \
     Y(TYPE_BYTE_STRUCT, '$')                                                                                           \
     Y(TYPE_BYTE_UNION, 'u')                                                                                            \
-    Y(TYPE_BYTE_ENUM, 'e')
+    Y(TYPE_BYTE_ENUM, 'e')                                                                                             \
+    Y(TYPE_BYTE_FUNCTION, '(')
 
 #define Y_COMMA(E, CH) E = CH,
 enum
@@ -490,13 +497,14 @@ unsigned int typestr_mask(const struct TypeStr* ts)
         case TYPE_BYTE_ULONG:
         case TYPE_BYTE_ULLONG: return TYPE_FLAGS_INT;
         case TYPE_BYTE_FLOAT:
-        case TYPE_BYTE_DOUBLE: return TYPE_FLAGS_FLOAT;
+        case TYPE_BYTE_DOUBLE:
+        case TYPE_BYTE_LDOUBLE: return TYPE_FLAGS_FLOAT;
         case 'p': return TYPE_FLAGS_POINTER;
         case ']':
         case '[': return TYPE_FLAGS_ARRAY;
         case TYPE_BYTE_STRUCT: return TYPE_FLAGS_STRUCT;
         case TYPE_BYTE_UNION: return TYPE_FLAGS_UNION;
-        case '(': return TYPE_FLAGS_FUNCTION;
+        case TYPE_BYTE_FUNCTION: return TYPE_FLAGS_FUNCTION;
         default: abort();
     }
 }
@@ -505,6 +513,18 @@ struct Decl* typestr_get_decl(struct TypeTable* tt, const struct TypeStr* ts)
 {
     char ch = ts->buf[(int)ts->buf[0]];
     if (ch == TYPE_BYTE_STRUCT || ch == TYPE_BYTE_UNION)
+    {
+        uint32_t x;
+        memcpy(&x, ts->buf + (int)ts->buf[0] - sizeof(x), sizeof(x));
+        return *tt_get_decl(tt, x);
+    }
+    return NULL;
+}
+
+struct DeclFn* typestr_get_fn(struct TypeTable* tt, const struct TypeStr* ts)
+{
+    char ch = ts->buf[(int)ts->buf[0]];
+    if (ch == TYPE_BYTE_FUNCTION)
     {
         uint32_t x;
         memcpy(&x, ts->buf + (int)ts->buf[0] - sizeof(x), sizeof(x));
@@ -528,7 +548,7 @@ static void typestr_decay(struct TypeStr* t)
             t->buf[(int)t->buf[0]] = 'p';
             return;
         }
-        case '(':
+        case TYPE_BYTE_FUNCTION:
         {
             t->buf[0]++;
             if (t->buf[0] == TYPESTR_BUF_SIZE) abort();
@@ -538,7 +558,7 @@ static void typestr_decay(struct TypeStr* t)
         default: return;
     }
 }
-
+#if 0
 static void typestr_pop(struct TypeStr* ts, struct TypeStr* into)
 {
     size_t i = ts->buf[0];
@@ -572,6 +592,7 @@ static void typestr_pop(struct TypeStr* ts, struct TypeStr* into)
 
             case TYPE_BYTE_STRUCT:
             case TYPE_BYTE_UNION:
+            case TYPE_BYTE_ENUM: i -= sizeof(unsigned int); goto append_ret;
             case TYPE_BYTE_ENUM: i -= sizeof(unsigned int); goto append_ret;
             case '[': i -= sizeof(unsigned int) + 1; continue;
 
@@ -607,7 +628,7 @@ static void typestr_pop(struct TypeStr* ts, struct TypeStr* into)
         return;
     }
 }
-
+#endif
 // fmt should contain exactly one %.*s
 static void typestr_error1(const struct RowCol* rc,
                            const struct TypeTable* e,
@@ -634,65 +655,32 @@ static void typestr_error2(const struct RowCol* rc,
     array_destroy(&arr2);
     array_destroy(&arr);
 }
-#if 0
-static void typestr_dereference(const struct RowCol* rc, const struct TypeTable* e, struct TypeStr* t)
-{
-    struct TypeStr s = *t;
-    typestr_decay(&s);
-    if (s.buf[(int)s.buf[0]] == 'p')
-    {
-        --s.buf[0];
-        *t = s;
-    }
-    else
-    {
-        typestr_error1(rc, e, "error: unable to dereference value of type '%.*s'\n", t);
-        *t = s_type_unknown;
-    }
-}
-#endif
 
-static int typestr_match(const struct TypeStr* tgt, const struct TypeStr* src)
+__forceinline static int typestr_match(const struct TypeStr* tgt, const struct TypeStr* src)
 {
     return memcmp(tgt->buf, src->buf, tgt->buf[0]) == 0;
 }
-//
-///// <param name="tgt">expected type</param>
-///// <param name="src">actual type</param>
-// static void typestr_unify_decay(struct Elaborator* e, struct TypeStr tgt, struct TypeStr src, const struct RowCol*
-// rc)
-//{
-//    if (!tgt.expr || !src.expr) return;
-//
-//    typestr_decay(&tgt);
-//    typestr_decay(&src);
-//
-//    if (!typestr_match(e, tgt, src))
-//    {
-//        struct Array s_tgt = {}, s_src = {};
-//        typestr_fmt(&tgt, &s_tgt);
-//        typestr_fmt(&src, &s_src);
-//        parser_ferror(rc,
-//                      "error: could not match types: expected '%.*s' but found '%.*s'",
-//                      s_tgt.sz,
-//                      s_tgt.data,
-//                      s_src.sz,
-//                      s_src.data);
-//        array_destroy(&s_tgt);
-//        array_destroy(&s_src);
-//    }
-//}
 
 static void typestr_add_array(struct TypeStr* s, unsigned int n)
 {
+    if (s->buf[0] == 0) return;
     size_t o = s->buf[0] += 1 + sizeof(n);
     if (o >= TYPESTR_BUF_SIZE) abort();
     s->buf[o] = '[';
     memcpy(s->buf + (o - sizeof(n)), &n, sizeof(n));
 }
 
+__forceinline static void typestr_add_pointer(struct TypeStr* s)
+{
+    if (s->buf[0] == 0) return;
+    size_t o = s->buf[0] += 1;
+    if (o >= TYPESTR_BUF_SIZE) abort();
+    s->buf[o] = 'p';
+}
+
 static void typestr_add_cvr(struct TypeStr* s, unsigned int mask)
 {
+    if (s->buf[0] == 0) return;
     int i = s->buf[0];
     unsigned int m = 0;
     if (s->buf[i] == 'r') --i, m |= TYPESTR_CVR_R;
@@ -715,7 +703,7 @@ top:
     {
         case EXPR_SYM:
         {
-            e = &((struct ExprSym*)e)->decl->kind;
+            e = ((struct ExprSym*)e)->decl->type;
             goto top;
         }
         case AST_DECLSPEC:
@@ -756,9 +744,23 @@ top:
                 switch (d->tok->type)
                 {
                     case LEX_VOID: ch = TYPE_BYTE_VOID; break;
-                    case LEX_LONG: ch = d->is_unsigned ? TYPE_BYTE_ULONG : TYPE_BYTE_LONG; break;
-                    case LEX_INT: ch = d->is_unsigned ? TYPE_BYTE_UINT : TYPE_BYTE_INT; break;
-                    case LEX_SHORT: ch = d->is_unsigned ? TYPE_BYTE_USHORT : TYPE_BYTE_SHORT; break;
+                    case LEX_LONG:
+                    case LEX_SHORT:
+                    case LEX_INT:
+                    case LEX_UUINT64:
+                    case LEX_SIGNED:
+                    case LEX_UNSIGNED:
+                        if (d->is_short)
+                            ch = d->is_unsigned ? TYPE_BYTE_USHORT : TYPE_BYTE_SHORT;
+                        else if (d->is_long)
+                            ch = d->is_unsigned ? TYPE_BYTE_ULONG : TYPE_BYTE_LONG;
+                        else if (d->is_longlong || d->tok->type == LEX_UUINT64)
+                            ch = d->is_unsigned ? TYPE_BYTE_ULLONG : TYPE_BYTE_LLONG;
+                        else
+                            ch = d->is_unsigned ? TYPE_BYTE_UINT : TYPE_BYTE_INT;
+                        break;
+                    case LEX_FLOAT: ch = TYPE_BYTE_FLOAT; break;
+                    case LEX_DOUBLE: ch = d->is_long ? TYPE_BYTE_LDOUBLE : TYPE_BYTE_DOUBLE; break;
                     case LEX_CHAR:
                         ch = d->is_signed ? TYPE_BYTE_SCHAR : d->is_unsigned ? TYPE_BYTE_UCHAR : TYPE_BYTE_CHAR;
                         break;
@@ -790,9 +792,34 @@ top:
             typestr_add_cvr(s, m);
             return;
         }
+        case AST_DECLFN:
+        {
+            uint32_t offset = tt_find_insert_null(tt, d->name);
+            int i = s->buf[0] + 1;
+            memcpy(s->buf + i, &offset, sizeof(offset));
+            i += sizeof(offset);
+            if (d->is_struct)
+            {
+                s->buf[i] = TYPE_BYTE_STRUCT;
+            }
+            else if (d->is_union)
+            {
+                s->buf[i] = TYPE_BYTE_UNION;
+            }
+            else if (d->is_enum)
+            {
+                s->buf[i] = TYPE_BYTE_ENUM;
+            }
+            else
+            {
+                abort();
+            }
+            s->buf[0] = i;
+            return;
+        }
         default: break;
     }
-    fprintf(stderr, "typestr_append_decltype(, %s)\n", ast_kind_to_string(e->kind));
+    fprintf(stderr, "typestr_append_decltype(, %s) failed\n", ast_kind_to_string(e->kind));
     *s = s_type_unknown;
 }
 static void typestr_from_decltype(struct TypeTable* tt, struct TypeStr* s, struct Expr* e)
@@ -801,11 +828,6 @@ static void typestr_from_decltype(struct TypeTable* tt, struct TypeStr* s, struc
     *s = s_type_unknown;
     typestr_append_decltype(tt, s, e);
 }
-static int operator_is_relation(const char* op)
-{
-    return (op[0] == '<' || op[0] == '>') || ((op[0] == '=' || op[0] == '!') && op[1] == '=');
-}
-
 static struct Decl* find_field_by_name(struct Decl* decl, const char* fieldname, struct Expr* const* const exprs)
 {
     if (!decl->init || decl->init->kind != STMT_BLOCK) abort();
@@ -826,6 +848,251 @@ static struct Decl* find_field_by_name(struct Decl* decl, const char* fieldname,
         }
     }
     return NULL;
+}
+static void elaborate_expr(struct Elaborator* elab,
+                           struct ElaborateDeclCtx* ctx,
+                           struct Expr* top_expr,
+                           struct TypeStr* rty);
+
+static void elaborate_op(struct Elaborator* elab, struct ElaborateDeclCtx* ctx, struct ExprOp* e, struct TypeStr* rty)
+{
+    elaborate_expr(elab, ctx, e->lhs, rty);
+    const struct TypeStr orig_lhs = *rty;
+    typestr_decay(rty);
+    unsigned int lhs_mask = typestr_mask(rty);
+
+    if (e->rhs)
+    {
+        struct TypeStr rhs_ty;
+        elaborate_expr(elab, ctx, e->rhs, &rhs_ty);
+        const struct TypeStr orig_rhs = rhs_ty;
+        typestr_decay(&rhs_ty);
+        unsigned int rhs_mask = typestr_mask(&rhs_ty);
+        // check lhs mask
+        switch (e->tok->type)
+        {
+            case TOKEN_SYM1('|'):
+            case TOKEN_SYM1('&'):
+            case TOKEN_SYM1('^'):
+            case TOKEN_SYM1('%'):
+                if (!(lhs_mask & TYPE_FLAGS_INT))
+                {
+                    typestr_error1(&e->tok->rc,
+                                   elab->types,
+                                   "error: expected integer type in first argument but got '%.*s'\n",
+                                   &orig_lhs);
+                    *rty = s_type_literal_int;
+                }
+                break;
+            case TOKEN_SYM1('/'):
+            case TOKEN_SYM1('*'):
+                if (!(lhs_mask & TYPE_MASK_ARITH))
+                {
+                    typestr_error1(&e->tok->rc,
+                                   elab->types,
+                                   "error: expected arithmetic type in first argument but got '%.*s'\n",
+                                   &orig_lhs);
+                }
+                break;
+            case TOKEN_SYM2('|', '|'):
+            case TOKEN_SYM2('&', '&'):
+            case TOKEN_SYM2('=', '='):
+            case TOKEN_SYM2('<', '='):
+            case TOKEN_SYM2('>', '='):
+            case TOKEN_SYM2('!', '='):
+            case TOKEN_SYM1('<'):
+            case TOKEN_SYM1('>'):
+            case TOKEN_SYM1('+'):
+            case TOKEN_SYM1('-'):
+            case TOKEN_SYM2('+', '='):
+            case TOKEN_SYM2('-', '='):
+            case TOKEN_SYM1('?'):
+                if (!(lhs_mask & TYPE_MASK_SCALAR))
+                {
+                    typestr_error1(&e->tok->rc,
+                                   elab->types,
+                                   "error: expected scalar type in first argument but got '%.*s'\n",
+                                   &orig_lhs);
+                    *rty = s_type_unknown;
+                }
+                break;
+            default: break;
+        }
+
+        // check rhs mask
+        switch (e->tok->type)
+        {
+            case TOKEN_SYM1('%'):
+                if (!(rhs_mask & TYPE_FLAGS_INT))
+                {
+                    typestr_error1(&e->tok->rc,
+                                   elab->types,
+                                   "error: expected integer type in second argument but got '%.*s'\n",
+                                   &orig_rhs);
+                }
+                break;
+            case TOKEN_SYM1('/'):
+            case TOKEN_SYM1('*'):
+                if (!(rhs_mask & TYPE_MASK_ARITH))
+                {
+                    typestr_error1(&e->tok->rc,
+                                   elab->types,
+                                   "error: expected arithmetic type in second argument but got '%.*s'\n",
+                                   &orig_rhs);
+                }
+                break;
+            case TOKEN_SYM2('|', '|'):
+            case TOKEN_SYM2('&', '&'):
+            case TOKEN_SYM2('=', '='):
+            case TOKEN_SYM2('<', '='):
+            case TOKEN_SYM2('>', '='):
+            case TOKEN_SYM2('!', '='):
+            case TOKEN_SYM1('<'):
+            case TOKEN_SYM1('>'):
+            case TOKEN_SYM1('+'):
+            case TOKEN_SYM1('-'):
+            case TOKEN_SYM2('+', '='):
+            case TOKEN_SYM2('-', '='):
+                if (!(rhs_mask & TYPE_MASK_SCALAR))
+                {
+                    typestr_error1(&e->tok->rc,
+                                   elab->types,
+                                   "error: expected scalar type in second argument but got '%.*s'\n",
+                                   &orig_rhs);
+                }
+                break;
+            case TOKEN_SYM1('|'):
+            case TOKEN_SYM1('&'):
+            case TOKEN_SYM1('^'):
+                if (!(rhs_mask & TYPE_FLAGS_INT))
+                {
+                    typestr_error1(&e->tok->rc,
+                                   elab->types,
+                                   "error: expected integer type in second argument but got '%.*s'\n",
+                                   &orig_rhs);
+                }
+                break;
+            default: break;
+        }
+
+        if (e->tok->type == TOKEN_SYM1('%'))
+        {
+        }
+        else if (e->tok->type == TOKEN_SYM1('/') || e->tok->type == TOKEN_SYM1('*'))
+        {
+        }
+        else if (e->tok->type == TOKEN_SYM1('+'))
+        {
+            if (rhs_mask & lhs_mask & TYPE_FLAGS_POINTER)
+            {
+                typestr_error2(&e->tok->rc,
+                               elab->types,
+                               "error: expected only one pointer type, but got '%.*s' and '%.*s'\n",
+                               &orig_lhs,
+                               &orig_rhs);
+            }
+            if (rhs_mask & TYPE_FLAGS_POINTER)
+            {
+                *rty = rhs_ty;
+            }
+        }
+        else if (e->tok->type == TOKEN_SYM1('-'))
+        {
+            if (rhs_mask & TYPE_FLAGS_POINTER)
+            {
+                if (!(lhs_mask & TYPE_FLAGS_POINTER))
+                {
+                    typestr_error2(&e->tok->rc,
+                                   elab->types,
+                                   "error: expected both pointer types, but got '%.*s' and '%.*s'\n",
+                                   &orig_lhs,
+                                   &orig_rhs);
+                }
+                *rty = s_type_literal_int;
+            }
+        }
+        else if (e->tok->type == TOKEN_SYM1('>') || e->tok->type == TOKEN_SYM1('<') ||
+                 e->tok->type == TOKEN_SYM2('=', '=') || e->tok->type == TOKEN_SYM2('!', '=') ||
+                 e->tok->type == TOKEN_SYM2('<', '=') || e->tok->type == TOKEN_SYM2('>', '='))
+        {
+            *rty = s_type_literal_int;
+        }
+        else if (e->tok->type == TOKEN_SYM2('&', '&') || e->tok->type == TOKEN_SYM2('|', '|'))
+        {
+            *rty = s_type_literal_int;
+        }
+        else if (e->tok->type == TOKEN_SYM1('='))
+        {
+            if (!typestr_match(&orig_lhs, &orig_rhs))
+            {
+                typestr_error2(
+                    &e->tok->rc, elab->types, "error: expected type '%.*s' but got '%.*s'\n", &orig_lhs, &orig_rhs);
+                *rty = s_type_unknown;
+            }
+        }
+        else if (e->tok->type == TOKEN_SYM2('+', '=') || e->tok->type == TOKEN_SYM2('-', '='))
+        {
+            typestr_error1(&e->tok->rc, elab->types, "error: '+=' and '-=' not implemented on '%.*s'\n", rty);
+        }
+        else if (e->tok->type == TOKEN_SYM1('&') || e->tok->type == TOKEN_SYM1('|') || e->tok->type == TOKEN_SYM1('^'))
+        {
+        }
+        else if (e->tok->type == TOKEN_SYM1('['))
+        {
+            typestr_error1(&e->tok->rc, elab->types, "error: unimplemented '[' on '%.*s'\n", rty);
+            *rty = s_type_unknown;
+        }
+        else if (e->tok->type == TOKEN_SYM1('?'))
+        {
+            *rty = rhs_ty;
+        }
+        else if (e->tok->type == TOKEN_SYM1(':'))
+        {
+            if (!typestr_match(&orig_lhs, &orig_rhs))
+            {
+                typestr_error2(
+                    &e->tok->rc, elab->types, "error: expected type '%.*s' but got '%.*s'\n", &orig_lhs, &orig_rhs);
+                *rty = s_type_unknown;
+            }
+        }
+        else
+        {
+            fprintf(stderr, "warning: untyped operator '%s'\n", token_str(elab->p, e->tok));
+            *rty = s_type_unknown;
+        }
+    }
+    else
+    {
+        if (e->tok->type == TOKEN_SYM1('*'))
+        {
+            typestr_error1(&e->tok->rc, elab->types, "error: unimplemented '*' on '%.*s'\n", rty);
+            *rty = s_type_unknown;
+        }
+        else if (e->tok->type == TOKEN_SYM1('&'))
+        {
+            typestr_add_pointer(rty);
+        }
+        else if (e->tok->type == TOKEN_SYM2('+', '+') || e->tok->type == TOKEN_SYM2('-', '-'))
+        {
+            typestr_error1(&e->tok->rc, elab->types, "error: '++' and '--' not implemented on '%.*s'\n", rty);
+        }
+        else if (e->tok->type == TOKEN_SYM1('!'))
+        {
+            if (!(lhs_mask & TYPE_MASK_SCALAR))
+            {
+                typestr_error1(&e->tok->rc,
+                               elab->types,
+                               "error: expected scalar type in first argument but got '%.*s'\n",
+                               &orig_lhs);
+            }
+            *rty = s_type_literal_int;
+        }
+        else
+        {
+            fprintf(stderr, "warning: untyped operator '%s'\n", token_str(elab->p, e->tok));
+            *rty = s_type_unknown;
+        }
+    }
 }
 
 static void elaborate_expr(struct Elaborator* elab,
@@ -907,7 +1174,8 @@ static void elaborate_expr(struct Elaborator* elab,
         {
             struct ExprCall* expr = top;
             elaborate_expr(elab, ctx, expr->fn, rty);
-            if (rty->buf[(int)rty->buf[0]] != '(')
+            struct DeclFn* fn = typestr_get_fn(elab->types, rty->buf);
+            if (!fn)
             {
                 typestr_error1(&expr->tok->rc, elab->types, "error: expected function type but got '%.*s'\n", rty);
                 *rty = s_type_unknown;
@@ -1007,214 +1275,7 @@ static void elaborate_expr(struct Elaborator* elab,
             }
             return;
         }
-        case EXPR_OP:
-        {
-            struct ExprOp* e = top;
-            const char* op = token_str(elab->p, e->tok);
-            elaborate_expr(elab, ctx, e->lhs, rty);
-            const struct TypeStr orig_lhs = *rty;
-            struct TypeStr rhs_ty;
-            if (e->rhs)
-                elaborate_expr(elab, ctx, e->rhs, &rhs_ty);
-            else
-                rhs_ty = s_type_unknown;
-            const struct TypeStr orig_rhs = rhs_ty;
-            typestr_decay(rty);
-            typestr_decay(&rhs_ty);
-            unsigned int lhs_mask = typestr_mask(rty);
-            unsigned int rhs_mask = typestr_mask(&rhs_ty);
-            if (op[0] == '*' && op[1] == '\0' && !e->rhs)
-            {
-                typestr_error1(&e->tok->rc, elab->types, "error: unimplemented '*' on '%.*s'\n", rty);
-                *rty = s_type_unknown;
-            }
-            else if (op[0] == '%' && op[1] == '\0')
-            {
-                if (!(lhs_mask & TYPE_FLAGS_INT))
-                {
-                    typestr_error1(&e->tok->rc,
-                                   elab->types,
-                                   "error: expected integer type in first argument but got '%.*s'\n",
-                                   &orig_lhs);
-                    *rty = s_type_literal_int;
-                }
-                if (!(rhs_mask & TYPE_FLAGS_INT))
-                {
-                    typestr_error1(&e->tok->rc,
-                                   elab->types,
-                                   "error: expected integer type in second argument but got '%.*s'\n",
-                                   &orig_rhs);
-                }
-            }
-            else if ((op[0] == '/' || op[0] == '*') && op[1] == '\0')
-            {
-                if (!(lhs_mask & TYPE_MASK_ARITH))
-                {
-                    typestr_error1(&e->tok->rc,
-                                   elab->types,
-                                   "error: expected arithmetic type in first argument but got '%.*s'\n",
-                                   &orig_lhs);
-                    *rty = s_type_literal_int;
-                }
-                if (!(rhs_mask & TYPE_MASK_ARITH))
-                {
-                    typestr_error1(&e->tok->rc,
-                                   elab->types,
-                                   "error: expected arithmetic type in second argument but got '%.*s'\n",
-                                   &orig_rhs);
-                }
-            }
-            else if (op[0] == '!' && op[1] == '\0')
-            {
-                if (!(lhs_mask & TYPE_MASK_SCALAR))
-                {
-                    typestr_error1(&e->tok->rc,
-                                   elab->types,
-                                   "error: expected scalar type in first argument but got '%.*s'\n",
-                                   &orig_lhs);
-                }
-                *rty = s_type_literal_int;
-            }
-            else if (op[0] == '+' && op[1] == '\0')
-            {
-                if (!(lhs_mask & TYPE_MASK_SCALAR))
-                {
-                    typestr_error1(&e->tok->rc,
-                                   elab->types,
-                                   "error: expected scalar type in first argument but got '%.*s'\n",
-                                   &orig_lhs);
-                    *rty = s_type_unknown;
-                }
-                if (!(rhs_mask & TYPE_MASK_SCALAR))
-                {
-                    typestr_error1(&e->tok->rc,
-                                   elab->types,
-                                   "error: expected scalar type in second argument but got '%.*s'\n",
-                                   &orig_rhs);
-                }
-                if (rhs_mask & lhs_mask & TYPE_FLAGS_POINTER)
-                {
-                    typestr_error2(&e->tok->rc,
-                                   elab->types,
-                                   "error: expected only one pointer type, but got '%.*s' and '%.*s'\n",
-                                   &orig_lhs,
-                                   &orig_rhs);
-                }
-                if (rhs_mask & TYPE_FLAGS_POINTER)
-                {
-                    *rty = rhs_ty;
-                }
-            }
-            else if (op[0] == '-' && op[1] == '\0')
-            {
-                if (!(lhs_mask & TYPE_MASK_SCALAR))
-                {
-                    typestr_error1(&e->tok->rc,
-                                   elab->types,
-                                   "error: expected scalar type in first argument but got '%.*s'\n",
-                                   &orig_lhs);
-                    *rty = s_type_unknown;
-                }
-                if (!(rhs_mask & TYPE_MASK_SCALAR))
-                {
-                    typestr_error1(&e->tok->rc,
-                                   elab->types,
-                                   "error: expected scalar type in second argument but got '%.*s'\n",
-                                   &orig_rhs);
-                }
-                if (rhs_mask & lhs_mask & TYPE_FLAGS_POINTER)
-                {
-                    typestr_error2(&e->tok->rc,
-                                   elab->types,
-                                   "error: expected only one pointer type, but got '%.*s' and '%.*s'\n",
-                                   &orig_lhs,
-                                   &orig_rhs);
-                }
-                if (rhs_mask & TYPE_FLAGS_POINTER)
-                {
-                    *rty = rhs_ty;
-                }
-            }
-            else if (operator_is_relation(op))
-            {
-                if (!(lhs_mask & TYPE_MASK_SCALAR))
-                {
-                    typestr_error1(&e->tok->rc,
-                                   elab->types,
-                                   "error: expected scalar type in first argument but got '%.*s'\n",
-                                   &orig_lhs);
-                }
-                if (!(rhs_mask & TYPE_MASK_SCALAR))
-                {
-                    typestr_error1(&e->tok->rc,
-                                   elab->types,
-                                   "error: expected scalar type in second argument but got '%.*s'\n",
-                                   &orig_rhs);
-                }
-                *rty = s_type_literal_int;
-            }
-            else if ((op[0] == '&' || op[0] == '|') && op[1] == op[0])
-            {
-                if (!(lhs_mask & TYPE_MASK_SCALAR))
-                {
-                    typestr_error1(&e->tok->rc,
-                                   elab->types,
-                                   "error: expected scalar type in first argument but got '%.*s'\n",
-                                   &orig_lhs);
-                }
-                if (!(rhs_mask & TYPE_MASK_SCALAR))
-                {
-                    typestr_error1(&e->tok->rc,
-                                   elab->types,
-                                   "error: expected scalar type in second argument but got '%.*s'\n",
-                                   &orig_rhs);
-                }
-                *rty = s_type_literal_int;
-            }
-            else if (op[0] == '=' && op[1] == '\0')
-            {
-                if (!typestr_match(&orig_lhs, &orig_rhs))
-                {
-                    typestr_error2(
-                        &e->tok->rc, elab->types, "error: expected type '%.*s' but got '%.*s'\n", &orig_lhs, &orig_rhs);
-                    *rty = s_type_unknown;
-                }
-            }
-            else if ((op[0] == '+' || op[0] == '-') && op[1] == op[0])
-            {
-                typestr_error1(&e->tok->rc, elab->types, "error: '++' and '--' not implemented on '%.*s'\n", rty);
-            }
-            else if ((op[0] == '+' || op[0] == '-') && op[1] == '=')
-            {
-                typestr_error1(&e->tok->rc, elab->types, "error: '+=' and '-=' not implemented on '%.*s'\n", rty);
-            }
-            else if (op[0] == '&' && op[1] == '\0')
-            {
-                if (!(lhs_mask & TYPE_FLAGS_INT))
-                {
-                    typestr_error1(&e->tok->rc,
-                                   elab->types,
-                                   "error: expected integer type in first argument but got '%.*s'\n",
-                                   &orig_lhs);
-                    *rty = s_type_literal_int;
-                }
-                if (!(rhs_mask & TYPE_FLAGS_INT))
-                {
-                    typestr_error1(&e->tok->rc,
-                                   elab->types,
-                                   "error: expected integer type in second argument but got '%.*s'\n",
-                                   &orig_rhs);
-                }
-            }
-            else if (op[0] == '[' && op[1] == '\0')
-            {
-                typestr_error1(&e->tok->rc, elab->types, "error: unimplemented '[' on '%.*s'\n", rty);
-                *rty = s_type_unknown;
-            }
-            else
-                fprintf(stderr, "Warning: untyped operator '%s'\n", op);
-            return;
-        }
+        case EXPR_OP: elaborate_op(elab, ctx, top, rty); return;
         case STMT_LOOP:
         {
             struct StmtLoop* e = top;
@@ -1287,6 +1348,25 @@ static long long eval_constant(struct Elaborator* elab, struct Expr* e)
     }
 }
 
+static int get_primitive_declspec_size(struct DeclSpecs* d)
+{
+    if (d->is_short) return 2;
+    if (d->is_long) return d->tok->type == LEX_DOUBLE ? 16 : 4;
+    if (d->is_longlong) return 8;
+
+    switch (d->tok->type)
+    {
+        case LEX_VOID: parser_tok_error(d->tok, "error: cannot size field of type void\n"); return 1;
+        case LEX_FLOAT:
+        case LEX_INT: return 4;
+        case LEX_UUINT64:
+        case LEX_DOUBLE: return 8;
+        case LEX_CHAR:
+        case LEX_BOOL: return 1;
+        default: parser_tok_error(d->tok, "error: unable to determine size of declspec\n"); return 1;
+    }
+}
+
 static int get_decl_align(struct Elaborator* elab, struct Expr* e)
 {
     switch (e->kind)
@@ -1314,15 +1394,7 @@ static int get_decl_align(struct Elaborator* elab, struct Expr* e)
                 return inner_decl->align;
             }
 
-            switch (d->tok->type)
-            {
-                case LEX_VOID: parser_tok_error(d->tok, "error: cannot align field of type void\n"); return 1;
-                case LEX_LONG: return 4;
-                case LEX_INT: return 4;
-                case LEX_SHORT: return 2;
-                case LEX_CHAR: return 1;
-                default: abort();
-            }
+            return get_primitive_declspec_size(d);
         }
         default: parser_ferror(expr_to_rc(e), "error: cannot calculate align of typeexpr\n"); return 1;
     }
@@ -1372,15 +1444,7 @@ static int get_decl_size(struct Elaborator* elab, struct Expr* e)
                 return get_decl_size(elab, &inner_decl->kind);
             }
 
-            switch (d->tok->type)
-            {
-                case LEX_VOID: parser_tok_error(d->tok, "error: cannot declare field of type void\n"); return 1;
-                case LEX_LONG: return 4;
-                case LEX_INT: return 4;
-                case LEX_SHORT: return 2;
-                case LEX_CHAR: return 1;
-                default: abort();
-            }
+            return get_primitive_declspec_size(d);
         }
         default: parser_ferror(expr_to_rc(e), "error: cannot calculate size of decl\n"); return 1;
     }
@@ -1445,13 +1509,17 @@ static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
         decl->align = struct_align;
         decl->size = struct_size;
 
-        size_t i = tt_find_insert_null(elab->types, decl->name);
-        struct Decl** d = tt_get_decl(elab->types, i);
-        if (*d != NULL)
+        if (decl->name)
         {
-            UNWRAP(parser_tok_error(decl->id, "error: redefinition of structure/union/enumeration '%s'\n", decl->name));
+            size_t i = tt_find_insert_null(elab->types, decl->name);
+            struct Decl** d = tt_get_decl(elab->types, i);
+            if (*d != NULL)
+            {
+                UNWRAP(parser_tok_error(
+                    decl->id, "error: redefinition of structure/union/enumeration '%s'\n", decl->name));
+            }
+            *d = decl;
         }
-        *d = decl;
     }
 
 fail:

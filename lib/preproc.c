@@ -12,6 +12,7 @@
 #include "rowcol.h"
 #include "stdlibe.h"
 #include "stringmap.h"
+#include "stringpool.h"
 #include "tok.h"
 #include "token.h"
 #include "unwrap.h"
@@ -107,7 +108,7 @@ struct Preprocessor
     struct Array macro_tmp_buf;
 
     struct Array toks;
-    struct Array stringpool;
+    struct StringPool stringpool;
     unsigned int debug_print_tokens : 1;
     unsigned int debug_print_ifs : 1;
     unsigned int debug_print_defines : 1;
@@ -130,7 +131,7 @@ void preproc_free(struct Preprocessor* pp)
     array_destroy(&pp->macro_arg_offsets);
     array_destroy(&pp->macro_tmp_buf);
     array_destroy(&pp->toks);
-    array_destroy(&pp->stringpool);
+    sp_destroy(&pp->stringpool);
     my_free(pp);
 }
 
@@ -182,32 +183,28 @@ static void sstk_shrink(struct StringStk* ss, size_t count)
 
 __forceinline static const char* pp_sp_str(const struct Preprocessor* pp, size_t offset)
 {
-    return (const char*)pp->stringpool.data + offset;
+    return (const char*)pp->stringpool.data.data + offset;
 }
 
 const char* pp_token_str(const struct Preprocessor* pp, const struct Token* tk) { return pp_sp_str(pp, tk->sp_offset); }
 
-static size_t pp_sp_alloc_concat(struct Preprocessor* p, size_t s1, size_t s2)
-{
-    const size_t ret = p->stringpool.sz;
-    size_t n1 = strlen((char*)p->stringpool.data + s1);
-    size_t n2 = strlen((char*)p->stringpool.data + s2);
-    char* ch = (char*)array_alloc(&p->stringpool, n1 + n2 + 1);
-    memcpy(ch, (char*)p->stringpool.data + s1, n1);
-    memcpy(ch + n1, (char*)p->stringpool.data + s2, n2);
-    ch[n1 + n2] = '\0';
-    return ret;
-}
-
+// s must be null terminated
 static size_t pp_sp_alloc(struct Preprocessor* p, const char* s, size_t n)
 {
-    if (n == 0) return 0;
-    int ch0 = *s;
-    if (n == 1 && 0 <= ch0 && ch0 < 128) return ch0 * 2;
-    char* ch = (char*)array_alloc(&p->stringpool, n + 1);
-    memcpy(ch, s, n);
-    ch[n] = 0;
-    return ch - (char*)p->stringpool.data;
+    return sp_insert(&p->stringpool, s, n + 1);
+}
+
+static size_t pp_sp_alloc_concat(struct Preprocessor* p, size_t o1, size_t o2)
+{
+    const char* s1 = pp_sp_str(p, o1);
+    const char* s2 = pp_sp_str(p, o2);
+    size_t n1 = strlen(s1);
+    size_t n2 = strlen(s2);
+    char* tmp = malloc(n1 + n2 + 1);
+    memcpy(tmp, s1, n1);
+    memcpy(tmp + n1, s2, n2);
+    tmp[n1 + n2] = '\0';
+    return pp_sp_alloc(p, tmp, n1 + n2);
 }
 
 struct KeywordEntry
@@ -418,7 +415,7 @@ static int conv_to_uint64(const char* s, uint64_t* out, const struct RowCol* rc)
                 break;
         }
     }
-    if (s[i] == 'L')
+    if (s[i] == 'L' || s[i] == 'l')
     {
         ++i;
     }
@@ -1523,12 +1520,7 @@ struct Preprocessor* preproc_alloc(const char* include_paths)
     pp->debug_print_ifs = 1;
     pp->debug_print_defines = 1;
     pp->include_paths = include_paths;
-    char* sp = array_alloc(&pp->stringpool, 256);
-    for (size_t i = 0; i < 128; ++i)
-    {
-        sp[i * 2] = i;
-        sp[i * 2 + 1] = 0;
-    }
+    sp_init(&pp->stringpool);
     struct Token* tok_one = array_push_zeroes(&pp->defs_tokens, sizeof(struct Token));
     tok_one->type = LEX_NUMBER;
     tok_one->basic_type = LEX_NUMBER;
@@ -1601,4 +1593,4 @@ int preproc_define(struct Preprocessor* pp, const char* macro)
 }
 
 const struct Token* preproc_tokens(const struct Preprocessor* pp) { return pp->toks.data; }
-const char* preproc_stringpool(const struct Preprocessor* pp) { return pp->stringpool.data; }
+const char* preproc_stringpool(const struct Preprocessor* pp) { return pp->stringpool.data.data; }

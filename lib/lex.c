@@ -210,6 +210,12 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
                 ++i;
                 goto LEX_STRING;
             }
+            else if (ch == '\'')
+            {
+                advance_rowcol(&l->rc, ch);
+                ++i;
+                goto LEX_CHARLIT;
+            }
             else
             {
                 l->tok[0] = ch;
@@ -302,14 +308,24 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
                 goto LEX_START;
             }
             break;
-        LEX_STRING:
-            l->state = LEX_STRING;
-        case LEX_STRING:
+        LEX_CHARLIT:
+            l->state = LEX_CHARLIT;
+        case LEX_CHARLIT:
             for (; i < sz; advance_rowcol(&l->rc, buf[i++]))
             {
                 HANDLE_BACKSLASH_NL();
                 const char ch = buf[i];
-                if (ch == '"')
+                if (ch == '\n')
+                {
+                    return parser_ferror(&l->rc, "error: unexpected end of line in character literal\n");
+                }
+                else if (l->escape)
+                {
+                    l->escape = 0;
+                    // TODO: handle escape characters
+                    UNWRAP(push_tok_char(l, ch));
+                }
+                else if (ch == '\'')
                 {
                     // finish string
                     UNWRAP(emit_token(l));
@@ -318,38 +334,48 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
                 }
                 else if (ch == '\\')
                 {
-                    // escape
-                    advance_rowcol(&l->rc, buf[i++]);
-                    goto LEX_STRING1;
-                }
-                else if (ch == '\n')
-                {
-                    return parser_ferror(&l->rc, "error: unexpected end of line in string literal\n");
+                    l->escape = 1;
+                    UNWRAP(push_tok_char(l, ch));
                 }
                 else
                 {
-                    if (rc = push_tok_char(l, ch)) return rc;
+                    UNWRAP(push_tok_char(l, ch));
                 }
             }
             break;
-        LEX_STRING1:
-            l->state = LEX_STRING1;
-        case LEX_STRING1:
-            if (i < sz)
+        LEX_STRING:
+            l->state = LEX_STRING;
+        case LEX_STRING:
+            for (; i < sz; advance_rowcol(&l->rc, buf[i++]))
             {
                 HANDLE_BACKSLASH_NL();
                 const char ch = buf[i];
                 if (ch == '\n')
                 {
+                    return parser_ferror(&l->rc, "error: unexpected end of line in string literal\n");
+                }
+                else if (l->escape)
+                {
+                    l->escape = 0;
+                    // TODO: handle escape characters
+                    UNWRAP(push_tok_char(l, ch));
+                }
+                else if (ch == '"')
+                {
+                    // finish string
+                    UNWRAP(emit_token(l));
                     advance_rowcol(&l->rc, buf[i++]);
+                    goto LEX_START;
+                }
+                else if (ch == '\\')
+                {
+                    l->escape = 1;
+                    UNWRAP(push_tok_char(l, ch));
                 }
                 else
                 {
-                    // TODO: handle escape characters
-                    if (rc = push_tok_char(l, ch)) return rc;
-                    advance_rowcol(&l->rc, buf[i++]);
+                    UNWRAP(push_tok_char(l, ch));
                 }
-                goto LEX_STRING;
             }
             break;
         LEX_MULTILINE_COMMENT:
@@ -448,7 +474,11 @@ fail:
 int end_lex(Lexer* l)
 {
     int rc = 0;
-    if (l->state == LEX_STRING || l->state == LEX_STRING1)
+    if (l->state == LEX_STRING)
+    {
+        UNWRAP(parser_ferror(&l->rc, "error: unexpected end of file in string literal\n"));
+    }
+    if (l->state == LEX_CHARLIT)
     {
         UNWRAP(parser_ferror(&l->rc, "error: unexpected end of file in string literal\n"));
     }
