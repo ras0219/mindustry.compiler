@@ -64,24 +64,28 @@ static int push_tok_char(Lexer* l, char ch)
 
 static int symbol_is_compound(char c1, char c2)
 {
-    if (c1 == '+') return c2 == '+' || c2 == '=';
-    if (c1 == '-') return c2 == '-' || c2 == '=' || c2 == '>';
-    if (c1 == '|' && c2 == '|')
+    switch (c1)
     {
-        return 1;
+        case '+': return c2 == '+' || c2 == '=';
+        case '-': return c2 == '-' || c2 == '=' || c2 == '>';
+        case '*': return c2 == '=';
+        case '|': return c2 == '|' || c2 == '=';
+        case '&': return c2 == '&' || c2 == '=';
+        case '^': return c2 == '=';
+        case '=':
+        case '!': return c2 == '=';
+        case '>':
+        case '<': return c2 == '=' || c2 == c1;
+        case '#': return c2 == '#';
+        case '.': return c2 == '.';
+        default: return 0;
     }
-    if (c1 == '&' && c2 == '&')
-    {
-        return 1;
-    }
-    if (c1 == '=' || c1 == '!' || c1 == '>' || c1 == '<')
-    {
-        if (c2 == '=')
-        {
-            return 1;
-        }
-    }
-    if (c1 == '#' && c2 == '#') return 1;
+}
+static int symbol_is_compound3(char c1, char c2, char c3)
+{
+    if (c1 == '.' && c2 == '.') return c3 == '.';
+    if (c1 == '<' && c2 == '<') return c3 == '=';
+    if (c1 == '>' && c2 == '>') return c3 == '=';
     return 0;
 }
 
@@ -118,6 +122,7 @@ __forceinline static int handle_backslash_nl(struct Lexer* const l, const char* 
         }
         break;
     }
+    if (i == sz) return 1;
     *p_i = i;
     return 0;
 }
@@ -155,74 +160,65 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
     {
     LEX_START:
         l->state = LEX_START;
-        l->ws_sensitive = 0;
         case LEX_START:
         {
-            if (!l->ws_sensitive)
+            for (; i < sz; advance_rowcol(&l->rc, buf[i++]))
             {
-                for (; i < sz; advance_rowcol(&l->rc, buf[i++]))
+                HANDLE_BACKSLASH_NL();
+                const char ch = buf[i];
+                if (ch == ' ' || ch == '\t')
                 {
-                    HANDLE_BACKSLASH_NL();
-                    const char ch = buf[i];
-                    if (ch == ' ' || ch == '\t')
-                    {
-                        l->ws_before = 1;
-                        continue;
-                    }
-                    if (ch == '\n' || ch == '\r')
-                    {
-                        l->ws_before = 1;
-                        l->not_first = 0;
-                        continue;
-                    }
-                    l->ws_sensitive = 1;
-                    break;
+                    l->ws_before = 1;
+                    continue;
                 }
-            }
-            if (i == sz) return 0;
-            HANDLE_BACKSLASH_NL();
-            const char ch = buf[i];
-            l->tok_rc = l->rc;
-            if (l->expect_header)
-            {
-                l->expect_header = 0;
-                if (ch != '<' && ch != '"')
+                if (ch == '\n' || ch == '\r')
                 {
-                    return parser_ferror(&l->rc, "error: expected header to include but found '%c'\n", ch);
+                    l->ws_before = 1;
+                    l->not_first = 0;
+                    continue;
                 }
-                l->tok[0] = ch;
-                l->sz = 1;
-                advance_rowcol(&l->rc, ch);
-                ++i;
-                goto LEX_HEADER;
-            }
-            else if (is_ascii_alphu(ch))
-            {
-                goto LEX_IDENT;
-            }
-            else if (is_ascii_digit(ch))
-            {
-                goto LEX_NUMBER;
-            }
-            else if (ch == '"')
-            {
-                advance_rowcol(&l->rc, ch);
-                ++i;
-                goto LEX_STRING;
-            }
-            else if (ch == '\'')
-            {
-                advance_rowcol(&l->rc, ch);
-                ++i;
-                goto LEX_CHARLIT;
-            }
-            else
-            {
-                l->tok[0] = ch;
-                l->sz = 1;
-                advance_rowcol(&l->rc, ch);
-                ++i;
-                goto LEX_SYMBOL;
+                l->tok_rc = l->rc;
+                if (l->expect_header)
+                {
+                    l->expect_header = 0;
+                    if (ch != '<' && ch != '"')
+                    {
+                        return parser_ferror(&l->rc, "error: expected header to include but found '%c'\n", ch);
+                    }
+                    l->tok[0] = ch;
+                    l->sz = 1;
+                    advance_rowcol(&l->rc, ch);
+                    ++i;
+                    goto LEX_HEADER;
+                }
+                else if (is_ascii_alphu(ch))
+                {
+                    goto LEX_IDENT;
+                }
+                else if (is_ascii_digit(ch))
+                {
+                    goto LEX_NUMBER;
+                }
+                else if (ch == '"')
+                {
+                    advance_rowcol(&l->rc, ch);
+                    ++i;
+                    goto LEX_STRING;
+                }
+                else if (ch == '\'')
+                {
+                    advance_rowcol(&l->rc, ch);
+                    ++i;
+                    goto LEX_CHARLIT;
+                }
+                else
+                {
+                    l->tok[0] = ch;
+                    l->sz = 1;
+                    advance_rowcol(&l->rc, ch);
+                    ++i;
+                    goto LEX_SYMBOL;
+                }
             }
             break;
         }
@@ -279,13 +275,6 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
                         l->sz = 2;
                         continue;
                     }
-                    if (l->tok[0] == '.' && ch == '.')
-                    {
-                        // ellipsis
-                        l->tok[1] = ch;
-                        l->sz = 2;
-                        continue;
-                    }
                     if (l->tok[0] == '.' && is_ascii_digit(ch))
                     {
                         // actually matches a digit
@@ -294,14 +283,11 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
                 }
                 else if (l->sz == 2)
                 {
-                    if (l->tok[0] == '.' && l->tok[1] == '.')
+                    if (symbol_is_compound3(l->tok[0], l->tok[1], ch))
                     {
-                        if (ch == '.')
-                        {
-                            l->tok[2] = ch;
-                            l->sz = 3;
-                            continue;
-                        }
+                        l->tok[2] = ch;
+                        l->sz = 3;
+                        continue;
                     }
                 }
                 UNWRAP(emit_token(l));
@@ -509,4 +495,90 @@ const char* lexstate_to_string(unsigned int s)
         X_LEX_STATES(Y)
         default: return "unknown";
     }
+}
+
+int lit_to_uint64(const char* s, uint64_t* out, const struct RowCol* rc)
+{
+    uint64_t v = 0;
+    size_t i = 0;
+    if (s[0] == '0')
+    {
+        // octal, hex, binary, or zero
+        if (s[1] == 'x' || s[1] == 'X')
+        {
+            // hex
+            for (i = 2; s[i]; ++i)
+            {
+                v = (((v & (UINT64_MAX >> 4))) << 4);
+                if (s[i] >= '0' && s[i] <= '9')
+                    v += s[i] - '0';
+                else if (s[i] >= 'a' && s[i] <= 'f')
+                    v += s[i] - 'a' + 10;
+                else if (s[i] >= 'A' && s[i] <= 'F')
+                    v += s[i] - 'A' + 10;
+                else
+                    break;
+            }
+        }
+        else if (s[1] == 'b' || s[1] == 'B')
+        {
+            // binary
+            for (i = 2; s[i]; ++i)
+            {
+                v = (((v & (UINT64_MAX >> 1))) << 1);
+                if (s[i] == '0')
+                    ;
+                else if (s[i] == '1')
+                    v += 1;
+                else
+                    break;
+            }
+        }
+        else if (s[1] >= '0' && s[1] <= '9')
+        {
+            // octal
+            for (i = 1; s[i]; ++i)
+            {
+                v = (((v & (UINT64_MAX >> 3))) << 3);
+                if (s[i] >= '0' && s[i] <= '7')
+                    v += s[i] - '0';
+                else
+                    break;
+            }
+        }
+        else if (s[1] == '\0')
+        {
+            i = 1;
+        }
+    }
+    else
+    {
+        for (; s[i]; ++i)
+        {
+            v = (((v & (UINT64_MAX >> 4))) * 10);
+            if (s[i] >= '0' && s[i] <= '9')
+                v += s[i] - '0';
+            else
+                break;
+        }
+    }
+    if (s[i] == 'U')
+    {
+        ++i;
+    }
+    if (s[i] == 'L' || s[i] == 'l')
+    {
+        ++i;
+    }
+    if (s[i] == 'L' || s[i] == 'l')
+    {
+        ++i;
+    }
+    if (s[i] != '\0')
+    {
+        return parser_ferror(rc, "error: unexpected character in number literal: '%c'\n", s[i]);
+    }
+
+    *out = v;
+    return 0;
 }

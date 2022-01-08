@@ -10,12 +10,47 @@
 #include "tok.h"
 #include "unwrap.h"
 
-void cg_init(struct CodeGen* cg) { memset(cg, 0, sizeof(struct CodeGen)); }
+void cg_init(struct CodeGen* cg)
+{
+    memset(cg, 0, sizeof(struct CodeGen));
+#ifndef _WIN32
+    cg->target = CG_TARGET_MACOS_GAS;
+#endif
+}
 void cg_destroy(struct CodeGen* cg)
 {
     array_destroy(&cg->const_);
     array_destroy(&cg->code);
 }
+
+enum
+{
+    TACA_VOID_IS_MEMORY = 0,
+    TACA_LITERAL_IS_MEMORY = 0,
+    TACA_IMM_IS_MEMORY = 0,
+    TACA_NAME_IS_MEMORY = 1,
+    TACA_LNAME_IS_MEMORY = 1,
+    TACA_FRAME_IS_MEMORY = 1,
+    TACA_REF_IS_MEMORY = 1,
+    TACA_PARAM_IS_MEMORY = 1,
+    TACA_CONST_IS_MEMORY = 1,
+    TACA_CONST_ADDR_IS_MEMORY = 0,
+    TACA_ARG_IS_MEMORY = 1,
+    TACA_ALABEL_IS_MEMORY = 0,
+    TACA_LLABEL_IS_MEMORY = 1,
+    TACA_TEMP_IS_MEMORY = 0,
+
+    TACA_ARG_ADDR_IS_MEMORY = 0,
+    TACA_FRAME_ADDR_IS_MEMORY = 0,
+    TACA_NAME_ADDR_IS_MEMORY = 1,
+    TACA_LNAME_ADDR_IS_MEMORY = 0,
+};
+
+#define Y_IS_MEMORY(Z) Z##_IS_MEMORY,
+static const char s_table_taca_is_memory[TACA_KIND_COUNT] = {X_TACA_KIND(Y_IS_MEMORY)};
+#undef Y_IS_MEMORY
+
+__forceinline static int taca_is_memory(enum TACAKind kind) { return s_table_taca_is_memory[kind]; }
 
 static __forceinline void cg_debug(struct CodeGen* cg, const char* fmt, ...)
 {
@@ -31,51 +66,280 @@ static __forceinline void cg_debug(struct CodeGen* cg, const char* fmt, ...)
 void cg_declare_extern(struct CodeGen* cg, const char* sym)
 {
     cg_debug(cg, "   : %s\n", sym);
-    array_appendf(&cg->code, "extern %s:proc\n", sym);
+    if (cg->target == CG_TARGET_WIN_MASM)
+        array_appendf(&cg->code, "extern %s:proc\n", sym);
+    else
+        ;
 }
 
 void cg_declare_public(struct CodeGen* cg, const char* sym)
 {
     cg_debug(cg, "   : %s\n", sym);
-    array_appendf(&cg->code, "public %s\n", sym);
+    if (cg->target == CG_TARGET_WIN_MASM)
+        array_appendf(&cg->code, "public %s\n", sym);
+    else
+        array_appendf(&cg->code, ".globl _%s\n", sym);
 }
 
 void cg_mark_label(struct CodeGen* cg, const char* sym)
 {
     cg_debug(cg, "   : %s\n", sym);
-    array_appendf(&cg->code, "%s:\n", sym);
+    if (cg->target == CG_TARGET_WIN_MASM)
+        array_appendf(&cg->code, "%s:\n", sym);
+    else
+        array_appendf(&cg->code, "_%s:\n", sym);
 }
+
+void cg_mark_alabel(struct CodeGen* cg, size_t n)
+{
+    cg_debug(cg, "   : L$%zu\n", n);
+    array_appendf(&cg->code, "L$%zu:\n", n);
+}
+
+size_t cg_next_alabel(struct CodeGen* cg) { return cg->next_label++; }
 
 void cg_string_constant(struct CodeGen* cg, size_t cidx, const char* str)
 {
     cg_debug(cg, "   : strconst %d: %s\n", cidx, str);
-    array_appendf(&cg->const_, "@S%d db \"%s\",0\n", cidx, str);
+    array_appendf(&cg->const_, "L_.S%d: .asciz \"%s\"\n", cidx, str);
 }
+void cg_reserve_data(struct CodeGen* cg, const char* name, const char* data, size_t sz)
+{
+    if (sz == 0) abort();
+    array_appendf(&cg->data, "_%s: .byte ", name);
+    array_appendf(&cg->data, "%u", data[0]);
+    for (size_t i = 1; i < sz; ++i)
+    {
+        array_appendf(&cg->data, ",%u", data[i]);
+    }
+    array_push_byte(&cg->data, '\n');
+}
+
+static const char* const s_ms_reg_names[] = {"RCX", "RDX", "R8", "R9"};
+static const char* const s_sysv_reg_names[] = {"%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"};
+
+enum
+{
+    REG_RAX,
+    REG_RBX,
+    REG_RCX,
+};
+
 static int cg_gen_taca(struct CodeGen* cg, struct TACAddress addr, size_t frame_size, unsigned char* frame_slots)
 {
     int rc = 0;
     switch (addr.kind)
     {
-        case TACA_NAME: array_appendf(&cg->code, "%s", addr.name); break;
-        case TACA_LITERAL: array_appendf(&cg->code, "%s", addr.literal); break;
-        case TACA_IMM: array_appendf(&cg->code, "%zu", addr.imm); break;
-        case TACA_CONST: array_appendf(&cg->code, "offset @S%d", addr.const_idx); break;
-        case TACA_REF: array_appendf(&cg->code, "%zu[RSP]", (size_t)32 + frame_slots[addr.ref] * 8); break;
-        case TACA_ARG: array_appendf(&cg->code, "%zu[RSP]", addr.arg_idx * 8 + 8 + frame_size); break;
-        case TACA_FRAME: array_appendf(&cg->code, "QWORD PTR [RSP+%zu]", frame_size - 8 - addr.frame_offset); break;
-        default: return parser_ferror(NULL, "error: unimplemented TACA: %d\n", addr.kind);
+        case TACA_NAME_ADDR:
+            if (cg->target == CG_TARGET_MACOS_GAS)
+            {
+                array_push_byte(&cg->code, '_');
+            }
+            array_appends(&cg->code, addr.name);
+            array_appends(&cg->code, "@GOTPCREL(%rip)");
+            break;
+        case TACA_LNAME_ADDR:
+            if (cg->target == CG_TARGET_MACOS_GAS)
+            {
+                array_push_byte(&cg->code, '_');
+            }
+            array_appends(&cg->code, addr.name);
+            break;
+        case TACA_LNAME:
+            if (cg->target == CG_TARGET_MACOS_GAS)
+            {
+                array_push_byte(&cg->code, '_');
+            }
+            array_appends(&cg->code, addr.name);
+            array_appends(&cg->code, "(%rip)");
+            break;
+        case TACA_LITERAL: array_appends(&cg->code, addr.literal); break;
+        case TACA_IMM: array_appendf(&cg->code, "$%zu", addr.imm); break;
+        case TACA_ALABEL: array_appendf(&cg->code, "L$%zu", addr.alabel); break;
+        case TACA_LLABEL: array_appendf(&cg->code, "L$%zu_%s", cg->cur_fn_lbl_prefix, addr.literal); break;
+        case TACA_TEMP: array_appends(&cg->code, "%rcx"); break;
+        case TACA_PARAM:
+            if (cg->target == CG_TARGET_WIN_MASM)
+            {
+                if (addr.param_idx < 4)
+                {
+                    array_appends(&cg->code, s_ms_reg_names[addr.param_idx]);
+                }
+                else
+                {
+                    array_appendf(&cg->code, "%zu[RSP]", addr.param_idx * 8);
+                }
+            }
+            else if (cg->target == CG_TARGET_MACOS_GAS)
+            {
+                if (addr.param_idx < 6)
+                {
+                    array_appends(&cg->code, s_sysv_reg_names[addr.param_idx]);
+                }
+                else
+                {
+                    array_appendf(&cg->code, "%zu(%%rsp)", (addr.param_idx - 6) * 8);
+                }
+            }
+            break;
+        case TACA_CONST:
+            if (cg->target == CG_TARGET_WIN_MASM)
+                array_appendf(&cg->code, "offset @S%d", addr.const_idx);
+            else
+                array_appendf(&cg->code, "L_.S%d(%%rip)", addr.const_idx);
+            break;
+        case TACA_REF:
+            if (cg->target == CG_TARGET_WIN_MASM)
+                array_appendf(&cg->code, "%zu[RSP]", (size_t)32 + frame_slots[addr.ref] * 8);
+            else
+                array_appendf(&cg->code, "%zu(%%rsp)", (size_t)32 + frame_slots[addr.ref] * 8);
+            break;
+        case TACA_ARG:
+            if (cg->target == CG_TARGET_WIN_MASM)
+                // Windows x64 ABI has a shadow area after the return address
+                array_appendf(&cg->code, "%zu[RSP]", addr.arg_idx * 8 + 8 + frame_size);
+            else
+            {
+                int skip_ret = 8 * (addr.arg_idx >= 6);
+                // With System-V abi we put the shadow area inside the frame
+                array_appendf(&cg->code, "%zu(%%rsp)", frame_size - 6 * 8 + addr.arg_idx * 8 + skip_ret);
+            }
+            break;
+        case TACA_FRAME:
+            if (addr.frame_offset % 8 != 0)
+            {
+                fprintf(stderr, "warning: unaligned access: %zu\n", addr.frame_offset);
+            }
+            if (cg->target == CG_TARGET_WIN_MASM)
+                array_appendf(&cg->code, "QWORD PTR [RSP+%zu]", addr.frame_offset);
+            else
+            {
+                if (addr.frame_offset) array_appendf(&cg->code, "%zu", addr.frame_offset);
+                array_appends(&cg->code, "(%rsp)");
+            }
+            break;
+        default: parser_ferror(NULL, "error: unimplemented TACA: %s\n", taca_to_string(addr.kind)); break;
     }
     return rc;
 }
 
-static const char* const s_reg_names[4] = {"RCX", "RDX", "R8", "R9"};
+static int cg_gen_inst_a(
+    struct CodeGen* cg, const char* inst, struct TACAddress addr, size_t frame_size, unsigned char* frame_slots)
+{
+    int rc = 0;
+    array_appendf(&cg->code, "    %s ", inst);
+    rc = cg_gen_taca(cg, addr, frame_size, frame_slots);
+    array_push_byte(&cg->code, '\n');
+    return rc;
+}
+static int cg_gen_mov_ra(struct CodeGen* cg, struct TACAddress addr, size_t frame_size, unsigned char* frame_slots)
+{
+    int rc = 0;
+    if (addr.kind == TACA_FRAME_ADDR)
+    {
+        addr.kind = TACA_FRAME;
+        array_appends(&cg->code, "    leaq ");
+    }
+    else if (addr.kind == TACA_ARG_ADDR)
+    {
+        addr.kind = TACA_ARG;
+        array_appends(&cg->code, "    leaq ");
+    }
+    else if (addr.kind == TACA_LNAME_ADDR)
+    {
+        addr.kind = TACA_LNAME;
+        array_appends(&cg->code, "    leaq ");
+    }
+    else if (addr.kind == TACA_NAME)
+    {
+        addr.kind = TACA_NAME_ADDR;
+        array_appends(&cg->code, "    movq ");
+        rc = cg_gen_taca(cg, addr, frame_size, frame_slots);
+        array_appends(&cg->code, ", %rax\n    movq (%rax), %rax\n");
+        return rc;
+    }
+    else if (addr.kind == TACA_CONST_ADDR)
+    {
+        addr.kind = TACA_CONST;
+        array_appends(&cg->code, "    leaq ");
+    }
+    else
+    {
+        array_appends(&cg->code, "    movq ");
+    }
+    rc = cg_gen_taca(cg, addr, frame_size, frame_slots);
+    array_appends(&cg->code, ", %rax\n");
+    return rc;
+}
 
-// static void cg_emit_label(struct CodeGen* cg, size_t lbl)
-//{
-//    cg_debug(cg, "   : $L%zu\n", lbl);
-//    array_appendf(&cg->code, "$L%zu:\n", lbl);
-//}
-// static void cg_jump_label(struct CodeGen* cg, size_t lbl) { array_appendf(&cg->code, "    jmp $L%zu\n", lbl); }
+static int cg_gen_inst_ra(
+    struct CodeGen* cg, const char* inst, struct TACAddress addr, size_t frame_size, unsigned char* frame_slots)
+{
+    int rc = 0;
+    if (strcmp(inst, "movq") == 0)
+    {
+        return cg_gen_mov_ra(cg, addr, frame_size, frame_slots);
+    }
+    if (addr.kind == TACA_IMM && addr.imm > UINT32_MAX)
+    {
+        array_appends(&cg->code, "    movq ");
+        rc = cg_gen_taca(cg, addr, frame_size, frame_slots);
+        array_appendf(&cg->code, ", %%rbx\n    %s %%rbx, %%rax\n", inst);
+    }
+    else
+    {
+        array_appendf(&cg->code, "    %s ", inst);
+        rc = cg_gen_taca(cg, addr, frame_size, frame_slots);
+        array_appends(&cg->code, ", %rax\n");
+    }
+    return rc;
+}
+static int cg_gen_inst_ar(
+    struct CodeGen* cg, const char* inst, struct TACAddress addr, size_t frame_size, unsigned char* frame_slots)
+{
+    int rc = 0;
+    array_appendf(&cg->code, "    %s %%rax, ", inst);
+    rc = cg_gen_taca(cg, addr, frame_size, frame_slots);
+    array_appends(&cg->code, "\n");
+    return rc;
+}
+static int cg_gen_inst_aa(struct CodeGen* cg,
+                          const char* inst,
+                          struct TACAddress addr,
+                          struct TACAddress addr2,
+                          size_t frame_size,
+                          unsigned char* frame_slots)
+{
+    int rc = 0;
+    if (addr2.kind == TACA_FRAME_ADDR || addr2.kind == TACA_ARG_ADDR || addr2.kind == TACA_NAME_ADDR ||
+        addr2.kind == TACA_CONST_ADDR || addr2.kind == TACA_LNAME_ADDR)
+    {
+        UNWRAP(cg_gen_mov_ra(cg, addr2, frame_size, frame_slots));
+        UNWRAP(cg_gen_inst_ar(cg, inst, addr, frame_size, frame_slots));
+    }
+    else if (addr2.kind == TACA_IMM && addr2.imm > UINT32_MAX &&
+             (strcmp(inst, "movq") != 0 || taca_is_memory(addr.kind)))
+    {
+        array_appends(&cg->code, "    movq ");
+        rc = cg_gen_taca(cg, addr2, frame_size, frame_slots);
+        array_appendf(&cg->code, ", %%rbx\n    %s %%rbx, ", inst);
+        rc |= cg_gen_taca(cg, addr, frame_size, frame_slots);
+        array_appends(&cg->code, "\n");
+    }
+    else
+    {
+        array_appendf(&cg->code, "    %s ", inst);
+        rc |= cg_gen_taca(cg, addr2, frame_size, frame_slots);
+        array_appends(&cg->code, ", ");
+        rc = cg_gen_taca(cg, addr, frame_size, frame_slots);
+        array_push_byte(&cg->code, '\n');
+    }
+fail:
+    return rc;
+}
+
+static const struct TACAddress s_imm_zero = {.kind = TACA_IMM, .imm = 0};
+static const struct TACAddress s_taca_temp = {.kind = TACA_TEMP};
 
 struct FreeFrameSlots
 {
@@ -101,49 +365,28 @@ static void ffs_push(struct FreeFrameSlots* ffs, unsigned char s)
 static void cg_mov_frame_from_rax(struct CodeGen* cg, unsigned char slot)
 {
     if (slot == 255) return;
-    array_appendf(&cg->code, "    mov QWORD PTR [RSP + %zu], rax\n", 32 + slot);
+    if (cg->target == CG_TARGET_WIN_MASM)
+        array_appendf(&cg->code, "    mov QWORD PTR [RSP + %zu], rax\n", 32 + slot * 8);
+    else
+        array_appendf(&cg->code, "    movq %%rax, %zu(%%rsp)\n", 32 + slot * 8);
 }
 
-enum
-{
-    TACA_VOID_IS_MEMORY = 0,
-    TACA_LITERAL_IS_MEMORY = 0,
-    TACA_IMM_IS_MEMORY = 0,
-    TACA_NAME_IS_MEMORY = 0,
-    TACA_FRAME_IS_MEMORY = 1,
-    TACA_REF_IS_MEMORY = 1,
-    TACA_PARAM_IS_MEMORY = 0,
-    TACA_CONST_IS_MEMORY = 0,
-    TACA_ARG_IS_MEMORY = 1,
-
-    TACA_ARG_ADDR_IS_MEMORY = 0,
-    TACA_FRAME_ADDR_IS_MEMORY = 0,
-    TACA_NAME_ADDR_IS_MEMORY = 0,
+static const struct TACAddress s_rbx = {
+    .kind = TACA_LITERAL,
+    .literal = "%rbx",
 };
-
-#define Y_IS_MEMORY(Z) Z##_IS_MEMORY,
-static const char s_table_taca_is_memory[TACA_KIND_COUNT] = {X_TACA_KIND(Y_IS_MEMORY)};
-#undef Y_IS_MEMORY
-
-__forceinline static int taca_is_memory(enum TACAKind kind) { return s_table_taca_is_memory[kind]; }
 
 static int cg_add(struct CodeGen* cg, size_t i, struct TACEntry* taces, size_t frame_size, unsigned char* frame_slots)
 {
     int rc = 0;
-    array_appends(&cg->code, "    mov rax, ");
-    UNWRAP(cg_gen_taca(cg, taces[i].arg1, frame_size, frame_slots));
-    array_appends(&cg->code, "\n");
+    UNWRAP(cg_gen_mov_ra(cg, taces[i].arg1, frame_size, frame_slots));
     if (taces[i].arg2.kind == TACA_REF && frame_slots[taces[i].arg2.ref] == frame_slots[i])
     {
-        array_appends(&cg->code, "    add ");
-        UNWRAP(cg_gen_taca(cg, taces[i].arg2, frame_size, frame_slots));
-        array_appends(&cg->code, ", rax\n");
+        UNWRAP(cg_gen_inst_ar(cg, "addq", taces[i].arg2, frame_size, frame_slots));
     }
     else
     {
-        array_appends(&cg->code, "    add rax, ");
-        UNWRAP(cg_gen_taca(cg, taces[i].arg2, frame_size, frame_slots));
-        array_appends(&cg->code, "\n");
+        UNWRAP(cg_gen_inst_ra(cg, "addq", taces[i].arg2, frame_size, frame_slots));
         cg_mov_frame_from_rax(cg, frame_slots[i]);
     }
 fail:
@@ -151,24 +394,17 @@ fail:
 }
 
 static int cg_assign(
-    struct CodeGen* cg, size_t i, struct TACEntry* taces, size_t frame_size, unsigned char* frame_slots)
+    struct CodeGen* cg, struct TACAddress arg1, struct TACAddress arg2, size_t frame_size, unsigned char* frame_slots)
 {
     int rc = 0;
-    if (taca_is_memory(taces[i].arg1.kind) && taca_is_memory(taces[i].arg2.kind))
+    if (taca_is_memory(arg1.kind) && taca_is_memory(arg2.kind))
     {
-        array_appends(&cg->code, "    mov rax, ");
-        UNWRAP(cg_gen_taca(cg, taces[i].arg2, frame_size, frame_slots));
-        array_appends(&cg->code, "\n    mov ");
-        UNWRAP(cg_gen_taca(cg, taces[i].arg1, frame_size, frame_slots));
-        array_appends(&cg->code, ", rax\n");
+        UNWRAP(cg_gen_mov_ra(cg, arg2, frame_size, frame_slots));
+        UNWRAP(cg_gen_inst_ar(cg, "movq", arg1, frame_size, frame_slots));
     }
     else
     {
-        array_appends(&cg->code, "    mov ");
-        UNWRAP(cg_gen_taca(cg, taces[i].arg1, frame_size, frame_slots));
-        array_appends(&cg->code, ", ");
-        UNWRAP(cg_gen_taca(cg, taces[i].arg2, frame_size, frame_slots));
-        array_appends(&cg->code, "\n");
+        UNWRAP(cg_gen_inst_aa(cg, "movq", arg1, arg2, frame_size, frame_slots));
     }
 fail:
     return rc;
@@ -182,6 +418,11 @@ int cg_gen_taces(struct CodeGen* cg, struct TACEntry* taces, size_t n_taces, siz
 
     unsigned char* frame_slots = NULL;
     struct FreeFrameSlots ffs = {};
+
+    ++cg->cur_fn_lbl_prefix;
+
+    size_t num_args = 0;
+    size_t max_params = 0;
 
     frame_slots = (unsigned char*)my_malloc(n_taces);
     memset(frame_slots, 0xFF, n_taces);
@@ -215,119 +456,239 @@ int cg_gen_taces(struct CodeGen* cg, struct TACEntry* taces, size_t n_taces, siz
                 frame_slots[ref] = ffs_pop(&ffs);
             }
         }
+        if (tace->op == TACO_ARG)
+        {
+            ++num_args;
+        }
+        if (tace->arg2.kind == TACO_PARAM && tace->arg2.param_idx > max_params)
+        {
+            max_params = tace->arg2.param_idx;
+        }
     }
 
     frame_size += ffs.max_used * 8 + 32;
+
+    if (cg->target == CG_TARGET_MACOS_GAS)
+    {
+        // sys-v does not have a shadow stack for parameters; make space for parameters
+        frame_size += 6 * 8;
+    }
+
     // align stack for calls (32-byte alignment)
     frame_size += 31 - (frame_size + 7) % 32;
 
-    array_appendf(&cg->code, "    sub rsp, %zu\n", frame_size);
+    array_appendf(&cg->code, "    subq $%zu, %%rsp\n", frame_size);
 
     for (size_t i = 0; i < n_taces; ++i)
     {
+        if (taces[i].rc)
+        {
+            array_appendf(&cg->code, "    ## %s:%d:%d\n", taces[i].rc->file, taces[i].rc->row, taces[i].rc->col);
+        }
         array_appendf(&cg->code,
-                      "    ; TAC %zu: (%s, %s, %s)\n",
+                      "    ## TAC %zu: (%s, %s, %s)\n",
                       i,
                       taco_to_string(taces[i].op),
                       taca_to_string(taces[i].arg1.kind),
                       taca_to_string(taces[i].arg2.kind));
 
+        const char* inst;
+
         switch (taces[i].op)
         {
-            case TACO_ARG:
-                if (taces[i].arg1.arg_idx > 3)
+            case TACO_LT:
+            case TACO_LTEQ:
+            case TACO_EQ:
+            case TACO_NEQ:
+                UNWRAP(cg_gen_inst_ra(cg, "movq", taces[i].arg1, frame_size, frame_slots));
+                UNWRAP(cg_gen_inst_ra(cg, "cmpq", taces[i].arg2, frame_size, frame_slots));
+                switch (taces[i].op)
                 {
-                    rc = parser_ferror(NULL, "error: only 4 parameters are supported\n");
-                    goto fail;
+                    case TACO_LT: array_appends(&cg->code, "    setl %al\n"); break;
+                    case TACO_LTEQ: array_appends(&cg->code, "    setle %al\n"); break;
+                    case TACO_EQ: array_appends(&cg->code, "    sete %al\n"); break;
+                    case TACO_NEQ: array_appends(&cg->code, "    setne %al\n"); break;
+                    default: abort();
                 }
-                array_appends(&cg->code, "    mov ");
-                UNWRAP(cg_gen_taca(cg, taces[i].arg1, frame_size, frame_slots));
-                array_appendf(&cg->code, ", %s\n", s_reg_names[taces[i].arg1.arg_idx]);
+                array_appends(&cg->code, "    movzx %al, %rax\n");
+                cg_mov_frame_from_rax(cg, frame_slots[i]);
                 break;
-            case TACO_PARAM:
-                if (taces[i].arg2.param_idx > 3)
+            case TACO_SUB: inst = "subq"; goto simple_binary;
+            case TACO_MULT: inst = "imul"; goto simple_binary;
+            case TACO_DIV:
+                UNWRAP(cg_gen_inst_ra(cg, "movq", taces[i].arg1, frame_size, frame_slots));
+                array_appends(&cg->code, "    movq $0, %rdx\n");
+                UNWRAP(cg_gen_inst_aa(cg, "movq ", s_rbx, taces[i].arg2, frame_size, frame_slots));
+                array_appends(&cg->code, "    idivq %rbx\n");
+                cg_mov_frame_from_rax(cg, frame_slots[i]);
+                break;
+            case TACO_MOD:
+                UNWRAP(cg_gen_mov_ra(cg, taces[i].arg1, frame_size, frame_slots));
+                array_appends(&cg->code, "    movq $0, %rdx\n");
+                UNWRAP(cg_gen_inst_aa(cg, "movq ", s_rbx, taces[i].arg2, frame_size, frame_slots));
+                array_appends(&cg->code, "    idivq %rbx\n");
+                array_appends(&cg->code, "    movq %rdx, %rax\n");
+                cg_mov_frame_from_rax(cg, frame_slots[i]);
+                break;
+            case TACO_BAND: inst = "and"; goto simple_binary;
+            case TACO_BOR: inst = "or"; goto simple_binary;
+            case TACO_BXOR: inst = "xor"; goto simple_binary;
+            case TACO_SHL: inst = "shl"; goto shift;
+            case TACO_SHR:
+                inst = "shr";
+            shift:
+                if (taces[i].arg2.kind != TACA_IMM)
                 {
-                    rc = parser_ferror(NULL, "error: only 4 parameters are supported\n");
-                    goto fail;
+                    UNWRAP(cg_gen_mov_ra(cg, taces[i].arg2, frame_size, frame_slots));
+                    array_appends(&cg->code, "    mov %al, %cl\n");
+                    UNWRAP(cg_gen_mov_ra(cg, taces[i].arg1, frame_size, frame_slots));
+                    array_appends(&cg->code, "    shl %cl, %rax\n");
+                    cg_mov_frame_from_rax(cg, frame_slots[i]);
                 }
-                array_appendf(&cg->code, "    mov %s, ", s_reg_names[taces[i].arg2.param_idx]);
-                UNWRAP(cg_gen_taca(cg, taces[i].arg1, frame_size, frame_slots));
-                array_appends(&cg->code, "\n");
+                break;
+            case TACO_ARG:
+            {
+                struct TACAddress arg_reg = {
+                    .kind = TACA_LITERAL,
+                };
+                if (cg->target == CG_TARGET_WIN_MASM && taces[i].arg1.arg_idx < 4)
+                {
+                    arg_reg.literal = s_ms_reg_names[taces[i].arg1.arg_idx];
+                }
+                else if (cg->target == CG_TARGET_MACOS_GAS && taces[i].arg1.arg_idx < 6)
+                {
+                    arg_reg.literal = s_sysv_reg_names[taces[i].arg1.arg_idx];
+                }
+                UNWRAP(cg_assign(cg, taces[i].arg1, arg_reg, frame_size, frame_slots));
+            }
+            break;
+            case TACO_PARAM: UNWRAP(cg_assign(cg, taces[i].arg2, taces[i].arg1, frame_size, frame_slots)); break;
+            case TACO_BNOT:
+                UNWRAP(cg_gen_mov_ra(cg, taces[i].arg1, frame_size, frame_slots));
+                array_appends(&cg->code, "    not %rax\n");
+                cg_mov_frame_from_rax(cg, frame_slots[i]);
                 break;
             case TACO_CALL:
-                array_appends(&cg->code, "    call ");
+                array_appends(&cg->code, "    movb $0, %al\n");
+                array_appends(&cg->code, "    callq ");
+                if (taca_is_memory(taces[i].arg1.kind))
+                {
+                    array_push_byte(&cg->code, '*');
+                }
                 UNWRAP(cg_gen_taca(cg, taces[i].arg1, frame_size, frame_slots));
-                array_appends(&cg->code, "\n");
+                array_push_byte(&cg->code, '\n');
                 cg_mov_frame_from_rax(cg, frame_slots[i]);
                 break;
             case TACO_LOAD:
-                array_appends(&cg->code, "    mov rax, ");
-                UNWRAP(cg_gen_taca(cg, taces[i].arg1, frame_size, frame_slots));
-                array_appends(&cg->code,
-                              "\n"
-                              "    mov rax, [rax]\n");
+                UNWRAP(cg_gen_inst_ra(cg, "movq", taces[i].arg1, frame_size, frame_slots));
+                array_appends(&cg->code, "    movq (%rax), %rax\n");
                 cg_mov_frame_from_rax(cg, frame_slots[i]);
                 break;
-            case TACO_MULT:
-                array_appends(&cg->code, "    mov rax, ");
-                UNWRAP(cg_gen_taca(cg, taces[i].arg1, frame_size, frame_slots));
-                array_appends(&cg->code, "\n");
-                array_appends(&cg->code, "    imul rax, ");
-                UNWRAP(cg_gen_taca(cg, taces[i].arg2, frame_size, frame_slots));
-                array_appends(&cg->code, "\n");
-                cg_mov_frame_from_rax(cg, frame_slots[i]);
-                break;
-            case TACO_DIV:
-                array_appends(&cg->code, "    mov rax, ");
-                UNWRAP(cg_gen_taca(cg, taces[i].arg1, frame_size, frame_slots));
-                array_appends(&cg->code, "\n");
-                array_appends(&cg->code, "    idiv rax, ");
-                UNWRAP(cg_gen_taca(cg, taces[i].arg2, frame_size, frame_slots));
-                array_appends(&cg->code, "\n");
+            simple_binary:
+                UNWRAP(cg_gen_inst_ra(cg, "movq", taces[i].arg1, frame_size, frame_slots));
+                UNWRAP(cg_gen_inst_ra(cg, inst, taces[i].arg2, frame_size, frame_slots));
                 cg_mov_frame_from_rax(cg, frame_slots[i]);
                 break;
             case TACO_ADD: UNWRAP(cg_add(cg, i, taces, frame_size, frame_slots)); break;
-            case TACO_ASSIGN: UNWRAP(cg_assign(cg, i, taces, frame_size, frame_slots)); break;
+            case TACO_ASSIGN: UNWRAP(cg_assign(cg, taces[i].arg1, taces[i].arg2, frame_size, frame_slots)); break;
             case TACO_RETURN:
-                array_appends(&cg->code, "    mov rax, ");
-                UNWRAP(cg_gen_taca(cg, taces[i].arg1, frame_size, frame_slots));
-                array_appendf(&cg->code, "\n    add rsp, %zu\n    ret 0\n", frame_size);
+                if (taces[i].arg1.kind != TACA_VOID)
+                    UNWRAP(cg_gen_inst_ra(cg, "movq", taces[i].arg1, frame_size, frame_slots));
+                array_appendf(&cg->code, "\n    addq $%zu, %%rsp\n    retq\n", frame_size);
                 break;
-            default: rc = parser_ferror(NULL, "error: unimplemented TACO: %d\n", taces[i].op); goto fail;
+            case TACO_JUMP: UNWRAP(cg_gen_inst_a(cg, "jmp", taces[i].arg1, frame_size, frame_slots)); break;
+            case TACO_BRZ:
+                if (taces[i].arg1.kind == TACA_IMM)
+                {
+                    if (taces[i].arg1.imm == 0)
+                        UNWRAP(cg_gen_inst_a(cg, "jmp", taces[i].arg2, frame_size, frame_slots));
+                }
+                else
+                {
+                    UNWRAP(cg_gen_inst_aa(cg, "cmpq", taces[i].arg1, s_imm_zero, frame_size, frame_slots));
+                    UNWRAP(cg_gen_inst_a(cg, "jz ", taces[i].arg2, frame_size, frame_slots));
+                }
+                break;
+            case TACO_BRNZ:
+                if (taces[i].arg1.kind == TACA_IMM)
+                {
+                    if (taces[i].arg1.imm != 0)
+                        UNWRAP(cg_gen_inst_a(cg, "jmp", taces[i].arg2, frame_size, frame_slots));
+                }
+                else
+                {
+                    UNWRAP(cg_gen_inst_aa(cg, "cmpq", taces[i].arg1, s_imm_zero, frame_size, frame_slots));
+                    UNWRAP(cg_gen_inst_a(cg, "jnz ", taces[i].arg2, frame_size, frame_slots));
+                }
+                break;
+            case TACO_CTBZ:
+                UNWRAP(cg_gen_inst_aa(cg, "cmpq", s_taca_temp, taces[i].arg1, frame_size, frame_slots));
+                UNWRAP(cg_gen_inst_a(cg, "jz ", taces[i].arg2, frame_size, frame_slots));
+                break;
+            case TACO_LABEL:
+                UNWRAP(cg_gen_taca(cg, taces[i].arg1, frame_size, frame_slots));
+                array_appends(&cg->code, ":\n");
+                break;
+            case TACO_PHI: break;
+            default: parser_ferror(NULL, "error: unimplemented TACO: %s\n", taco_to_string(taces[i].op)); break;
         }
     }
 
-    array_appendf(&cg->code, "    add rsp, %zu\n    ret 0\n", frame_size);
+    array_appendf(&cg->code, "    addq $%zu, %%rsp\n    retq\n", frame_size);
 
 fail:
     my_free(frame_slots);
     array_destroy(&param_stack);
-    return rc;
+    return rc || parser_has_errors();
 }
 
 int cg_emit(struct CodeGen* cg, FILE* fout)
 {
     int rc = 0;
     cg_debug(cg, "cg_emit():\n");
-    const char prelude[] = "option casemap:none\n"
-                           "INCLUDELIB msvcrt.lib\n"
-                           "INCLUDELIB ucrt.lib\n"
-                           "INCLUDELIB vcruntime.lib\n"
-                           "INCLUDELIB kernel32.lib\n"
-                           "INCLUDELIB legacy_stdio_definitions.lib\n";
-    UNWRAP(!fwrite(prelude, sizeof(prelude) - 1, 1, fout));
+    const char* prelude;
+    if (cg->target == CG_TARGET_WIN_MASM)
+    {
+        prelude = "option casemap:none\n"
+                  "INCLUDELIB msvcrt.lib\n"
+                  "INCLUDELIB ucrt.lib\n"
+                  "INCLUDELIB vcruntime.lib\n"
+                  "INCLUDELIB kernel32.lib\n"
+                  "INCLUDELIB legacy_stdio_definitions.lib\n";
+    }
+    else
+    {
+        prelude = "\n";
+    }
+
+    UNWRAP(!fwrite(prelude, strlen(prelude), 1, fout));
+
     if (cg->const_.sz)
     {
-        UNWRAP(fputs("\n.const\n\n", fout) < 0);
+        if (cg->target == CG_TARGET_WIN_MASM)
+            UNWRAP(fputs("\n.const\n\n", fout) < 0);
+        else
+            UNWRAP(fputs("\n.section __TEXT,__cstring,cstring_literals\n\n", fout) < 0);
         UNWRAP(!fwrite(cg->const_.data, cg->const_.sz, 1, fout));
+    }
+    if (cg->data.sz)
+    {
+        if (cg->target == CG_TARGET_WIN_MASM)
+            UNWRAP(fputs("\n.data\n\n", fout) < 0);
+        else
+            UNWRAP(fputs("\n.section __DATA,__data\n\n", fout) < 0);
+        UNWRAP(!fwrite(cg->data.data, cg->data.sz, 1, fout));
     }
     if (cg->code.sz)
     {
-        UNWRAP(fputs("\n.code\n\n", fout) < 0);
+        if (cg->target == CG_TARGET_WIN_MASM)
+            UNWRAP(fputs("\n.code\n\n", fout) < 0);
+        else
+            UNWRAP(fputs("\n.section __TEXT,__text,regular,pure_instructions\n\n", fout) < 0);
         UNWRAP(!fwrite(cg->code.data, cg->code.sz, 1, fout));
     }
 
-    UNWRAP(0 > fputs("END\n", fout));
+    if (cg->target == CG_TARGET_WIN_MASM) UNWRAP(0 > fputs("END\n", fout));
 
     return 0;
 

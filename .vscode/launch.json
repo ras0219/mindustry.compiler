@@ -8,20 +8,37 @@
             "name": "(gdb) Launch",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${env:BUILD_DIR}/runall-test",
-            "args": [],
+            "program": "${workspaceRoot}/selfbuild/main.selfbuild",
+            "args": [
+                "../hello.c",
+                "-I",
+                "../lib",
+                "-c",
+                "-D",
+                "__x86_64__",
+                "-D",
+                "__STDC__",
+                "-D",
+                "_POSIX_SOURCE",
+                "-D",
+                "__DARWIN_OS_INLINE=static inline",
+                "-D",
+                "__llvm__",
+                "-D",
+                "__builtin_bswap32",
+                "-D",
+                "__builtin_bswap16",
+                "-D",
+                "__builtin_bswap64",
+                "-D",
+                "__LP64__"
+            ],
             "stopAtEntry": false,
-            "cwd": "${workspaceFolder}",
+            "cwd": "${workspaceFolder}/out",
             "environment": [],
             "externalConsole": false,
-            "MIMode": "gdb",
-            "setupCommands": [
-                {
-                    "description": "Enable pretty-printing for gdb",
-                    "text": "-enable-pretty-printing",
-                    "ignoreFailures": true
-                }
-            ]
+            "MIMode": "lldb",
+            "setupCommands": []
         }
     ]
 }

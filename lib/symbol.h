@@ -38,20 +38,6 @@ struct DeclSpecs
     unsigned int is_stdcall : 1;
 };
 
-struct RegMap
-{
-    int is_dirty : 1;
-    int is_const : 1;
-    int is_global : 1;
-    int stack_addr;
-    struct RegMap* next;
-    struct RegMap** prev;
-    struct FreeVar rename;
-    struct FreeVar mem_loc;
-};
-
-#define ARRAY_ARITY_NONE (-1)
-
 struct DeclPtr
 {
     struct Expr kind;
@@ -68,6 +54,7 @@ struct DeclFn
     struct Expr kind;
     const struct Token* tok;
     struct Expr* type;
+    unsigned is_varargs : 1;
     size_t offset;
     size_t extent;
 };
@@ -78,6 +65,7 @@ struct DeclArr
     const struct Token* tok;
     struct Expr* type;
     struct Expr* arity;
+    unsigned int integer_arity;
 };
 
 struct Decl
@@ -86,6 +74,8 @@ struct Decl
 
     const struct Token* id;
     const char* name;
+    // valid only if name == NULL
+    size_t anon_idx;
     struct Attribute attr;
     struct DeclSpecs* specs;
     struct Decl* def;
@@ -93,7 +83,13 @@ struct Decl
     // encompassing function
     struct Decl* parent_decl;
     // 0 means not an argument, 1 means first argument, etc
-    int arg_index;
+    unsigned int arg_index;
+    unsigned int is_enum_constant : 1;
+    union
+    {
+        int enum_value;
+        unsigned int arity;
+    };
 
     struct Expr* type;
 

@@ -21,8 +21,18 @@ struct BackEnd
 
     struct Scope scope;
 
+    struct Decl* cur_decl;
+    struct DeclFn* cur_fn;
+    struct Array switch_cases;
+    size_t continue_label;
+    size_t break_label;
+    size_t default_label;
+
     size_t frame_size;
     size_t max_frame_size;
+    size_t next_label;
+
+    unsigned debug_taces : 1;
 };
 
 void be_init(struct BackEnd* be, struct Parser* p, struct Elaborator* e, struct CodeGen* cg);

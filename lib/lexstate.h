@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdint.h>
+
 #include "fwd.h"
 
 #define X_LEX_TYPE_KEYWORDS(Y)                                                                                         \
@@ -42,6 +44,7 @@
     Y(LEX_SIZEOF, "sizeof")                                                                                            \
     Y(LEX_WHILE, "while")                                                                                              \
     Y(LEX_DO, "do")                                                                                                    \
+    Y(LEX_DEFAULT, "default")                                                                                          \
     Y(LEX_STRUCT, "struct")                                                                                            \
     Y(LEX_ENUM, "enum")                                                                                                \
     Y(LEX_UNION, "union")                                                                                              \
@@ -51,6 +54,9 @@
     Y(LEX_EXTERN, "extern")                                                                                            \
     Y(LEX_AUTO, "auto")                                                                                                \
     Y(LEX_TYPEDEF, "typedef")                                                                                          \
+    Y(LEX_UUVA_START, "__builtin_va_start")                                                                            \
+    Y(LEX_UUVA_END, "__builtin_va_end")                                                                                \
+    Y(LEX_UUVA_ARG, "__builtin_va_arg")                                                                                \
     Y(LEX_UURESTRICT, "__restrict")                                                                                    \
     Y(LEX_RESTRICT, "restrict")                                                                                        \
     Y(LEX_UUFORCEINLINE, "__forceinline")                                                                              \
@@ -88,3 +94,5 @@ enum LexerState
 };
 
 const char* lexstate_to_string(unsigned int s);
+
+int lit_to_uint64(const char* s, uint64_t* out, const struct RowCol* rc);

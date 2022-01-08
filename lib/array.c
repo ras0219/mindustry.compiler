@@ -14,11 +14,11 @@ void* array_alloc(struct Array* arr, size_t sz)
     {
         do
         {
-            arr->cap = arr->cap ? arr->cap * 2 : sz * 4;
+            arr->cap = arr->cap ? arr->cap * 2 : 32;
         } while (arr->sz > arr->cap);
         arr->data = my_realloc(arr->data, arr->cap);
     }
-    return arr->data + arr->sz - sz;
+    return (char*)arr->data + arr->sz - sz;
 }
 void* array_push(struct Array* arr, const void* src, size_t sz)
 {

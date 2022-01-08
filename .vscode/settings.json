@@ -23,6 +23,19 @@
         "stdlib.h": "c",
         "cstdio": "c",
         "imports.h": "c",
-        "fe.h": "c"
+        "fe.h": "c",
+        "cg.h": "c",
+        "__config": "cpp",
+        "array": "c",
+        "vector": "c",
+        "string": "c",
+        "string_view": "c",
+        "algorithm": "c",
+        "functional": "c",
+        "__hash_table": "c",
+        "__split_buffer": "c",
+        "bitset": "c",
+        "unordered_map": "c",
+        "tac.h": "c"
     }
 }

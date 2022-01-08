@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include "freevar.h"
 
@@ -11,6 +12,7 @@
     Y(EXPR_CAST)                                                                                                       \
     Y(EXPR_OP)                                                                                                         \
     Y(EXPR_CALL)                                                                                                       \
+    Y(AST_INIT)                                                                                                        \
     Y(AST_DECL)                                                                                                        \
     Y(AST_DECLSPEC)                                                                                                    \
     Y(AST_DECLFN)                                                                                                      \
@@ -20,6 +22,8 @@
     Y(STMT_RETURN)                                                                                                     \
     Y(STMT_GOTO)                                                                                                       \
     Y(STMT_IF)                                                                                                         \
+    Y(STMT_SWITCH)                                                                                                     \
+    Y(STMT_CASE)                                                                                                       \
     Y(STMT_LOOP)                                                                                                       \
     Y(STMT_BLOCK)                                                                                                      \
     Y(STMT_LABEL)                                                                                                      \
@@ -59,13 +63,13 @@ struct ExprLit
 
     const struct Token* tok;
     const char* text;
+    uint64_t numeric;
 };
 
 struct ExprCast
 {
     struct Expr kind;
 
-    const struct Token* tok;
     struct Expr* expr;
     struct Decl* type;
 };
@@ -97,6 +101,11 @@ struct ExprOp
     struct Expr* lhs;
     // NULL for unary operators
     struct Expr* rhs;
+    // additional info for certain operations
+    //  * '++'/'--', 1 if postfix
+    //  * '[','+', size of element
+    //  * 'sizeof', size of decl
+    int size;
 };
 
 struct ExprCall
@@ -129,6 +138,23 @@ struct StmtIf
     // may be null
     struct Expr* else_body;
 };
+struct StmtSwitch
+{
+    struct Expr kind;
+    const struct Token* tok;
+    struct Expr* expr;
+    // body
+    size_t offset;
+    size_t extent;
+};
+struct StmtCase
+{
+    struct Expr kind;
+    const struct Token* tok;
+    struct Expr* expr;
+    // filled by elaboration
+    size_t value;
+};
 struct StmtGoto
 {
     struct Expr kind;
@@ -149,6 +175,13 @@ struct StmtLoop
 struct StmtBlock
 {
     struct Expr kind;
+    size_t offset;
+    size_t extent;
+};
+struct ASTInit
+{
+    struct Expr kind;
+    const struct Token* tok;
     size_t offset;
     size_t extent;
 };

@@ -202,8 +202,7 @@ static size_t pp_sp_alloc_concat(struct Preprocessor* p, size_t o1, size_t o2)
     size_t n2 = strlen(s2);
     char* tmp = malloc(n1 + n2 + 1);
     memcpy(tmp, s1, n1);
-    memcpy(tmp + n1, s2, n2);
-    tmp[n1 + n2] = '\0';
+    memcpy(tmp + n1, s2, n2 + 1);
     return pp_sp_alloc(p, tmp, n1 + n2);
 }
 
@@ -350,88 +349,6 @@ enum MacroIfOp
 //     return 0;
 // }
 
-static int conv_to_uint64(const char* s, uint64_t* out, const struct RowCol* rc)
-{
-    uint64_t v = 0;
-    size_t i = 0;
-    if (s[0] == '0')
-    {
-        // octal, hex, binary, or zero
-        if (s[1] == 'x' || s[1] == 'X')
-        {
-            // hex
-            for (i = 2; s[i]; ++i)
-            {
-                v = (((v & (UINT64_MAX >> 4))) << 4);
-                if (s[i] >= '0' && s[i] <= '9')
-                    v += s[i] - '0';
-                else if (s[i] >= 'a' && s[i] <= 'f')
-                    v += s[i] - 'a' + 10;
-                else if (s[i] >= 'A' && s[i] <= 'F')
-                    v += s[i] - 'A' + 10;
-                else
-                    break;
-            }
-        }
-        else if (s[1] == 'b' || s[1] == 'B')
-        {
-            // binary
-            for (i = 2; s[i]; ++i)
-            {
-                v = (((v & (UINT64_MAX >> 1))) << 1);
-                if (s[i] == '0')
-                    ;
-                else if (s[i] == '1')
-                    v += 1;
-                else
-                    break;
-            }
-        }
-        else if (s[1] >= '0' && s[1] <= '9')
-        {
-            // octal
-            for (i = 1; s[i]; ++i)
-            {
-                v = (((v & (UINT64_MAX >> 3))) << 3);
-                if (s[i] >= '0' && s[i] <= '7')
-                    v += s[i] - '0';
-                else
-                    break;
-            }
-        }
-        else if (s[1] == '\0')
-        {
-            i = 1;
-        }
-    }
-    else
-    {
-        for (; s[i]; ++i)
-        {
-            v = (((v & (UINT64_MAX >> 4))) * 10);
-            if (s[i] >= '0' && s[i] <= '9')
-                v += s[i] - '0';
-            else
-                break;
-        }
-    }
-    if (s[i] == 'L' || s[i] == 'l')
-    {
-        ++i;
-    }
-    if (s[i] == 'U')
-    {
-        ++i;
-    }
-    if (s[i] != '\0')
-    {
-        return parser_ferror(rc, "error: unexpected character in number literal: '%c'\n", s[i]);
-    }
-
-    *out = v;
-    return 0;
-}
-
 static const struct Token* pp_parse_if_expr(struct Preprocessor* pp, const struct Token* cur, int* out_value)
 {
     unsigned int add_op = 0;
@@ -460,7 +377,7 @@ top:
     else if (cur->type == LEX_NUMBER)
     {
         uint64_t u;
-        if (conv_to_uint64(pp_token_str(pp, cur), &u, &cur->rc)) return NULL;
+        if (lit_to_uint64(pp_token_str(pp, cur), &u, &cur->rc)) return NULL;
         if (u > INT_MAX) return parser_tok_error(cur, "error: literal value exceeded INT_MAX: %llu\n", u), NULL;
         *out_value = u;
         ++cur;
@@ -747,20 +664,23 @@ static int pp_handle_directive(struct Preprocessor* pp, Lexer* l)
         {
             struct Token* tk = (struct Token*)array_alloc(&pp->defs_tokens, sizeof(struct Token));
             pp_form_token(pp, l, tk);
-            struct MacroDef* def = array_back(&pp->defs_info, sizeof(struct MacroDef));
-            size_t arg_idx = sstk_find(&pp->def_arg_names, l->tok, l->sz);
-            if (arg_idx != SIZE_MAX)
+            if (tk->basic_type == LEX_IDENT)
             {
-                tk->basic_type = LEX_MACRO_ARG_BEGIN;
-                tk->type = LEX_MACRO_ARG_BEGIN + arg_idx;
-                // arg_idx < 63
-                def->arg_evaluated |= 1 << arg_idx;
-            }
-            else if (STREQ_LIT(l->tok, l->sz, "__VA_ARGS__"))
-            {
-                tk->basic_type = LEX_MACRO_VA_ARGS;
-                tk->type = LEX_MACRO_VA_ARGS;
-                def->va_evaluated = 1;
+                struct MacroDef* def = array_back(&pp->defs_info, sizeof(struct MacroDef));
+                size_t arg_idx = sstk_find(&pp->def_arg_names, l->tok, l->sz);
+                if (arg_idx != SIZE_MAX)
+                {
+                    tk->basic_type = LEX_MACRO_ARG_BEGIN;
+                    tk->type = LEX_MACRO_ARG_BEGIN + arg_idx;
+                    // arg_idx < 63
+                    def->arg_evaluated |= 1 << arg_idx;
+                }
+                else if (STREQ_LIT(l->tok, l->sz, "__VA_ARGS__"))
+                {
+                    tk->basic_type = LEX_MACRO_VA_ARGS;
+                    tk->type = LEX_MACRO_VA_ARGS;
+                    def->va_evaluated = 1;
+                }
             }
             return 0;
         }
@@ -921,7 +841,7 @@ static int pp_handle_directive(struct Preprocessor* pp, Lexer* l)
     }
     abort();
 }
-
+static int preproc_file_impl(struct Preprocessor* pp, FILE* f, const char* filename);
 static int pp_include_file(struct Preprocessor* pp, struct Lexer* l)
 {
     int rc = 0;
@@ -967,7 +887,7 @@ static int pp_include_file(struct Preprocessor* pp, struct Lexer* l)
     }
 
     size_t cur_if_sz = pp->if_true_depth;
-    UNWRAP(preproc_file(pp, f, filename));
+    UNWRAP(preproc_file_impl(pp, f, filename));
     // pop EOF from included file
     array_pop(&pp->toks, sizeof(struct Token));
     if (pp->if_true_depth != cur_if_sz || pp->if_false_depth != 0)
@@ -1165,15 +1085,15 @@ static int pp_complete_fn_macro(struct Preprocessor* pp)
                 for (size_t i = macro_arg_data[arg_idx]; i < macro_arg_data[arg_idx + 1] - 1; ++i)
                 {
                     if (str.sz) array_push_byte(&str, ' ');
-                    const char* s = pp_token_str(pp, toks + i);
-                    array_push(&str, s, strlen(s));
+                    array_appends(&str, pp_token_str(pp, toks + i));
                 }
+                array_push_byte(&str, 0);
                 struct Token* tgt = array_alloc(&tmp, sizeof(struct Token));
                 tgt->rc = toks[macro_arg_data[arg_idx]].rc;
                 tgt->basic_type = LEX_STRING;
                 tgt->noreplace = 0;
                 tgt->type = LEX_STRING;
-                tgt->sp_offset = pp_sp_alloc(pp, str.data, str.sz);
+                tgt->sp_offset = pp_sp_alloc(pp, str.data, str.sz - 1);
                 array_destroy(&str);
             }
             else if (i > 0 && data[i - 1].type == TOKEN_SYM2('#', '#'))
@@ -1181,7 +1101,7 @@ static int pp_complete_fn_macro(struct Preprocessor* pp)
                 size_t arg_extent = macro_arg_data[arg_idx + 1] - 1 - macro_arg_data[arg_idx];
                 if (arg_extent > 0)
                 {
-                    pp_concat_token(pp, array_back(&tmp, sizeof(struct Token)), toks + macro_arg_data[arg_idx]);
+                    UNWRAP(pp_concat_token(pp, array_back(&tmp, sizeof(struct Token)), toks + macro_arg_data[arg_idx]));
                     array_push(&tmp, toks + macro_arg_data[arg_idx] + 1, (arg_extent - 1) * sizeof(struct Token));
                 }
             }
@@ -1208,6 +1128,10 @@ static int pp_complete_fn_macro(struct Preprocessor* pp)
                     &tmp, (struct Token*)pp->toks.data + res_start, pp->toks.sz - res_start * sizeof(struct Token));
                 array_shrink(&pp->toks, res_start, sizeof(struct Token));
             }
+        }
+        else if (i > 0 && data[i - 1].type == TOKEN_SYM2('#', '#'))
+        {
+            UNWRAP(pp_concat_token(pp, array_back(&tmp, sizeof(struct Token)), data + i));
         }
         else if (data[i].basic_type == LEX_MACRO_VA_ARGS)
         {
@@ -1357,7 +1281,6 @@ static int pp_handle_tok(struct Preprocessor* pp)
             return parser_tok_error(tok, "error: expected ')' in defined() operator call\n");
         }
     }
-
     if (!tok->noreplace && tok->basic_type == LEX_IDENT)
     {
         // look up macro
@@ -1517,8 +1440,6 @@ struct Preprocessor* preproc_alloc(const char* include_paths)
 {
     struct Preprocessor* pp = my_malloc(sizeof(struct Preprocessor));
     memset(pp, 0, sizeof(struct Preprocessor));
-    pp->debug_print_ifs = 1;
-    pp->debug_print_defines = 1;
     pp->include_paths = include_paths;
     sp_init(&pp->stringpool);
     struct Token* tok_one = array_push_zeroes(&pp->defs_tokens, sizeof(struct Token));
@@ -1546,7 +1467,7 @@ fail:
     return rc;
 }
 
-int preproc_file(struct Preprocessor* pp, FILE* f, const char* filename)
+static int preproc_file_impl(struct Preprocessor* pp, FILE* f, const char* filename)
 {
     const size_t prev_cur_file = pp->cur_file;
     pp->cur_file = pp_find_insert_file(&pp->filenames, filename);
@@ -1580,17 +1501,113 @@ fail:
     return rc;
 }
 
+static void preproc_merge_strings(struct Preprocessor* pp)
+{
+    struct Array buf = {};
+    size_t i;
+    size_t sz = array_size(&pp->toks, sizeof(struct Token));
+    struct Token* toks = pp->toks.data;
+    for (i = 1; i < sz; ++i)
+    {
+        if (toks[i].basic_type == LEX_STRING && toks[i - 1].basic_type == LEX_STRING)
+        {
+            break;
+        }
+    }
+    for (size_t j = i; j < sz; ++i, ++j)
+    {
+        if (toks[i - 1].basic_type == LEX_STRING && toks[j].basic_type == LEX_STRING)
+        {
+            // merge
+            array_appends(&buf, pp_token_str(pp, toks + i - 1));
+            do
+            {
+                array_appends(&buf, pp_token_str(pp, toks + j));
+                ++j;
+            } while (j < sz && toks[j].basic_type == LEX_STRING);
+            if (memchr(buf.data, 0, buf.sz))
+            {
+                abort();
+            }
+            array_push_byte(&buf, '\0');
+            toks[i - 1].sp_offset = sp_insert(&pp->stringpool, buf.data, buf.sz);
+            array_clear(&buf);
+        }
+        toks[i] = toks[j];
+    }
+    array_shrink(&pp->toks, i, sizeof(struct Token));
+    array_destroy(&buf);
+}
+
+int preproc_file(struct Preprocessor* pp, FILE* f, const char* filename)
+{
+    int rc = preproc_file_impl(pp, f, filename);
+    if (!rc) preproc_merge_strings(pp);
+    return rc;
+}
+
 int preproc_define(struct Preprocessor* pp, const char* macro)
 {
-    struct MacroDef def = {
-        .rc.file = "<command line>",
-        .tok_seq_extent = 1,
-    };
-    sm_insert(&pp->defines_map, macro, array_size(&pp->defs_info, sizeof(struct MacroDef)));
-    array_push(&pp->defs_info, &def, sizeof(def));
-
-    return 0;
+    int rc = 0;
+    struct Array txt = {};
+    array_appends(&txt, "#define ");
+    array_appends(&txt, macro);
+    char* s = memchr(txt.data, '=', txt.sz);
+    if (s)
+    {
+        *s = ' ';
+    }
+    else
+    {
+        array_appends(&txt, " 1");
+    }
+    struct SubLexer sublex;
+    sublex.self = pp;
+    init_lexer(&sublex.lexer, "<command-line>", &pp_sublex_on_token);
+    UNWRAP(lex(&sublex.lexer, txt.data, txt.sz));
+    UNWRAP(end_lex(&sublex.lexer));
+    // pop trailing LEX_EOF
+    array_pop(&pp->toks, sizeof(struct Token));
+fail:
+    array_destroy(&txt);
+    return rc;
 }
 
 const struct Token* preproc_tokens(const struct Preprocessor* pp) { return pp->toks.data; }
 const char* preproc_stringpool(const struct Preprocessor* pp) { return pp->stringpool.data.data; }
+
+void preproc_dump(const struct Preprocessor* pp)
+{
+    const struct Token* data = preproc_tokens(pp);
+    do
+    {
+        printf("%40s:%04d:%04d: %-10s %d : %s\n",
+               data->rc.file,
+               data->rc.row,
+               data->rc.col,
+               lexstate_to_string(data->basic_type),
+               data->noreplace,
+               pp_token_str(pp, data));
+        if (data->basic_type == LEX_EOF) break;
+        ++data;
+    } while (1);
+
+    for (size_t i = 0; i < array_size(&pp->defines_map.keys.arr, sizeof(char*)); ++i)
+    {
+        if (((char**)pp->defines_map.keys.arr.data)[i] == NULL) continue;
+        size_t def_offset = arrsz_at(&pp->defines_map.values, i);
+        struct MacroDef* def = (struct MacroDef*)pp->defs_info.data + def_offset;
+        printf("#define %s(%d)", ((char**)pp->defines_map.keys.arr.data)[i], def->arity);
+        for (size_t i = 0; i < def->tok_seq_extent; ++i)
+        {
+            struct Token* tok = (struct Token*)pp->defs_tokens.data + def->tok_seq_offset + i;
+            if (tok->basic_type == LEX_MACRO_ARG_BEGIN)
+            {
+                printf(" $%u", tok->type - LEX_MACRO_ARG_BEGIN);
+            }
+            else
+                printf(" %s", pp_token_str(pp, tok));
+        }
+        printf("\n");
+    }
+}

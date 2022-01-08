@@ -56,13 +56,13 @@ typedef struct Parser Parser;
 
 const char* token_str(Parser* p, const struct Token* tk) { return p->tk_strdata + tk->sp_offset; }
 static int token_is_sym(Parser* p, const struct Token* tk, char sym) { return tk->type == TOKEN_SYM1(sym); }
-static const struct Token* token_consume_sym(Parser* p, const struct Token* tk, char sym)
+static const struct Token* token_consume_sym(Parser* p, const struct Token* tk, char sym, const char* in)
 {
     if (tk->type == TOKEN_SYM1(sym))
     {
         return tk + 1;
     }
-    return parser_ferror(&tk->rc, "error: expected '%c'\n", sym), NULL;
+    return parser_ferror(&tk->rc, "error: expected '%c'%s\n", sym, in), NULL;
 }
 
 static int symbol_is_equivalent_redecl(struct Decl* orig, struct Decl* redecl) { return 1; }
@@ -71,6 +71,16 @@ enum Precedence op_precedence(unsigned int tok_type)
 {
     switch (tok_type)
     {
+        case TOKEN_SYM2('&', '='):
+        case TOKEN_SYM2('|', '='):
+        case TOKEN_SYM2('^', '='):
+        case TOKEN_SYM2('*', '='):
+        case TOKEN_SYM2('/', '='):
+        case TOKEN_SYM2('%', '='):
+        case TOKEN_SYM3('>', '>', '='):
+        case TOKEN_SYM3('<', '<', '='):
+        case TOKEN_SYM2('+', '='):
+        case TOKEN_SYM2('-', '='):
         case TOKEN_SYM1('='): return PRECEDENCE_ASSIGN;
         case TOKEN_SYM2('<', '='):
         case TOKEN_SYM2('>', '='):
@@ -82,14 +92,18 @@ enum Precedence op_precedence(unsigned int tok_type)
         case TOKEN_SYM2('&', '&'): return PRECEDENCE_AND;
         case TOKEN_SYM1('+'):
         case TOKEN_SYM1('-'): return PRECEDENCE_ADD;
+        case TOKEN_SYM1('&'): return PRECEDENCE_BIT_AND;
+        case TOKEN_SYM1('|'): return PRECEDENCE_BIT_OR;
+        case TOKEN_SYM1('^'): return PRECEDENCE_BIT_XOR;
+        case TOKEN_SYM2('>', '>'):
+        case TOKEN_SYM2('<', '<'): return PRECEDENCE_SHIFT;
         case TOKEN_SYM1('*'):
         case TOKEN_SYM1('/'):
         case TOKEN_SYM1('%'): return PRECEDENCE_MULT;
+        case TOKEN_SYM1(','): return PRECEDENCE_COMMA;
         default: return PRECEDENCE_ERROR;
     }
 }
-
-static int op_precedence_assoc_right(enum Precedence p) { return p == PRECEDENCE_ASSIGN; }
 
 static struct ExprOp* parse_alloc_expr_op(Parser* p, const struct Token* tok, struct Expr* lhs, struct Expr* rhs)
 {
@@ -139,6 +153,19 @@ static struct ExprCall* parse_alloc_expr_call(
     return e;
 }
 
+static __forceinline void parse_push_expr_seq_arr(struct Parser* p, struct Array* arr)
+{
+    array_push(&p->expr_seqs, arr->data, arr->sz);
+}
+static __forceinline void parse_push_expr_seq(struct Parser* p, struct Expr** data, size_t n)
+{
+    array_push(&p->expr_seqs, data, n * sizeof(struct Expr*));
+}
+static __forceinline void parse_push_decl_seq(struct Parser* p, struct Decl** data, size_t n)
+{
+    array_push(&p->expr_seqs, data, n * sizeof(struct Decl*));
+}
+
 static const struct Token* parse_expr(Parser* p, const struct Token* cur_tok, struct Expr** ppe, int precedence);
 
 static const struct Token* parse_expr_post_unary(Parser* p,
@@ -167,7 +194,6 @@ top:;
                     return parser_ferror(
                                &cur_tok->rc, "error: too many arguments for function (%d supported)\n", PARAM_COUNT),
                            NULL;
-                fprintf(stderr, "in call: %s, %u\n", lexstate_to_string(cur_tok->type), cur_tok->type);
                 PARSER_DO(parse_expr(p, cur_tok, arg_exprs + i++, PRECEDENCE_ASSIGN));
                 if (cur_tok->type == TOKEN_SYM1(','))
                 {
@@ -181,9 +207,9 @@ top:;
                 }
                 PARSER_FAIL("error: expected ',' or ')'\n");
             } while (1);
-            size_t offset = p->expr_seqs.sz / sizeof(struct Expr*);
+            size_t offset = array_size(&p->expr_seqs, sizeof(struct Expr*));
             size_t extent = i;
-            array_push(&p->expr_seqs, arg_exprs, i * sizeof(struct Expr*));
+            parse_push_expr_seq(p, arg_exprs, i);
             lhs = (struct Expr*)parse_alloc_expr_call(p, tok_op, lhs, offset, extent);
         }
         goto top;
@@ -192,20 +218,16 @@ top:;
     {
         struct ExprOp* e = parse_alloc_expr_op(p, cur_tok++, lhs, NULL);
         PARSER_DO(parse_expr(p, cur_tok, &e->rhs, PRECEDENCE_COMMA));
-        PARSER_DO(token_consume_sym(p, cur_tok, ']'));
+        PARSER_DO(token_consume_sym(p, cur_tok, ']', " in array expression"));
         lhs = (struct Expr*)e;
         goto top;
     }
 
-    if (cur_tok->type == TOKEN_SYM2('+', '+'))
+    if (cur_tok->type == TOKEN_SYM2('+', '+') || cur_tok->type == TOKEN_SYM2('-', '-'))
     {
-        lhs = (struct Expr*)parse_alloc_expr_op(p, cur_tok, lhs, NULL);
-        ++cur_tok;
-        goto top;
-    }
-    if (cur_tok->type == TOKEN_SYM2('-', '-'))
-    {
-        lhs = (struct Expr*)parse_alloc_expr_op(p, cur_tok, lhs, NULL);
+        struct ExprOp* e = parse_alloc_expr_op(p, cur_tok, lhs, NULL);
+        e->size = 1;
+        lhs = (struct Expr*)e;
         ++cur_tok;
         goto top;
     }
@@ -278,11 +300,11 @@ static const struct Token* parse_paren_unary(Parser* p, const struct Token* cur_
         PARSER_DO(parse_type(p, cur_tok, &decl));
         e = parse_alloc_expr_cast(p, decl, NULL);
         *ppe = (struct Expr*)e;
-        PARSER_DO(token_consume_sym(p, cur_tok, ')'));
+        PARSER_DO(token_consume_sym(p, cur_tok, ')', " in cast"));
         return parse_expr_unary_atom(p, cur_tok, &e->expr);
     }
     PARSER_DO(parse_expr(p, cur_tok, &lhs, PRECEDENCE_COMMA));
-    PARSER_DO(token_consume_sym(p, cur_tok, ')'));
+    PARSER_DO(token_consume_sym(p, cur_tok, ')', " in primary expression"));
     PARSER_DO(parse_expr_post_unary(p, cur_tok, lhs, ppe));
 fail:
     return cur_tok;
@@ -290,12 +312,24 @@ fail:
 
 #define X_PREFIX_UNARY_TOKS(Y)                                                                                         \
     Y(TOKEN_SYM1('!'))                                                                                                 \
+    Y(TOKEN_SYM1('~'))                                                                                                 \
     Y(TOKEN_SYM1('&'))                                                                                                 \
     Y(TOKEN_SYM1('*'))                                                                                                 \
     Y(TOKEN_SYM1('-'))                                                                                                 \
     Y(TOKEN_SYM1('+'))                                                                                                 \
     Y(TOKEN_SYM2('-', '-'))                                                                                            \
     Y(TOKEN_SYM2('+', '+'))
+
+static struct ExprSym* sym_from_tok(struct Parser* p, const struct Token* tok)
+{
+    const char* lhs_str = token_str(p, tok);
+    struct Binding* const lhs_bind = scope_find(&p->scope, lhs_str);
+    if (!lhs_bind || !lhs_bind->sym)
+    {
+        return parser_ferror(&tok->rc, "error: '%s' undeclared\n", lhs_str), NULL;
+    }
+    return parse_alloc_expr_sym(p, tok, lhs_bind->sym);
+}
 
 static const struct Token* parse_expr_unary_atom(Parser* p, const struct Token* cur_tok, struct Expr** ppe)
 {
@@ -315,14 +349,8 @@ top:
         case TOKEN_SYM1('('): return parse_paren_unary(p, cur_tok + 1, ppe);
         case LEX_IDENT:
         {
-            const struct Token* lhs = cur_tok++;
-            const char* lhs_str = token_str(p, lhs);
-            struct Binding* const lhs_bind = scope_find(&p->scope, lhs_str);
-            if (!lhs_bind || !lhs_bind->sym)
-            {
-                return parser_ferror(&lhs->rc, "error: '%s' undeclared\n", lhs_str), NULL;
-            }
-            struct ExprSym* lhs_expr = parse_alloc_expr_sym(p, lhs, lhs_bind->sym);
+            struct ExprSym* lhs_expr = sym_from_tok(p, cur_tok++);
+            if (!lhs_expr) PARSER_DO(NULL);
             return parse_expr_post_unary(p, cur_tok, (struct Expr*)lhs_expr, ppe);
         }
         case LEX_NUMBER:
@@ -330,7 +358,50 @@ top:
         case LEX_STRING:
         {
             struct ExprLit* lhs_expr = parse_alloc_expr_lit(p, cur_tok++);
+            if (lhs_expr->tok->type == LEX_NUMBER)
+            {
+                lit_to_uint64(token_str(p, lhs_expr->tok), &lhs_expr->numeric, &lhs_expr->tok->rc);
+            }
+            if (lhs_expr->tok->type == LEX_CHARLIT)
+            {
+                const char* s = token_str(p, lhs_expr->tok);
+                if (s[0] == '\\')
+                {
+                    // handle escape
+                    lhs_expr->numeric = s[1];
+                }
+                else
+                    lhs_expr->numeric = s[0];
+            }
             return parse_expr_post_unary(p, cur_tok, (struct Expr*)lhs_expr, ppe);
+        }
+        case LEX_UUVA_START:
+        case LEX_UUVA_ARG:
+        case LEX_UUVA_END:
+        {
+            struct ExprOp* e = parse_alloc_expr_op(p, cur_tok++, NULL, NULL);
+            *ppe = (struct Expr*)e;
+            PARSER_DO(token_consume_sym(p, cur_tok, '(', " in builtin operator"));
+            if (cur_tok->type != LEX_IDENT)
+                PARSER_FAIL("error: expected va_list as first parameter to %s\n", token_str(p, e->tok));
+            e->lhs = (struct Expr*)sym_from_tok(p, cur_tok++);
+            if (!e->lhs) PARSER_DO(NULL);
+            if (e->tok->type == LEX_UUVA_START)
+            {
+                PARSER_DO(token_consume_sym(p, cur_tok, ',', " in builtin operator"));
+                if (cur_tok->type != LEX_IDENT)
+                    PARSER_FAIL("error: expected function argument as second parameter to %s\n", token_str(p, e->tok));
+                e->rhs = (struct Expr*)sym_from_tok(p, cur_tok++);
+                if (!e->rhs) PARSER_DO(NULL);
+            }
+            else if (e->tok->type == LEX_UUVA_ARG)
+            {
+                PARSER_DO(token_consume_sym(p, cur_tok, ',', " in builtin operator"));
+                struct Decl* decl;
+                PARSER_DO(parse_type(p, cur_tok, &decl));
+                e->rhs = (struct Expr*)decl;
+            }
+            return token_consume_sym(p, cur_tok, ')', " in builtin operator");
         }
         case LEX_SIZEOF:
         {
@@ -341,9 +412,9 @@ top:
                 if (parse_is_token_a_type(p, cur_tok + 2))
                 {
                     struct Decl* decl;
-                    if (!(cur_tok = parse_type(p, cur_tok + 2, &decl))) return NULL;
+                    PARSER_DO(parse_type(p, cur_tok + 2, &decl));
                     e->lhs = &decl->kind;
-                    if (!(cur_tok = token_consume_sym(p, cur_tok, ')'))) return NULL;
+                    PARSER_DO(token_consume_sym(p, cur_tok, ')', " in sizeof operator"));
                     return parse_expr_post_unary(p, cur_tok, (struct Expr*)e, ppe);
                 }
             }
@@ -351,9 +422,10 @@ top:
             ++cur_tok;
             goto top;
         }
-        default: break;
+        default: PARSER_FAIL("error: expected expression\n");
     }
-    return parser_ferror(&cur_tok->rc, "error: expected expression\n"), NULL;
+fail:
+    return cur_tok;
 }
 static const struct Token* parse_expr_continue(
     Parser* p, const struct Token* cur_tok, struct Expr* lhs, struct Expr** ppe, enum Precedence precedence)
@@ -362,19 +434,12 @@ static const struct Token* parse_expr_continue(
     enum Precedence op_prec = op_precedence(tok_op->type);
     if (op_prec != PRECEDENCE_ERROR)
     {
-        if (precedence <= op_prec && op_precedence_assoc_right(op_prec))
+        if (precedence <= op_prec && op_prec <= PRECEDENCE_ASSIGN)
         {
-            if (tok_op->type == TOKEN_SYM1('='))
-            {
-                struct ExprOp* op_expr = parse_alloc_expr_op(p, tok_op, lhs, NULL);
-                *ppe = (struct Expr*)op_expr;
-                PARSER_DO(parse_expr(p, cur_tok + 1, &op_expr->rhs, PRECEDENCE_ASSIGN));
-            }
-            else
-            {
-                *ppe = lhs;
-            }
-            return cur_tok;
+            struct ExprOp* op_expr = parse_alloc_expr_op(p, tok_op, lhs, NULL);
+            *ppe = (struct Expr*)op_expr;
+            PARSER_DO(parse_expr(p, cur_tok + 1, &op_expr->rhs, op_prec));
+            return parse_expr_continue(p, cur_tok, (struct Expr*)op_expr, ppe, precedence);
         }
         else if (precedence < op_prec)
         {
@@ -384,17 +449,17 @@ static const struct Token* parse_expr_continue(
             return parse_expr_continue(p, cur_tok, (struct Expr*)op_expr, ppe, precedence);
         }
     }
-    else if (tok_op->type == TOKEN_SYM1('?'))
+    else if (precedence <= PRECEDENCE_TERNARY && tok_op->type == TOKEN_SYM1('?'))
     {
         // ternary operator
         struct ExprOp* op_expr = parse_alloc_expr_op(p, tok_op, lhs, NULL);
         *ppe = (struct Expr*)op_expr;
         struct Expr* on_true;
-        PARSER_DO(parse_expr(p, cur_tok + 1, &on_true, PRECEDENCE_ASSIGN));
+        PARSER_DO(parse_expr(p, cur_tok + 1, &on_true, PRECEDENCE_COMMA));
         struct ExprOp* switch_expr = parse_alloc_expr_op(p, cur_tok, on_true, NULL);
         op_expr->rhs = &switch_expr->kind;
-        PARSER_DO(token_consume_sym(p, cur_tok, ':'));
-        PARSER_DO(parse_expr(p, cur_tok, &switch_expr->rhs, PRECEDENCE_COMMA));
+        PARSER_DO(token_consume_sym(p, cur_tok, ':', " in ternary operator"));
+        PARSER_DO(parse_expr(p, cur_tok, &switch_expr->rhs, PRECEDENCE_TERNARY));
         return cur_tok;
     }
     *ppe = lhs;
@@ -470,7 +535,7 @@ error:
 #endif
 static const struct Token* parse_msdeclspec(Parser* p, const struct Token* cur_tok, struct Attribute* attr)
 {
-    PARSER_DO(token_consume_sym(p, cur_tok, '('));
+    PARSER_DO(token_consume_sym(p, cur_tok, '(', " in __declspec"));
     int level = 1;
     while (level)
     {
@@ -489,8 +554,8 @@ fail:
 }
 static const struct Token* parse_attribute_plist(Parser* p, const struct Token* cur_tok, struct Attribute* attr)
 {
-    if (!(cur_tok = token_consume_sym(p, cur_tok, '('))) return NULL;
-    if (!(cur_tok = token_consume_sym(p, cur_tok, '('))) return NULL;
+    if (!(cur_tok = token_consume_sym(p, cur_tok, '(', " in __attribute__"))) return NULL;
+    if (!(cur_tok = token_consume_sym(p, cur_tok, '(', " in __attribute__"))) return NULL;
 #if 0
     if (!token_is_sym(p, cur_tok, ')'))
     {
@@ -525,8 +590,8 @@ static const struct Token* parse_attribute_plist(Parser* p, const struct Token* 
         ++cur_tok;
     }
 #endif
-    if (!(cur_tok = token_consume_sym(p, cur_tok, ')'))) return NULL;
-    return token_consume_sym(p, cur_tok, ')');
+    if (!(cur_tok = token_consume_sym(p, cur_tok, ')', " in __attribute__"))) return NULL;
+    return token_consume_sym(p, cur_tok, ')', " in __attribute__");
 }
 
 static const struct Token* parse_declspecs(Parser* p, const struct Token* cur_tok, struct DeclSpecs** pspecs)
@@ -549,14 +614,14 @@ static const struct Token* parse_declspecs(Parser* p, const struct Token* cur_to
         {
             // already found core type
             if (specs.tok) break;
+            specs.tok = cur_tok;
             specs.name = token_str(p, cur_tok);
             struct Binding* const cur_bind = scope_find(&p->type_scope, specs.name);
             if (!cur_bind)
             {
-                if (!specs.tok) PARSER_FAIL("error: expected type but found identifier: %s\n", specs.name);
+                PARSER_FAIL("error: expected type but found identifier: %s\n", specs.name);
                 break;
             }
-            specs.tok = cur_tok;
             specs.type = cur_bind->sym;
         }
         else if (cur_tok->type == LEX_STRUCT)
@@ -637,14 +702,6 @@ static const struct Token* parse_declspecs(Parser* p, const struct Token* cur_to
             cur_tok += len;
             continue;
         }
-        else if (cur_tok->type == TOKEN_SYM3('.', '.', '.'))
-        {
-            if (specs.tok)
-            {
-                PARSER_FAIL("error: repeated core declaration specifiers are not allowed\n");
-            }
-            specs.tok = cur_tok;
-        }
         else if (cur_tok->type == LEX_CONST)
         {
             if (specs.is_const) PARSER_FAIL("error: repeated 'const' declaration specifiers are not allowed\n");
@@ -709,7 +766,7 @@ fail:
 }
 
 static const struct Token* parse_stmt(Parser* p, const struct Token* cur_tok, struct Expr** p_expr);
-static const struct Token* parse_stmts(Parser* p, const struct Token* cur_tok, struct Expr** p_expr);
+static const struct Token* parse_stmt_block(Parser* p, const struct Token* cur_tok, struct Expr** p_expr);
 
 static const struct Token* parse_declarator(Parser* p,
                                             const struct Token* cur_tok,
@@ -737,6 +794,13 @@ static const struct Token* parse_declarator_fnargs(Parser* p, const struct Token
         struct Decl* arg_decls[MAX_ARG_DECLS];
         while (1)
         {
+            if (cur_tok->type == TOKEN_SYM3('.', '.', '.'))
+            {
+                fn->is_varargs = 1;
+                PARSER_DO(token_consume_sym(p, cur_tok + 1, ')', " after ... in function declaration"));
+                break;
+            }
+
             if (fn->extent == MAX_ARG_DECLS)
             {
                 PARSER_FAIL("error: exceeded maximum function arguments (%d)\n", MAX_ARG_DECLS);
@@ -759,8 +823,8 @@ static const struct Token* parse_declarator_fnargs(Parser* p, const struct Token
             }
             PARSER_FAIL("error: expected ',' and further parameter declarations or ')'\n");
         }
-        fn->offset = p->expr_seqs.sz / sizeof(struct Expr*);
-        array_push(&p->expr_seqs, arg_decls, fn->extent * sizeof(struct Expr*));
+        fn->offset = array_size(&p->expr_seqs, sizeof(struct Expr*));
+        parse_push_decl_seq(p, arg_decls, fn->extent);
     }
 
 fail:
@@ -781,7 +845,7 @@ static const struct Token* parse_declarator_arr(Parser* p, const struct Token* c
     else
     {
         PARSER_DO(parse_expr(p, cur_tok, &arr->arity, PRECEDENCE_COMMA));
-        PARSER_DO(token_consume_sym(p, cur_tok, ']'));
+        PARSER_DO(token_consume_sym(p, cur_tok, ']', " in array declaration"));
     }
 
 fail:
@@ -839,7 +903,7 @@ static const struct Token* parse_declarator1(Parser* p,
     if (cur_tok->type == TOKEN_SYM1('('))
     {
         PARSER_DO(parse_declarator1(p, cur_tok + 1, out_id, out_type, &out_type));
-        PARSER_DO(token_consume_sym(p, cur_tok, ')'));
+        PARSER_DO(token_consume_sym(p, cur_tok, ')', " in declarator"));
     }
     else
     {
@@ -940,7 +1004,6 @@ static const struct Token* parse_declarator(Parser* p,
     {
         decl->name = token_str(p, decl->id);
         struct Binding* prev_sym = scope_find(&p->scope, decl->name);
-        fprintf(stderr, "%s:%d: decl: %s @ %zu\n", decl->id->rc.file, decl->id->rc.row, decl->name, p->scope.binds.sz);
         scope_insert(&p->scope, decl->name, decl);
         if (prev_sym)
         {
@@ -982,21 +1045,48 @@ fail:
 
 static const struct Token* parse_integral_constant_expr(struct Parser* p, const struct Token* cur_tok)
 {
-    if (cur_tok->type != LEX_NUMBER) PARSER_FAIL_TOK(cur_tok + 1, "error: expected constant integer expression\n");
+    if (cur_tok->type != LEX_NUMBER)
+    {
+        PARSER_FAIL("error: expected constant integer expression\n");
+    }
     ++cur_tok;
 fail:
     return cur_tok;
 }
 
-static const struct Token* parse_enum_body(struct Parser* p, const struct Token* cur_tok, struct Expr** pexpr)
+static struct Expr* push_stmt_decls(struct Parser* p, struct Array* arr)
 {
+    struct StmtDecls ret = {
+        .kind = STMT_DECLS,
+        .offset = array_size(&p->expr_seqs, sizeof(struct Expr*)),
+        .extent = array_size(arr, sizeof(struct Expr*)),
+    };
+    parse_push_expr_seq_arr(p, arr);
+    return pool_push(&p->ast_pools[STMT_DECLS], &ret, sizeof(ret));
+}
+
+static const struct Token* parse_enum_body(struct Parser* p,
+                                           const struct Token* cur_tok,
+                                           struct DeclSpecs* specs,
+                                           struct Expr** pinit)
+{
+    struct Array decls = {};
     while (cur_tok->type == LEX_IDENT)
     {
+        struct Decl decl = {
+            .kind = AST_DECL,
+            .id = cur_tok,
+            .name = token_str(p, cur_tok),
+            .specs = specs,
+        };
         ++cur_tok;
         if (cur_tok->type == TOKEN_SYM1('='))
         {
-            PARSER_DO_WITH(parse_integral_constant_expr(p, cur_tok + 1), "       in enum declaration\n");
+            PARSER_DO_WITH(parse_expr(p, cur_tok + 1, &decl.init, PRECEDENCE_ASSIGN), "       in enum declaration\n");
         }
+        struct Decl* enumerator = pool_push(&p->ast_pools[AST_DECL], &decl, sizeof(decl));
+        scope_insert(&p->scope, enumerator->name, enumerator);
+        array_push_ptr(&decls, enumerator);
         if (cur_tok->type == TOKEN_SYM1(','))
         {
             ++cur_tok;
@@ -1006,34 +1096,50 @@ static const struct Token* parse_enum_body(struct Parser* p, const struct Token*
             break;
         }
     }
+    *pinit = push_stmt_decls(p, &decls);
 fail:
+    array_destroy(&decls);
     return cur_tok;
-}
-
-static struct Expr* pool_push_stmt_block(struct Parser* p, struct Array* arr)
-{
-    struct StmtBlock ret = {
-        .kind = STMT_BLOCK,
-        .offset = p->expr_seqs.sz / sizeof(struct Expr*),
-        .extent = arr->sz / sizeof(struct Expr*),
-    };
-    array_push(&p->expr_seqs, arr->data, arr->sz);
-    return pool_push(&p->ast_pools[STMT_BLOCK], &ret, sizeof(ret));
 }
 
 static const struct Token* parse_initializer_list(Parser* p, const struct Token* cur_tok, struct Expr** out_expr)
 {
     struct Array exprs = {};
+    const struct Token* open_bracket = cur_tok - 1;
     for (;;)
     {
         if (cur_tok->type == TOKEN_SYM1('}')) break;
-        PARSER_DO(parse_expr(p, cur_tok, array_alloc(&exprs, sizeof(struct Expr*)), PRECEDENCE_ASSIGN));
+        if (cur_tok->type == TOKEN_SYM1('.'))
+        {
+            const struct Token* id = ++cur_tok;
+            if (id->type != LEX_IDENT)
+            {
+                PARSER_FAIL("error: expected identifier in designated initializer\n");
+            }
+            PARSER_DO(token_consume_sym(p, cur_tok + 1, '=', "in designated initializer"));
+        }
+        if (cur_tok->type == TOKEN_SYM1('{'))
+        {
+            PARSER_DO(parse_initializer_list(p, cur_tok + 1, array_alloc(&exprs, sizeof(struct Expr*))));
+            PARSER_DO(token_consume_sym(p, cur_tok, '}', "in initializer list"));
+        }
+        else
+        {
+            PARSER_DO(parse_expr(p, cur_tok, array_alloc(&exprs, sizeof(struct Expr*)), PRECEDENCE_ASSIGN));
+        }
         if (cur_tok->type == TOKEN_SYM1(','))
             ++cur_tok;
         else
             break;
     }
-    *out_expr = pool_push_stmt_block(p, &exprs);
+    struct ASTInit ret = {
+        .kind = AST_INIT,
+        .tok = open_bracket,
+        .offset = p->expr_seqs.sz / sizeof(struct Expr*),
+        .extent = exprs.sz / sizeof(struct Expr*),
+    };
+    parse_push_expr_seq_arr(p, &exprs);
+    *out_expr = pool_push(&p->ast_pools[AST_INIT], &ret, sizeof(ret));
 fail:
     array_destroy(&exprs);
     return cur_tok;
@@ -1051,25 +1157,27 @@ static const struct Token* parse_decl(Parser* p, const struct Token* cur_tok, st
             struct Decl* decl = parse_alloc_decl(p, specs);
             decl->id = specs->tok;
             decl->name = specs->name;
+            if (!decl->name) decl->anon_idx = p->anon_idx++;
             array_push_ptr(pdecls, decl);
             if (token_is_sym(p, cur_tok, '{'))
             {
-                const size_t scope_sz = scope_size(&p->scope);
                 if (specs->is_struct || specs->is_union)
                 {
-                    PARSER_DO(parse_stmts(p, cur_tok + 1, &decl->init));
+                    const size_t scope_sz = scope_size(&p->scope);
+                    PARSER_DO(parse_stmt_block(p, cur_tok + 1, &decl->init));
+                    scope_shrink(&p->scope, scope_sz);
                 }
                 else if (specs->is_enum)
                 {
-                    PARSER_DO(parse_enum_body(p, cur_tok + 1, &decl->init));
+                    PARSER_DO(parse_enum_body(p, cur_tok + 1, specs, &decl->init));
                 }
-                PARSER_DO(token_consume_sym(p, cur_tok, '}'));
-                scope_shrink(&p->scope, scope_sz);
+                PARSER_DO(token_consume_sym(p, cur_tok, '}', " in struct/union/enum definition"));
             }
             if (token_is_sym(p, cur_tok, ';'))
             {
                 return cur_tok + 1;
             }
+            decl->specs = specs;
             specs->type = decl;
         }
     }
@@ -1087,8 +1195,8 @@ static const struct Token* parse_decl(Parser* p, const struct Token* cur_tok, st
                 PARSER_FAIL_TOK(cur_tok, "error: anonymous function declaration not allowed\n");
             }
             p->fn = pdecl;
-            PARSER_DO(parse_stmts(p, cur_tok + 1, &pdecl->init));
-            PARSER_DO(token_consume_sym(p, cur_tok, '}'));
+            PARSER_DO(parse_stmt_block(p, cur_tok + 1, &pdecl->init));
+            PARSER_DO(token_consume_sym(p, cur_tok, '}', " in function definition"));
             p->fn = NULL;
             // Remove function arguments from the scope
             scope_shrink(&p->scope, scope_sz);
@@ -1112,7 +1220,7 @@ static const struct Token* parse_decl(Parser* p, const struct Token* cur_tok, st
             {
                 // brace initialization
                 PARSER_DO(parse_initializer_list(p, cur_tok + 1, &pdecl->init));
-                PARSER_DO(token_consume_sym(p, cur_tok, '}'));
+                PARSER_DO(token_consume_sym(p, cur_tok, '}', " in initializer list"));
             }
             else
             {
@@ -1155,36 +1263,27 @@ fail:
 
 static const struct Token* parse_conditional(Parser* p, const struct Token* cur_tok, struct Expr** p_cond)
 {
-    if (!(cur_tok = token_consume_sym(p, cur_tok, '('))) return NULL;
+    if (!(cur_tok = token_consume_sym(p, cur_tok, '(', " in conditional statement"))) return NULL;
 
     if (!(cur_tok = parse_expr(p, cur_tok, p_cond, PRECEDENCE_COMMA))) return NULL;
 
-    return token_consume_sym(p, cur_tok, ')');
+    return token_consume_sym(p, cur_tok, ')', " in conditional statement");
 }
 
 static struct Expr s_stmt_none = {.kind = STMT_NONE};
 
 static const struct Token* parse_stmt_decl(Parser* p, const struct Token* cur_tok, struct Expr** p_expr)
 {
-    struct Array arr_decls;
-    array_init(&arr_decls);
+    struct Array arr_decls = {};
     PARSER_DO(parse_decl(p, cur_tok, &arr_decls));
 
-    {
-        struct StmtDecls ret = {
-            .kind = STMT_DECLS,
-            .offset = array_size(&p->expr_seqs, sizeof(struct Decl*)),
-            .extent = array_size(&arr_decls, sizeof(struct Decl*)),
-        };
-        array_push(&p->expr_seqs, arr_decls.data, arr_decls.sz);
-        *p_expr = pool_push(&p->ast_pools[STMT_DECLS], &ret, sizeof(ret));
-    }
+    *p_expr = push_stmt_decls(p, &arr_decls);
 fail:
     array_destroy(&arr_decls);
     return cur_tok;
 }
 
-static const struct Token* parse_stmts(Parser* p, const struct Token* cur_tok, struct Expr** p_expr)
+static const struct Token* parse_stmts(Parser* p, const struct Token* cur_tok, size_t* p_offset, size_t* p_extent)
 {
     struct Array arr_stmts = {};
     do
@@ -1192,15 +1291,22 @@ static const struct Token* parse_stmts(Parser* p, const struct Token* cur_tok, s
         if (cur_tok->type == LEX_EOF || token_is_sym(p, cur_tok, '}')) break;
         PARSER_DO(parse_stmt(p, cur_tok, array_alloc(&arr_stmts, sizeof(struct Expr*))));
     } while (1);
-    struct StmtBlock ret = {
-        .kind = STMT_BLOCK,
-        .offset = p->expr_seqs.sz / sizeof(struct Expr*),
-        .extent = arr_stmts.sz / sizeof(struct Expr*),
-    };
-    array_push(&p->expr_seqs, arr_stmts.data, arr_stmts.sz);
-    *p_expr = pool_push(&p->ast_pools[STMT_BLOCK], &ret, sizeof(ret));
+    *p_offset = array_size(&p->expr_seqs, sizeof(struct Expr*));
+    *p_extent = array_size(&arr_stmts, sizeof(struct Expr*));
+    parse_push_expr_seq_arr(p, &arr_stmts);
 fail:
     array_destroy(&arr_stmts);
+    return cur_tok;
+}
+
+static const struct Token* parse_stmt_block(Parser* p, const struct Token* cur_tok, struct Expr** p_expr)
+{
+    struct StmtBlock ret = {
+        .kind = STMT_BLOCK,
+    };
+    PARSER_DO(parse_stmts(p, cur_tok, &ret.offset, &ret.extent));
+    *p_expr = pool_push(&p->ast_pools[STMT_BLOCK], &ret, sizeof(ret));
+fail:
     return cur_tok;
 }
 
@@ -1231,7 +1337,7 @@ static const struct Token* parse_stmt(Parser* p, const struct Token* cur_tok, st
             else
             {
                 PARSER_DO(parse_expr(p, cur_tok, &ret.expr, PRECEDENCE_COMMA));
-                PARSER_DO(token_consume_sym(p, cur_tok, ';'));
+                PARSER_DO(token_consume_sym(p, cur_tok, ';', " in return statement"));
             }
             *p_expr = pool_push(&p->ast_pools[STMT_RETURN], &ret, sizeof(ret));
             return cur_tok;
@@ -1259,6 +1365,42 @@ static const struct Token* parse_stmt(Parser* p, const struct Token* cur_tok, st
             *p_expr = pool_push(&p->ast_pools[STMT_IF], &ret, sizeof(ret));
             return cur_tok;
         }
+        case LEX_CASE:
+        {
+            struct StmtCase ret = {
+                .kind = STMT_CASE,
+                .tok = cur_tok++,
+            };
+            PARSER_DO(parse_expr(p, cur_tok, &ret.expr, PRECEDENCE_ASSIGN));
+            PARSER_DO(token_consume_sym(p, cur_tok, ':', "in case statement"));
+            *p_expr = pool_push(&p->ast_pools[STMT_CASE], &ret, sizeof(ret));
+            return cur_tok;
+        }
+        case LEX_DEFAULT:
+        {
+            struct StmtCase ret = {
+                .kind = STMT_CASE,
+                .tok = cur_tok++,
+            };
+            PARSER_DO(token_consume_sym(p, cur_tok, ':', "in default statement"));
+            *p_expr = pool_push(&p->ast_pools[STMT_CASE], &ret, sizeof(ret));
+            return cur_tok;
+        }
+        case LEX_SWITCH:
+        {
+            struct StmtSwitch ret = {
+                .kind = STMT_SWITCH,
+                .tok = cur_tok++,
+            };
+            PARSER_DO(parse_conditional(p, cur_tok, &ret.expr));
+            PARSER_DO(token_consume_sym(p, cur_tok, '{', "in switch statement"));
+            const size_t scope_sz = scope_size(&p->scope);
+            PARSER_DO(parse_stmts(p, cur_tok, &ret.offset, &ret.extent));
+            scope_shrink(&p->scope, scope_sz);
+            PARSER_DO(token_consume_sym(p, cur_tok, '}', "in switch statement"));
+            *p_expr = pool_push(&p->ast_pools[STMT_SWITCH], &ret, sizeof(ret));
+            return cur_tok;
+        }
         case LEX_CONTINUE:
         {
             struct StmtContinue ret = {
@@ -1266,7 +1408,7 @@ static const struct Token* parse_stmt(Parser* p, const struct Token* cur_tok, st
                 .tok = cur_tok,
             };
             *p_expr = pool_push(&p->ast_pools[STMT_CONTINUE], &ret, sizeof(ret));
-            return token_consume_sym(p, cur_tok + 1, ';');
+            return token_consume_sym(p, cur_tok + 1, ';', " in continue statement");
         }
         case LEX_BREAK:
         {
@@ -1275,7 +1417,7 @@ static const struct Token* parse_stmt(Parser* p, const struct Token* cur_tok, st
                 .tok = cur_tok,
             };
             *p_expr = pool_push(&p->ast_pools[STMT_BREAK], &ret, sizeof(ret));
-            return token_consume_sym(p, cur_tok + 1, ';');
+            return token_consume_sym(p, cur_tok + 1, ';', " in break statement");
         }
         case LEX_FOR:
         {
@@ -1283,18 +1425,18 @@ static const struct Token* parse_stmt(Parser* p, const struct Token* cur_tok, st
                 .kind = STMT_LOOP,
             };
             size_t scope_sz = scope_size(&p->scope);
-            if (!(cur_tok = token_consume_sym(p, cur_tok + 1, '('))) return NULL;
+            if (!(cur_tok = token_consume_sym(p, cur_tok + 1, '(', " in for statement"))) return NULL;
             if (!(cur_tok = parse_stmt(p, cur_tok, &ret.init))) return NULL;
             if (!token_is_sym(p, cur_tok, ';'))
             {
                 if (!(cur_tok = parse_expr(p, cur_tok, &ret.cond, PRECEDENCE_COMMA))) return NULL;
             }
-            if (!(cur_tok = token_consume_sym(p, cur_tok, ';'))) return NULL;
+            if (!(cur_tok = token_consume_sym(p, cur_tok, ';', " in for statement"))) return NULL;
             if (!token_is_sym(p, cur_tok, ')'))
             {
                 if (!(cur_tok = parse_expr(p, cur_tok, &ret.advance, PRECEDENCE_COMMA))) return NULL;
             }
-            if (!(cur_tok = token_consume_sym(p, cur_tok, ')'))) return NULL;
+            if (!(cur_tok = token_consume_sym(p, cur_tok, ')', " in for statement"))) return NULL;
             if (!(cur_tok = parse_stmt(p, cur_tok, &ret.body))) return NULL;
             scope_shrink(&p->scope, scope_sz);
             *p_expr = pool_push(&p->ast_pools[STMT_LOOP], &ret, sizeof(ret));
@@ -1326,7 +1468,7 @@ static const struct Token* parse_stmt(Parser* p, const struct Token* cur_tok, st
                 return parser_ferror(&cur_tok->rc, "error: expected 'while'\n"), NULL;
             }
             if (!(cur_tok = parse_conditional(p, cur_tok + 1, &ret.cond))) return NULL;
-            if (!(cur_tok = token_consume_sym(p, cur_tok, ';'))) return NULL;
+            if (!(cur_tok = token_consume_sym(p, cur_tok, ';', " in do while statement"))) return NULL;
             *p_expr = pool_push(&p->ast_pools[STMT_LOOP], &ret, sizeof(ret));
             return cur_tok;
         }
@@ -1340,10 +1482,11 @@ static const struct Token* parse_stmt(Parser* p, const struct Token* cur_tok, st
             {
                 return parser_ferror(&cur_tok->rc, "error: expected label to go to\n"), NULL;
             }
-            if (!(cur_tok = token_consume_sym(p, cur_tok + 1, ';'))) return NULL;
+            if (!(cur_tok = token_consume_sym(p, cur_tok + 1, ';', " in goto statement"))) return NULL;
             *p_expr = pool_push(&p->ast_pools[STMT_GOTO], &ret, sizeof(ret));
             return cur_tok;
         }
+        case TOKEN_SYM1(';'): *p_expr = &s_stmt_none; return cur_tok + 1;
         case LEX_IDENT:
         {
             if (token_is_sym(p, cur_tok + 1, ':'))
@@ -1363,25 +1506,25 @@ static const struct Token* parse_stmt(Parser* p, const struct Token* cur_tok, st
                 // this is a declaration
                 return parse_stmt_decl(p, cur_tok, p_expr);
             }
+            // fallthrough to expression statement
         }
         case LEX_NUMBER:
-        {
-            if (!(cur_tok = parse_expr(p, cur_tok, p_expr, PRECEDENCE_COMMA))) return NULL;
-            return token_consume_sym(p, cur_tok, ';');
-        }
-        case TOKEN_SYM1(';'): *p_expr = &s_stmt_none; return cur_tok + 1;
+        case LEX_SIZEOF:
+        case LEX_UUVA_START:
+        case LEX_UUVA_ARG:
+        case LEX_UUVA_END:
         case TOKEN_SYM1('('):
 #define Y_CASE(V, ...) case V:
             X_PREFIX_UNARY_TOKS(Y_CASE)
 #undef Y_CASE
             if (!(cur_tok = parse_expr(p, cur_tok, p_expr, PRECEDENCE_COMMA))) return NULL;
-            return token_consume_sym(p, cur_tok, ';');
+            return token_consume_sym(p, cur_tok, ';', " in expression statement");
         case TOKEN_SYM1('{'):
         {
             size_t scope_sz = scope_size(&p->scope);
-            if (!(cur_tok = parse_stmts(p, cur_tok + 1, p_expr))) return NULL;
+            if (!(cur_tok = parse_stmt_block(p, cur_tok + 1, p_expr))) return NULL;
             scope_shrink(&p->scope, scope_sz);
-            return token_consume_sym(p, cur_tok, '}');
+            return token_consume_sym(p, cur_tok, '}', " in block");
         }
         default: return parser_ferror(&cur_tok->rc, "error: expected statement\n"), NULL;
     }
@@ -1390,14 +1533,18 @@ fail:
     return cur_tok;
 }
 
-void parser_init(struct Parser* p) { memset(p, 0, sizeof(struct Parser)); }
+void parser_init(struct Parser* p)
+{
+    memset(p, 0, sizeof(struct Parser));
+    ;
+}
 void parser_destroy(struct Parser* p)
 {
     autoheap_destroy(&p->strings_to_free);
     scope_destroy(&p->scope);
     scope_destroy(&p->type_scope);
 
-    for (size_t i = 0; i < AST_KIND_END_POOLS; ++i)
+    for (size_t i = 0; i < AST_KIND_END_POOLS + 1; ++i)
     {
         pool_destroy(&p->ast_pools[i]);
     }
@@ -1429,4 +1576,13 @@ int parser_parse(struct Parser* p, const struct Token* cur_tok, const char* tk_s
     scope_shrink(&p->scope, 0);
 
     return 0;
+}
+
+void parser_debug_check(struct Parser* p)
+{
+    struct Expr** expr_seqs = p->expr_seqs.data;
+    for (size_t i = 0; i < array_size(&p->expr_seqs, sizeof(struct Expr*)); ++i)
+    {
+        if ((unsigned)expr_seqs[i]->kind > AST_KIND_END) abort();
+    }
 }

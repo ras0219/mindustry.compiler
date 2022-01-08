@@ -9,7 +9,7 @@
             "command": "ninja",
             "args": [
                 "-C",
-                "${env:BUILD_DIR}"
+                "${workspaceFolder}/out"
             ],
             "group": {
                 "kind": "build",

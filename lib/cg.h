@@ -6,14 +6,25 @@
 #include "array.h"
 #include "fwd.h"
 
+enum CGTarget
+{
+    CG_TARGET_WIN_MASM,
+    CG_TARGET_MACOS_GAS,
+};
+
 struct CodeGen
 {
     FILE* fdebug;
 
+    enum CGTarget target;
+
     struct Array const_;
+    struct Array data;
     struct Array code;
 
     size_t next_label;
+
+    size_t cur_fn_lbl_prefix;
 };
 
 void cg_init(struct CodeGen* cg);
@@ -22,6 +33,7 @@ void cg_declare_extern(struct CodeGen* cg, const char* sym);
 void cg_declare_public(struct CodeGen* cg, const char* sym);
 void cg_mark_label(struct CodeGen* cg, const char* sym);
 void cg_string_constant(struct CodeGen* cg, size_t cidx, const char* str);
+void cg_reserve_data(struct CodeGen* cg, const char* name, const char* data, size_t sz);
 int cg_gen_taces(struct CodeGen* cg, struct TACEntry* taces, size_t n_taces, size_t frame_size);
 int cg_emit(struct CodeGen* cg, FILE* fout);
 

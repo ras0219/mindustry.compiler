@@ -17,7 +17,6 @@ const struct RowCol* expr_to_rc(const struct Expr* e)
     switch (e->kind)
     {
         EXPR_TO_RC(EXPR_LIT, ExprLit);
-        EXPR_TO_RC(EXPR_CAST, ExprCast);
         EXPR_TO_RC(EXPR_SYM, ExprSym);
         EXPR_TO_RC(EXPR_FIELD, ExprSym);
         EXPR_TO_RC(EXPR_OP, ExprOp);
@@ -25,6 +24,9 @@ const struct RowCol* expr_to_rc(const struct Expr* e)
         EXPR_TO_RC(AST_DECLARR, DeclArr);
         EXPR_TO_RC(AST_DECLFN, DeclFn);
         EXPR_TO_RC(AST_DECLPTR, DeclPtr);
+        EXPR_TO_RC(AST_INIT, ASTInit);
+        case AST_DECL: return &((const struct Decl*)e)->specs->tok->rc;
+        case EXPR_CAST: return expr_to_rc(((const struct ExprCast*)e)->expr);
         default: return &s_ast_unknown_rc;
     }
 }
