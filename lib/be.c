@@ -853,12 +853,6 @@ static int be_compile_StmtIf(struct BackEnd* be, struct StmtIf* stmt)
         size_t end_lbl = be->next_label++;
         be_push_jump(be, end_lbl);
         be_push_label(be, else_lbl);
-
-        while (stmt->else_body && stmt->else_body->kind == STMT_IF)
-        {
-            // chained else-if
-            stmt = (struct StmtIf*)stmt->else_body;
-        }
         UNWRAP(be_compile_stmt(be, stmt->else_body));
         be_push_label(be, end_lbl);
     }

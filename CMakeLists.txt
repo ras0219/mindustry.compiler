@@ -70,9 +70,6 @@ else()
     add_executable(main cli/main.c)
     target_link_libraries(main PRIVATE mindcc-lib)
 
-    add_executable(cpp cli/cpp.c)
-    target_link_libraries(cpp PRIVATE mindcc-lib)
-
     file(GLOB_RECURSE TEST_SOURCES tests/*)
     add_executable(runall-test ${TEST_SOURCES})
     target_link_libraries(runall-test PRIVATE mindcc-lib)

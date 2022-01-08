@@ -238,6 +238,24 @@ int main(int argc, const char* const* argv)
         i += name_len + 1;
     }
 
+    const char* predefs[] = {
+        "__LP64__",
+        "__x86_64__",
+        "__STDC__",
+        "_POSIX_SOURCE",
+        "__DARWIN_OS_INLINE=static inline",
+        "__llvm__",
+        "__builtin_bswap32",
+        "__builtin_bswap16",
+        "__builtin_bswap64",
+        "__func__=\"__func__\"",
+    };
+
+    for (size_t i = 0; i < sizeof(predefs) / sizeof(predefs[0]); ++i)
+    {
+        preproc_define(fe.pp, predefs[i]);
+    }
+
     UNWRAP(fe_preproc(&fe, args.input));
     if (args.fPreprocOnly)
     {
@@ -290,7 +308,8 @@ int main(int argc, const char* const* argv)
 #else
         const char* exe_file = args.output ? args.output : "a.out";
         char buf[512];
-        rc = sizeof(buf) <= snprintf(buf, sizeof(buf), "nasm -fmacho64 -g %s -o %s", asm_file, obj_file);
+        rc = sizeof(buf) <=
+             snprintf(buf, sizeof(buf), "clang -target x86_64-apple-darwin20.3.0 -g -c %s -o %s", asm_file, obj_file);
         if (!rc) rc = system(buf);
         if (!rc)
             rc = sizeof(buf) <= snprintf(buf,

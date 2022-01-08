@@ -1,4 +1,4 @@
-CFLAGS=-I ../lib -D __LP64__ -D __x86_64__ -D __STDC__ -D _POSIX_SOURCE -D "__DARWIN_OS_INLINE=static inline" -D __llvm__ -D __builtin_bswap32 -D __builtin_bswap16 -D __builtin_bswap64 -D "__func__=\"__func__\""
+CFLAGS=-I ../lib
 
 all: main.selfbuild
 
