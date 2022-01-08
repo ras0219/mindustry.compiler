@@ -34,7 +34,7 @@ void cg_declare_public(struct CodeGen* cg, const char* sym);
 void cg_mark_label(struct CodeGen* cg, const char* sym);
 void cg_string_constant(struct CodeGen* cg, size_t cidx, const char* str);
 void cg_reserve_data(struct CodeGen* cg, const char* name, const char* data, size_t sz);
-int cg_gen_taces(struct CodeGen* cg, struct TACEntry* taces, size_t n_taces, size_t frame_size);
+int cg_gen_taces(struct CodeGen* cg, const struct TACEntry* taces, size_t n_taces, size_t frame_size);
 int cg_emit(struct CodeGen* cg, FILE* fout);
 
 #if 0
