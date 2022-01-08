@@ -295,6 +295,8 @@ int main(int argc, const char* const* argv)
     }
 
     UNWRAP(cg_emit(fe.cg, fe.fout));
+    fclose(fe.fout);
+    fe.fout = NULL;
     UNWRAP(parser_has_errors());
 
     if (!args.fCompile)
@@ -310,13 +312,12 @@ int main(int argc, const char* const* argv)
         char buf[512];
         rc = sizeof(buf) <=
              snprintf(buf, sizeof(buf), "clang -target x86_64-apple-darwin20.3.0 -g -c %s -o %s", asm_file, obj_file);
+        printf("%s\n", buf);
         if (!rc) rc = system(buf);
         if (!rc)
-            rc = sizeof(buf) <= snprintf(buf,
-                                         sizeof(buf),
-                                         "clang -target x86_64-apple-darwin20.3.0 -mcpu=x86-64 %s -Wl,-no_pie -o %s",
-                                         obj_file,
-                                         exe_file);
+            rc = sizeof(buf) <=
+                 snprintf(buf, sizeof(buf), "clang -target x86_64-apple-darwin20.3.0 %s -o %s", obj_file, exe_file);
+        printf("%s\n", buf);
         if (!rc) rc = system(buf);
 #endif
     }
@@ -326,7 +327,7 @@ fail:
     {
         parser_print_errors(stderr);
     }
-    fclose(fe.fout);
+    if (fe.fout) fclose(fe.fout);
     fe_destroy(&fe);
     return rc;
 }
