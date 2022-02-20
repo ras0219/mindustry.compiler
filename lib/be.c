@@ -36,11 +36,18 @@ const char* taco_to_string(enum TACOKind k)
 #undef Y
 static const struct TACAddress s_taca_void = {};
 
+static __forceinline size_t round_to_alignment(size_t size, size_t align)
+{
+    size_t n = size + align - 1;
+    return n - (n % align);
+}
+
 __forceinline static struct TACAddress taca_imm(size_t imm)
 {
     struct TACAddress ret = {
         .kind = TACA_IMM,
         .imm = imm,
+        .sizing = 8,
     };
     return ret;
 }
@@ -68,6 +75,7 @@ __forceinline static struct TACAddress taca_const_addr(size_t const_idx)
     struct TACAddress ret = {
         .kind = TACA_CONST_ADDR,
         .const_idx = const_idx,
+        .sizing = 8,
     };
     return ret;
 }
@@ -81,14 +89,18 @@ void be_init(struct BackEnd* be, struct Parser* p, struct Elaborator* e, struct 
     be->debug_taces = 1;
 }
 
-static struct TACAddress be_push_tace(struct BackEnd* be, const struct TACEntry* e)
+static struct TACAddress be_push_tace(struct BackEnd* be, const struct TACEntry* e, int32_t sizing)
 {
     const size_t offset = array_size(&be->code, sizeof(struct TACEntry));
     array_push(&be->code, e, sizeof(struct TACEntry));
     if (e->op == TACO_ASSIGN && e->arg2.kind == TACA_VOID) abort();
+    if (e->arg1.sizing > 8) abort();
+    if (e->arg2.sizing > 8) abort();
+    if (e->arg2.sizing == 0 && (e->arg2.kind != TACA_VOID && e->arg2.kind != TACA_ALABEL)) abort();
     struct TACAddress ret = {
         .kind = TACA_REF,
         .ref = offset,
+        .sizing = sizing,
     };
     return ret;
 }
@@ -127,9 +139,10 @@ static int be_compile_increment(struct BackEnd* be, struct TACAddress* addr, siz
                     {
                         .kind = TACA_IMM,
                         .imm = offset,
+                        .sizing = 8,
                     },
             };
-            *addr = be_push_tace(be, &tace);
+            *addr = be_push_tace(be, &tace, addr->sizing);
             break;
         }
         default: return parser_tok_error(NULL, "error: %s: unhandled taca: %s\n", __func__, taca_to_string(addr->kind));
@@ -137,24 +150,57 @@ static int be_compile_increment(struct BackEnd* be, struct TACAddress* addr, siz
     return 0;
 }
 
-static int be_dereference(struct BackEnd* be, struct TACAddress* out)
+static struct TACAddress be_deref(struct BackEnd* be, const struct TACAddress* in, int32_t sizing)
 {
-    switch (out->kind)
+    struct TACAddress out = *in;
+    switch (out.kind)
     {
-        case TACA_FRAME_ADDR: out->kind = TACA_FRAME; break;
-        case TACA_ARG_ADDR: out->kind = TACA_ARG; break;
-        case TACA_NAME_ADDR: out->kind = TACA_NAME; break;
+        case TACA_FRAME_ADDR:
+            out.kind = TACA_FRAME;
+            out.sizing = sizing;
+            break;
+        case TACA_ARG_ADDR:
+            out.kind = TACA_ARG;
+            out.sizing = sizing;
+            break;
+        case TACA_NAME_ADDR:
+            out.kind = TACA_NAME;
+            out.sizing = sizing;
+            break;
+        case TACA_LNAME_ADDR:
+            out.kind = TACA_LNAME;
+            out.sizing = sizing;
+            break;
         default:
         {
+            if (out.sizing != 8) abort();
             struct TACEntry tace = {
                 .op = TACO_LOAD,
-                .arg1 = *out,
+                .arg1 = out,
+                .arg2 = {.sizing = sizing},
             };
-            *out = be_push_tace(be, &tace);
-            break;
+            if (sizing > 8) abort();
+            return be_push_tace(be, &tace, sizing);
         }
     }
+    return out;
+}
+
+static int be_dereference(struct BackEnd* be, struct TACAddress* out, int32_t sizing)
+{
+    *out = be_deref(be, out, sizing);
     return 0;
+}
+
+static struct TACAddress be_ensure_ref(struct BackEnd* be, const struct TACAddress* in)
+{
+    if (in->kind == TACA_REF) return *in;
+    struct TACEntry tace = {
+        .op = TACO_ADD,
+        .arg1 = *in,
+        .arg2 = taca_imm(0),
+    };
+    return be_push_tace(be, &tace, in->sizing);
 }
 
 __attribute__((unused)) static int be_addressof(struct BackEnd* be, struct TACAddress* out)
@@ -162,44 +208,69 @@ __attribute__((unused)) static int be_addressof(struct BackEnd* be, struct TACAd
     int rc = 0;
     switch (out->kind)
     {
-        case TACA_FRAME: out->kind = TACA_FRAME_ADDR; break;
-        case TACA_ARG: out->kind = TACA_ARG_ADDR; break;
-        case TACA_NAME: out->kind = TACA_NAME_ADDR; break;
+        case TACA_FRAME:
+            out->kind = TACA_FRAME_ADDR;
+            out->sizing = 8;
+            break;
+        case TACA_ARG:
+            out->kind = TACA_ARG_ADDR;
+            out->sizing = 8;
+            break;
+        case TACA_NAME:
+            out->kind = TACA_NAME_ADDR;
+            out->sizing = 8;
+            break;
         default: UNWRAP(parser_tok_error(NULL, "error: cannot take address of TACA %d\n", out->kind));
     }
 fail:
     return rc;
 }
 
-static int be_compile_stmt(struct BackEnd* be, struct Expr* e);
+__attribute__((unused)) static int be_alloc_temp(struct BackEnd* be, int32_t sizing, struct TACAddress* out)
+{
+    struct TACAddress o = {
+        .kind = TACA_FRAME,
+        .sizing = sizing,
+        .frame_offset = be->frame_size,
+    };
+    be->frame_size += sizing < 0 ? -sizing : sizing;
+    if (be->max_frame_size < be->frame_size) be->max_frame_size = be->frame_size;
+    *out = o;
+    return 0;
+}
+
+static int be_compile_stmt(struct BackEnd* be, struct Ast* e);
 static int be_compile_expr(struct BackEnd* be, struct Expr* e, struct TACAddress* out);
 static int be_compile_lvalue(struct BackEnd* be, struct Expr* e, struct TACAddress* out);
-static int be_compile_expr_store(struct BackEnd* be, struct Expr* e, struct TACAddress at)
+static int be_compile_init(struct BackEnd* be, struct Ast* e, size_t frame_offset, int32_t sizing)
 {
     int rc = 0;
-    switch (e->kind)
+    if (e->kind == AST_INIT)
     {
-        case AST_INIT:
+        struct AstInit* block = (void*)e;
+        for (; block->init; block = block->next)
         {
-            struct ASTInit* block = (void*)e;
-            for (size_t i = 0; i < block->extent; ++i)
-            {
-                struct Expr* e = ((struct Expr**)be->parser->expr_seqs.data)[block->offset + i];
-                UNWRAP(be_compile_expr_store(be, e, at));
-                // TODO: calculate proper offsets
-                UNWRAP(be_compile_increment(be, &at, 8));
-            }
-            return 0;
+            UNWRAP(be_compile_init(be, block->init, frame_offset + block->offset, block->sizing));
+            // TODO: calculate proper offsets
         }
-        default:
-        {
-            struct TACEntry assign = {
-                .op = TACO_ASSIGN,
-                .arg1 = at,
-            };
-            UNWRAP(be_compile_expr(be, e, &assign.arg2));
-            be_push_tace(be, &assign);
-        }
+    }
+    else if (!ast_kind_is_expr(e->kind))
+    {
+        UNWRAP(parser_tok_error(e->tok, "error: unexpected expression in initialization\n"));
+    }
+    else
+    {
+        if (sizing > 8) abort();
+        struct TACEntry assign = {.op = TACO_ASSIGN,
+                                  .arg1 =
+                                      {
+                                          .kind = TACA_FRAME_ADDR,
+                                          .frame_offset = frame_offset,
+                                          .sizing = sizing,
+                                      },
+                                  .rc = &e->tok->rc};
+        UNWRAP(be_compile_expr(be, (struct Expr*)e, &assign.arg2));
+        be_push_tace(be, &assign, 0);
     }
 fail:
     return rc;
@@ -207,7 +278,7 @@ fail:
 static int be_compile_stmts(struct BackEnd* be, size_t offset, size_t extent)
 {
     int rc = 0;
-    struct Expr** seqs = be->parser->expr_seqs.data;
+    void** seqs = be->parser->expr_seqs.data;
     seqs += offset;
     for (size_t i = 0; i < extent; ++i)
     {
@@ -311,21 +382,16 @@ static int be_compile_lvalue_ExprLit(struct BackEnd* be, struct ExprLit* e, stru
 
 static int is_decl_array_or_function(struct Decl* decl)
 {
-    struct DeclSpecs* specs;
-
-decl:
-    if (!decl) return 0;
-    if (!decl->type) return 0;
+top:
     switch (decl->type->kind)
     {
         case AST_DECLARR: return 1;
         case AST_DECLFN: return 1;
         case AST_DECLSPEC:
-            specs = (struct DeclSpecs*)decl->type;
-            if (specs->type)
+            if (((struct DeclSpecs*)decl)->_typedef)
             {
-                decl = specs->type;
-                goto decl;
+                decl = ((struct DeclSpecs*)decl)->_typedef;
+                goto top;
             }
             return 0;
         default: return 0;
@@ -334,9 +400,8 @@ decl:
 
 static int be_compile_lvalue_ExprSym(struct BackEnd* be, struct ExprSym* e, struct TACAddress* out)
 {
-    if (!e->decl) abort();
-    struct Decl* decl = decl_get_def(e->decl);
-    if (decl->parent_decl)
+    struct Decl* decl = e->decl;
+    if (decl->specs->parent)
     {
         if (decl->arg_index > 0)
         {
@@ -354,39 +419,30 @@ static int be_compile_lvalue_ExprSym(struct BackEnd* be, struct ExprSym* e, stru
         out->kind = decl->specs->is_static ? TACA_LNAME_ADDR : TACA_NAME_ADDR;
         out->name = decl->name;
     }
+    out->sizing = 8;
     return 0;
 }
 
 static int be_compile_ExprSym(struct BackEnd* be, struct ExprSym* esym, struct TACAddress* out)
 {
-    if (!esym->decl) abort();
-    struct Decl* decl = decl_get_def(esym->decl);
-    if (is_decl_array_or_function(decl)) return be_compile_lvalue_ExprSym(be, esym, out);
-
-    if (decl->parent_decl)
-    {
-        if (decl->arg_index > 0)
-        {
-            out->kind = TACA_ARG;
-            out->arg_idx = decl->arg_index - 1;
-        }
-        else
-        {
-            out->kind = TACA_FRAME;
-            out->frame_offset = decl_get_def(esym->decl)->frame_offset;
-        }
-    }
-    else if (decl->is_enum_constant)
+    int rc = 0;
+    struct Decl* decl = esym->decl;
+    if (!decl) abort();
+    if (decl->def && decl->def->is_enum_constant)
     {
         out->kind = TACA_IMM;
-        out->imm = decl->enum_value;
+        out->imm = decl->def->enum_value;
     }
     else
     {
-        out->kind = decl->specs->is_static ? TACA_LNAME : TACA_NAME;
-        out->name = decl->name;
+        UNWRAP(be_compile_lvalue_ExprSym(be, esym, out));
+        if (!is_decl_array_or_function(decl))
+        {
+            UNWRAP(be_dereference(be, out, esym->sizing));
+        }
     }
-    return 0;
+fail:
+    return rc;
 }
 static int be_compile_ExprCall(struct BackEnd* be, struct ExprCall* e, struct TACAddress* out)
 {
@@ -399,7 +455,13 @@ static int be_compile_ExprCall(struct BackEnd* be, struct ExprCall* e, struct TA
 
     for (size_t i = 0; i < e->extent; ++i)
     {
-        UNWRAP(be_compile_expr(be, expr_seqs[e->offset + i], array_alloc(&param_addr, sizeof(struct TACAddress))));
+        int32_t sz = ((struct ParamConversion*)be->elab->param_conversions.data)[e->offset + i].sizing;
+        struct TACAddress* arg_addr = array_alloc(&param_addr, sizeof(struct TACAddress));
+        UNWRAP(be_compile_expr(be, expr_seqs[e->offset + i], arg_addr));
+        if (sz > 8)
+        {
+            UNWRAP(be_addressof(be, arg_addr));
+        }
     }
     struct TACEntry call = {
         .op = TACO_CALL,
@@ -408,19 +470,21 @@ static int be_compile_ExprCall(struct BackEnd* be, struct ExprCall* e, struct TA
     };
     UNWRAP(be_compile_expr(be, e->fn, &call.arg1));
 
+    int ret_is_memory = e->sizing > 8 || e->sizing < -8;
+
     struct TACEntry param = {
         .op = TACO_PARAM,
-        .arg2 = {.kind = TACA_PARAM},
+        .arg2 = {.kind = TACA_PARAM, .sizing = 8},
         .rc = &e->tok->rc,
     };
     for (size_t i = e->extent; i > 0; --i)
     {
         param.arg1 = ((struct TACAddress*)param_addr.data)[i - 1];
-        param.arg2.param_idx = i - 1;
-        be_push_tace(be, &param);
+        param.arg2.param_idx = i - 1 + ret_is_memory;
+        be_push_tace(be, &param, 0);
     }
 
-    *out = be_push_tace(be, &call);
+    *out = be_push_tace(be, &call, e->sizing);
 
 fail:
     return rc;
@@ -434,270 +498,351 @@ static int be_compile_lvalue_ExprCast(struct BackEnd* be, struct ExprCast* e, st
     return be_compile_lvalue(be, e->expr, out);
 }
 
-static int be_compile_add(struct BackEnd* be, struct ExprOp* e, struct TACAddress* out)
+static int be_compile_add(struct BackEnd* be, struct ExprBinOp* e, int32_t sizing, struct TACAddress* out)
 {
     int rc = 0;
     struct TACEntry tace = {};
     tace.rc = &e->tok->rc;
     UNWRAP(be_compile_expr(be, e->rhs, &tace.arg2));
-    if (e->size == 0)
+    if (e->info == 0)
     {
         return parser_tok_error(e->tok, "warning: unsized addition\n");
     }
-    if (e->size != 1)
+    if (e->info != 1)
     {
+        /* adding to pointer, e->info is size of element */
         tace.op = TACO_MULT;
-        tace.arg1 = taca_imm(e->size);
-        tace.arg2 = be_push_tace(be, &tace);
+        tace.arg1 = taca_imm(e->info);
+        tace.arg2 = be_push_tace(be, &tace, 8);
     }
     tace.op = TACO_ADD;
     UNWRAP(be_compile_expr(be, e->lhs, &tace.arg1));
-    *out = be_push_tace(be, &tace);
+    *out = be_push_tace(be, &tace, sizing);
 fail:
     return rc;
 }
 
-static int be_compile_sub(struct BackEnd* be, struct ExprOp* e, struct TACAddress* out)
+static int be_compile_sub(struct BackEnd* be, struct ExprBinOp* e, struct TACAddress* out)
 {
     int rc = 0;
     struct TACEntry tace = {};
     tace.rc = &e->tok->rc;
     UNWRAP(be_compile_expr(be, e->rhs, &tace.arg2));
-    if (e->size == 0)
+    if (e->info == 0)
     {
         return parser_tok_error(e->tok, "warning: unsized subtraction\n");
     }
-    if (e->size > 1)
+    if (e->info > 1)
     {
         tace.op = TACO_MULT;
-        tace.arg1 = taca_imm(e->size);
-        tace.arg2 = be_push_tace(be, &tace);
+        tace.arg1 = taca_imm(e->info);
+        tace.arg2 = be_push_tace(be, &tace, e->sizing);
     }
     tace.op = TACO_SUB;
     UNWRAP(be_compile_expr(be, e->lhs, &tace.arg1));
-    *out = be_push_tace(be, &tace);
-    if (e->size < 1)
+    *out = be_push_tace(be, &tace, e->sizing);
+    if (e->info < 1)
     {
         tace.op = TACO_DIV;
         tace.arg1 = *out;
-        tace.arg2 = taca_imm(-e->size);
-        *out = be_push_tace(be, &tace);
+        tace.arg2 = taca_imm(-e->info);
+        *out = be_push_tace(be, &tace, e->sizing);
     }
 fail:
     return rc;
 }
 
-static int be_compile_lvalue_ExprOp(struct BackEnd* be, struct ExprOp* e, struct TACAddress* out)
+static int be_compile_lvalue_ExprBinOp(struct BackEnd* be, struct ExprBinOp* e, struct TACAddress* out)
 {
     int rc = 0;
     struct TACEntry tace = {};
     tace.rc = &e->tok->rc;
     switch (e->tok->type)
     {
-        case TOKEN_SYM1('['): return be_compile_add(be, e, out);
+        case TOKEN_SYM2('+', '='): tace.op = TACO_ADD; goto binary_op_assign;
+        case TOKEN_SYM2('-', '='): tace.op = TACO_SUB; goto binary_op_assign;
+        case TOKEN_SYM2('/', '='): tace.op = TACO_DIV; goto binary_op_assign;
+        case TOKEN_SYM2('&', '='): tace.op = TACO_BAND; goto binary_op_assign;
+        case TOKEN_SYM2('|', '='): tace.op = TACO_BOR; goto binary_op_assign;
+        case TOKEN_SYM2('^', '='): tace.op = TACO_BXOR; goto binary_op_assign;
+        case TOKEN_SYM2('*', '='): tace.op = TACO_MULT; goto binary_op_assign;
+        case TOKEN_SYM3('<', '<', '='): tace.op = TACO_SHL; goto binary_op_assign;
+        case TOKEN_SYM3('>', '>', '='): tace.op = TACO_SHR; goto binary_op_assign;
+        case TOKEN_SYM1('='):
+            tace.op = TACO_ASSIGN;
+            UNWRAP(be_compile_expr(be, e->rhs, &tace.arg2));
+            UNWRAP(be_compile_lvalue(be, e->lhs, out));
+            tace.arg1 = *out;
+            be_push_tace(be, &tace, e->sizing);
+            goto fail;
+
+        case TOKEN_SYM1('['): return be_compile_add(be, e, 8, out);
         default:
             UNWRAP(parser_tok_error(
-                e->tok, "error: be_compile_lvalue_ExprOp unimplemented op (%s)\n", token_str(be->parser, e->tok)));
+                e->tok, "error: be_compile_lvalue_ExprBinOp unimplemented op (%s)\n", token_str(be->parser, e->tok)));
+    }
+
+binary_op_assign:
+    UNWRAP(be_compile_expr(be, e->rhs, &tace.arg2));
+    UNWRAP(be_compile_lvalue(be, e->lhs, out));
+    tace.arg1 = be_deref(be, out, e->lhs->sizing);
+    tace.arg2 = be_push_tace(be, &tace, e->sizing);
+    tace.arg1 = *out;
+    tace.op = TACO_ASSIGN;
+    be_push_tace(be, &tace, e->sizing);
+    goto fail;
+
+fail:
+    return rc;
+}
+
+static int be_compile_lvalue_ExprUnOp(struct BackEnd* be, struct ExprUnOp* e, struct TACAddress* out)
+{
+    int rc = 0;
+    struct TACEntry tace = {};
+    tace.rc = &e->tok->rc;
+    switch (e->tok->type)
+    {
+        default:
+            UNWRAP(parser_tok_error(
+                e->tok, "error: be_compile_lvalue_ExprUnOp unimplemented op (%s)\n", token_str(be->parser, e->tok)));
     }
 
 fail:
     return rc;
 }
 
-static int be_compile_ExprOp(struct BackEnd* be, struct ExprOp* e, struct TACAddress* out)
+static int be_compile_ExprBuiltin(struct BackEnd* be, struct ExprBuiltin* e, struct TACAddress* out)
+{
+    int rc = 0;
+    struct TACEntry tace = {.rc = &e->tok->rc};
+    switch (e->tok->type)
+    {
+        case LEX_UUVA_START:
+            // see https://uclibc.org/docs/psABI-x86_64.pdf
+            tace.op = TACO_ASSIGN;
+            tace.arg2.kind = TACA_FRAME_ADDR;
+            tace.arg2.frame_offset = 0;
+            tace.arg2.sizing = 8;
+            UNWRAP(be_compile_lvalue(be, e->expr1, &tace.arg1));
+            if (tace.arg1.kind != TACA_FRAME_ADDR)
+                UNWRAP(
+                    parser_tok_error(e->tok, "error: first argument of __builtin_va_start must be a local variable\n"));
+            be_push_tace(be, &tace, 0);
+            // Now initialize the va_list structure
+            tace.arg1.frame_offset = 0;
+            tace.arg1.sizing = 4;
+            tace.arg2 = taca_imm(be->cur_fn->extent * 8);
+            be_push_tace(be, &tace, 0);
+            tace.arg1.frame_offset += 4;
+            tace.arg1.sizing = 4;
+            // TODO: fix floating point
+            tace.arg2 = taca_imm(48);
+            be_push_tace(be, &tace, 0);
+            tace.arg1.frame_offset += 4;
+            tace.arg1.sizing = 8;
+            tace.arg2.kind = TACA_ARG_ADDR;
+            tace.arg2.arg_idx = 6;
+            be_push_tace(be, &tace, 0);
+            tace.arg1.frame_offset += 8;
+            tace.arg1.sizing = 8;
+            tace.arg2.arg_idx = 0;
+            be_push_tace(be, &tace, 0);
+            *out = s_taca_void;
+            break;
+        case LEX_UUVA_END: *out = s_taca_void; break;
+        case LEX_SIZEOF: *out = taca_imm(e->sizeof_size); break;
+        default:
+            UNWRAP(parser_tok_error(
+                e->tok, "error: builtin operation not yet implemented: %s\n", token_str(be->parser, e->tok)));
+            break;
+    }
+fail:
+    return rc;
+}
+
+static int be_compile_lvalue_ExprBuiltin(struct BackEnd* be, struct ExprBuiltin* e, struct TACAddress* out)
+{
+    int rc = 0;
+    switch (e->tok->type)
+    {
+        default:
+            UNWRAP(parser_tok_error(
+                e->tok, "error: lvalue builtin operation not yet implemented: %s\n", token_str(be->parser, e->tok)));
+            break;
+    }
+fail:
+    return rc;
+}
+
+static int be_compile_ExprUnOp(struct BackEnd* be, struct ExprUnOp* e, struct TACAddress* out)
 {
     int rc = 0;
     if (!e->lhs) return parser_ice_tok(e->tok);
 
+    struct TACAddress lhs_lvalue = {};
     struct TACEntry tace = {};
     tace.rc = &e->tok->rc;
-    if (e->rhs)
+    switch (e->tok->type)
     {
-        switch (e->tok->type)
-        {
-            case TOKEN_SYM2('+', '='): tace.op = TACO_ADD; goto binary_op_assign;
-            case TOKEN_SYM2('-', '='): tace.op = TACO_SUB; goto binary_op_assign;
-            case TOKEN_SYM2('/', '='): tace.op = TACO_DIV; goto binary_op_assign;
-            case TOKEN_SYM2('&', '='): tace.op = TACO_BAND; goto binary_op_assign;
-            case TOKEN_SYM2('|', '='): tace.op = TACO_BOR; goto binary_op_assign;
-            case TOKEN_SYM2('^', '='): tace.op = TACO_BXOR; goto binary_op_assign;
-            case TOKEN_SYM2('*', '='): tace.op = TACO_MULT; goto binary_op_assign;
-            case TOKEN_SYM3('<', '<', '='): tace.op = TACO_SHL; goto binary_op_assign;
-            case TOKEN_SYM3('>', '>', '='): tace.op = TACO_SHR; goto binary_op_assign;
-            case TOKEN_SYM1('='): tace.op = TACO_ASSIGN; goto basic_binary;
-            case TOKEN_SYM2('>', '='): tace.op = TACO_LTEQ; goto swapped_binary;
-            case TOKEN_SYM1('>'): tace.op = TACO_LT; goto swapped_binary;
-            case TOKEN_SYM2('<', '='): tace.op = TACO_LTEQ; goto basic_binary;
-            case TOKEN_SYM1('<'): tace.op = TACO_LT; goto basic_binary;
-            case TOKEN_SYM2('=', '='): tace.op = TACO_EQ; goto basic_binary;
-            case TOKEN_SYM2('!', '='): tace.op = TACO_NEQ; goto basic_binary;
-            case TOKEN_SYM1('*'): tace.op = TACO_MULT; goto basic_binary;
-            case TOKEN_SYM1('+'): return be_compile_add(be, e, out);
-            case TOKEN_SYM1('-'): return be_compile_sub(be, e, out);
-            case TOKEN_SYM1('/'): tace.op = TACO_DIV; goto basic_binary;
-            case TOKEN_SYM1('%'): tace.op = TACO_MOD; goto basic_binary;
-            case TOKEN_SYM1('|'): tace.op = TACO_BOR; goto basic_binary;
-            case TOKEN_SYM1('&'): tace.op = TACO_BAND; goto basic_binary;
-            case TOKEN_SYM1('^'): tace.op = TACO_BXOR; goto basic_binary;
-            case TOKEN_SYM2('<', '<'): tace.op = TACO_SHL; goto basic_binary;
-            case TOKEN_SYM2('>', '>'): tace.op = TACO_SHR; goto basic_binary;
-            case TOKEN_SYM1('['):
-                UNWRAP(be_compile_lvalue_ExprOp(be, e, out));
-                UNWRAP(be_dereference(be, out));
-                break;
-            case TOKEN_SYM1(','):
-                UNWRAP(be_compile_expr(be, e->rhs, &tace.arg2));
-                UNWRAP(be_compile_expr(be, e->lhs, out));
-                break;
-            case TOKEN_SYM1('?'):
+        case TOKEN_SYM2('-', '-'): tace.op = TACO_SUB; goto prepost_inc;
+        case TOKEN_SYM2('+', '+'):
+            tace.op = TACO_ADD;
+        prepost_inc:
+            UNWRAP(be_compile_lvalue(be, e->lhs, &lhs_lvalue));
+            tace.arg1 = be_deref(be, &lhs_lvalue, e->lhs->sizing);
+            if (e->info)
             {
-                if (e->rhs->kind != EXPR_OP) abort();
-                struct ExprOp* rhs = (struct ExprOp*)e->rhs;
-                UNWRAP(be_compile_expr(be, e->lhs, &tace.arg1));
-                size_t on_false = be->next_label++;
-                size_t end = be->next_label++;
-                tace.op = TACO_BRZ;
-                tace.arg2.kind = TACA_ALABEL;
-                tace.arg2.alabel = on_false;
-                be_push_tace(be, &tace);
-                UNWRAP(be_compile_expr(be, rhs->lhs, &tace.arg1));
-                be_push_jump(be, end);
-                be_push_label(be, on_false);
-                UNWRAP(be_compile_expr(be, rhs->rhs, &tace.arg2));
-                be_push_label(be, end);
-                tace.op = TACO_PHI;
-                *out = be_push_tace(be, &tace);
-                break;
+                // postincrement
+                *out = be_ensure_ref(be, &tace.arg1);
             }
-            case TOKEN_SYM2('|', '|'):
-            case TOKEN_SYM2('&', '&'):
+            tace.arg2 = taca_imm(1);
+            tace.arg2 = be_push_tace(be, &tace, e->sizing);
+            tace.op = TACO_ASSIGN;
+            tace.arg1 = lhs_lvalue;
+            if (e->info)
             {
-                UNWRAP(be_compile_expr(be, e->lhs, &tace.arg1));
-                size_t on_false = be->next_label++;
-                tace.op = e->tok->type == TOKEN_SYM2('&', '&') ? TACO_BRZ : TACO_BRNZ;
-                tace.arg2.kind = TACA_ALABEL;
-                tace.arg2.alabel = on_false;
-                be_push_tace(be, &tace);
-                struct TACEntry logical = {
-                    .op = TACO_NEQ,
-                    .arg2 = taca_imm(0),
-                };
-                UNWRAP(be_compile_expr(be, e->rhs, &logical.arg1));
-                tace.arg2 = be_push_tace(be, &logical);
-                be_push_label(be, on_false);
-                tace.op = TACO_PHI;
-                *out = be_push_tace(be, &tace);
-                break;
+                be_push_tace(be, &tace, e->sizing);
             }
-            case LEX_UUVA_START:
-                // see https://uclibc.org/docs/psABI-x86_64.pdf
-                tace.op = TACO_ASSIGN;
-                tace.arg2.kind = TACA_FRAME_ADDR;
-                tace.arg2.frame_offset = 0;
-                UNWRAP(be_compile_lvalue(be, e->lhs, &tace.arg1));
-                if (tace.arg1.kind != TACA_FRAME_ADDR)
-                    UNWRAP(parser_tok_error(e->tok,
-                                            "error: first argument of __builtin_va_start must be a local variable\n"));
-                tace.arg1.kind = TACA_FRAME;
-                be_push_tace(be, &tace);
-                // Now initialize the va_list structure
-                tace.arg1.frame_offset = 0;
-                tace.arg2 = taca_imm(be->cur_fn->extent * 8);
-                be_push_tace(be, &tace);
-                tace.arg1.frame_offset += 4;
-                // TODO: fix floating point
-                tace.arg2 = taca_imm(48);
-                be_push_tace(be, &tace);
-                tace.arg1.frame_offset += 4;
-                tace.arg2.kind = TACA_ARG_ADDR;
-                tace.arg2.arg_idx = 6;
-                be_push_tace(be, &tace);
-                tace.arg1.frame_offset += 8;
-                tace.arg2.arg_idx = 0;
-                be_push_tace(be, &tace);
-                *out = s_taca_void;
-                break;
-            default:
-                UNWRAP(parser_tok_error(
-                    e->tok, "error: binary operation not yet implemented: %s\n", token_str(be->parser, e->tok)));
-                break;
-        }
+            else
+            {
+                // preincrement
+                *out = be_push_tace(be, &tace, e->sizing);
+            }
+            break;
+        case TOKEN_SYM1('!'):
+            tace.op = TACO_EQ;
+            UNWRAP(be_compile_expr(be, e->lhs, &tace.arg1));
+            tace.arg2 = taca_imm(0);
+            *out = be_push_tace(be, &tace, e->sizing);
+            break;
+        case TOKEN_SYM1('-'):
+            tace.op = TACO_SUB;
+            tace.arg1 = taca_imm(0);
+            UNWRAP(be_compile_expr(be, e->lhs, &tace.arg2));
+            *out = be_push_tace(be, &tace, e->sizing);
+            break;
+        case TOKEN_SYM1('~'):
+            tace.op = TACO_BNOT;
+            UNWRAP(be_compile_expr(be, e->lhs, &tace.arg1));
+            *out = be_push_tace(be, &tace, e->sizing);
+            break;
+        case TOKEN_SYM1('*'):
+            UNWRAP(be_compile_expr(be, e->lhs, out));
+            UNWRAP(be_dereference(be, out, e->sizing));
+            break;
+        case TOKEN_SYM1('&'): UNWRAP(be_compile_lvalue(be, e->lhs, out)); break;
+        default:
+            UNWRAP(parser_tok_error(
+                e->tok, "error: unary operation not yet implemented: %s\n", token_str(be->parser, e->tok)));
+            break;
     }
-    else
+
+fail:
+    return rc;
+}
+
+static int be_compile_ExprBinOp(struct BackEnd* be, struct ExprBinOp* e, struct TACAddress* out)
+{
+    int rc = 0;
+    if (!e->lhs || !e->rhs) return parser_ice_tok(e->tok);
+
+    struct TACEntry tace = {};
+    tace.rc = &e->tok->rc;
+    switch (e->tok->type)
     {
-        switch (e->tok->type)
+        case TOKEN_SYM2('>', '='): tace.op = TACO_LTEQ; goto swapped_binary;
+        case TOKEN_SYM1('>'): tace.op = TACO_LT; goto swapped_binary;
+        case TOKEN_SYM2('<', '='): tace.op = TACO_LTEQ; goto basic_binary;
+        case TOKEN_SYM1('<'): tace.op = TACO_LT; goto basic_binary;
+        case TOKEN_SYM2('=', '='): tace.op = TACO_EQ; goto basic_binary;
+        case TOKEN_SYM2('!', '='): tace.op = TACO_NEQ; goto basic_binary;
+        case TOKEN_SYM1('*'): tace.op = TACO_MULT; goto basic_binary;
+        case TOKEN_SYM1('+'): return be_compile_add(be, e, e->sizing, out);
+        case TOKEN_SYM1('-'): return be_compile_sub(be, e, out);
+        case TOKEN_SYM1('/'): tace.op = TACO_DIV; goto basic_binary;
+        case TOKEN_SYM1('%'): tace.op = TACO_MOD; goto basic_binary;
+        case TOKEN_SYM1('|'): tace.op = TACO_BOR; goto basic_binary;
+        case TOKEN_SYM1('&'): tace.op = TACO_BAND; goto basic_binary;
+        case TOKEN_SYM1('^'): tace.op = TACO_BXOR; goto basic_binary;
+        case TOKEN_SYM2('<', '<'): tace.op = TACO_SHL; goto basic_binary;
+        case TOKEN_SYM2('>', '>'): tace.op = TACO_SHR; goto basic_binary;
+        case TOKEN_SYM2('+', '='):
+        case TOKEN_SYM2('-', '='):
+        case TOKEN_SYM2('/', '='):
+        case TOKEN_SYM2('&', '='):
+        case TOKEN_SYM2('|', '='):
+        case TOKEN_SYM2('^', '='):
+        case TOKEN_SYM2('*', '='):
+        case TOKEN_SYM3('<', '<', '='):
+        case TOKEN_SYM3('>', '>', '='):
+        case TOKEN_SYM1('='):
+        case TOKEN_SYM1('['):
+            UNWRAP(be_compile_lvalue_ExprBinOp(be, e, out));
+            UNWRAP(be_dereference(be, out, e->sizing));
+            break;
+        case TOKEN_SYM1(','):
+            UNWRAP(be_compile_expr(be, e->rhs, &tace.arg2));
+            UNWRAP(be_compile_expr(be, e->lhs, out));
+            break;
+        case TOKEN_SYM1('?'):
         {
-            case LEX_UUVA_END: *out = s_taca_void; break;
-            case LEX_SIZEOF: *out = taca_imm(e->size); break;
-            case TOKEN_SYM2('-', '-'): tace.op = TACO_SUB; goto prepost_inc;
-            case TOKEN_SYM2('+', '+'):
-                tace.op = TACO_ADD;
-            prepost_inc:
-                tace.arg2 = taca_imm(1);
-                UNWRAP(be_compile_expr(be, e->lhs, &tace.arg1));
-                tace.arg2 = be_push_tace(be, &tace);
-                tace.op = TACO_ASSIGN;
-                if (e->size)
-                {
-                    // postincrement
-                    be_push_tace(be, &tace);
-                    *out = tace.arg1;
-                }
-                else
-                {
-                    // preincrement
-                    *out = be_push_tace(be, &tace);
-                }
-                break;
-            case TOKEN_SYM1('!'):
-                tace.op = TACO_EQ;
-                UNWRAP(be_compile_expr(be, e->lhs, &tace.arg1));
-                tace.arg2.kind = TACA_IMM;
-                tace.arg2.imm = 0;
-                *out = be_push_tace(be, &tace);
-                break;
-            case TOKEN_SYM1('-'):
-                tace.op = TACO_SUB;
-                tace.arg1 = taca_imm(0);
-                UNWRAP(be_compile_expr(be, e->lhs, &tace.arg2));
-                *out = be_push_tace(be, &tace);
-                break;
-            case TOKEN_SYM1('~'):
-                tace.op = TACO_BNOT;
-                UNWRAP(be_compile_expr(be, e->lhs, &tace.arg1));
-                *out = be_push_tace(be, &tace);
-                break;
-            case TOKEN_SYM1('*'):
-                UNWRAP(be_compile_expr(be, e->lhs, out));
-                UNWRAP(be_dereference(be, out));
-                break;
-            case TOKEN_SYM1('&'): UNWRAP(be_compile_lvalue(be, e->lhs, out)); break;
-            default:
-                UNWRAP(parser_tok_error(
-                    e->tok, "error: unary operation not yet implemented: %s\n", token_str(be->parser, e->tok)));
-                break;
+            if (e->rhs->kind != EXPR_BINOP) abort();
+            struct ExprBinOp* rhs = (struct ExprBinOp*)e->rhs;
+            UNWRAP(be_compile_expr(be, e->lhs, &tace.arg1));
+            size_t on_false = ++be->next_label;
+            size_t end = ++be->next_label;
+            tace.op = TACO_BRZ;
+            tace.arg2.kind = TACA_ALABEL;
+            tace.arg2.alabel = on_false;
+            be_push_tace(be, &tace, 0);
+            UNWRAP(be_compile_expr(be, rhs->lhs, &tace.arg1));
+            be_push_jump(be, end);
+            be_push_label(be, on_false);
+            UNWRAP(be_compile_expr(be, rhs->rhs, &tace.arg2));
+            be_push_label(be, end);
+            tace.op = TACO_PHI;
+            *out = be_push_tace(be, &tace, e->sizing);
+            break;
         }
+        case TOKEN_SYM2('|', '|'):
+        case TOKEN_SYM2('&', '&'):
+        {
+            UNWRAP(be_compile_expr(be, e->lhs, &tace.arg1));
+            size_t on_false = ++be->next_label;
+            tace.op = e->tok->type == TOKEN_SYM2('&', '&') ? TACO_BRZ : TACO_BRNZ;
+            tace.arg2.kind = TACA_ALABEL;
+            tace.arg2.alabel = on_false;
+            be_push_tace(be, &tace, 0);
+            struct TACEntry logical = {
+                .op = TACO_NEQ,
+                .arg2 = taca_imm(0),
+            };
+            UNWRAP(be_compile_expr(be, e->rhs, &logical.arg1));
+            tace.arg2 = be_push_tace(be, &logical, e->sizing);
+            be_push_label(be, on_false);
+            tace.op = TACO_PHI;
+            *out = be_push_tace(be, &tace, e->sizing);
+            break;
+        }
+        default:
+            UNWRAP(parser_tok_error(
+                e->tok, "error: binary operation not yet implemented: %s\n", token_str(be->parser, e->tok)));
+            break;
     }
     goto fail;
 
 swapped_binary:
     UNWRAP(be_compile_expr(be, e->rhs, &tace.arg1));
     UNWRAP(be_compile_expr(be, e->lhs, &tace.arg2));
-    *out = be_push_tace(be, &tace);
+    *out = be_push_tace(be, &tace, e->sizing);
     goto fail;
 
 basic_binary:
     UNWRAP(be_compile_expr(be, e->rhs, &tace.arg2));
     UNWRAP(be_compile_expr(be, e->lhs, &tace.arg1));
-    *out = be_push_tace(be, &tace);
+    *out = be_push_tace(be, &tace, e->sizing);
     goto fail;
-
-binary_op_assign:
-    UNWRAP(be_compile_expr(be, e->rhs, &tace.arg2));
-    UNWRAP(be_compile_expr(be, e->lhs, &tace.arg1));
-    tace.arg2 = be_push_tace(be, &tace);
-    tace.op = TACO_ASSIGN;
-    *out = be_push_tace(be, &tace);
 
 fail:
     return rc;
@@ -714,7 +859,7 @@ static int be_compile_StmtContinue(struct BackEnd* be, struct StmtContinue* stmt
             },
         .rc = &stmt->tok->rc,
     };
-    be_push_tace(be, &entry);
+    be_push_tace(be, &entry, 0);
     return 0;
 }
 
@@ -729,7 +874,7 @@ static int be_compile_StmtBreak(struct BackEnd* be, struct StmtBreak* stmt)
             },
         .rc = &stmt->tok->rc,
     };
-    be_push_tace(be, &entry);
+    be_push_tace(be, &entry, 0);
     return 0;
 }
 
@@ -740,7 +885,7 @@ static int be_compile_StmtLabel(struct BackEnd* be, struct StmtLabel* stmt)
         .arg1 = taca_llabel(token_str(be->parser, stmt->tok)),
         .rc = &stmt->tok->rc,
     };
-    be_push_tace(be, &entry);
+    be_push_tace(be, &entry, 0);
     return be_compile_stmt(be, stmt->stmt);
 }
 
@@ -751,7 +896,7 @@ static int be_compile_StmtGoto(struct BackEnd* be, struct StmtGoto* stmt)
         .arg1 = taca_llabel(token_str(be->parser, stmt->dst)),
         .rc = &stmt->dst->rc,
     };
-    be_push_tace(be, &entry);
+    be_push_tace(be, &entry, 0);
     return 0;
 }
 
@@ -767,13 +912,13 @@ static int be_compile_StmtCase(struct BackEnd* be, struct StmtCase* stmt)
     {
         struct SwitchCase* c = array_alloc(&be->switch_cases, sizeof(struct SwitchCase));
         c->imm = stmt->value;
-        c->label = be->next_label++;
+        c->label = ++be->next_label;
         be_push_label(be, c->label);
     }
     else
     {
         // default
-        be->default_label = be->next_label++;
+        be->default_label = ++be->next_label;
         be_push_label(be, be->default_label);
     }
     return 0;
@@ -785,9 +930,9 @@ static int be_compile_StmtSwitch(struct BackEnd* be, struct StmtSwitch* stmt)
     int start_frame_size = be->frame_size;
     size_t prev_break = be->break_label;
     size_t switch_case_offset = array_size(&be->switch_cases, sizeof(struct SwitchCase));
-    be->break_label = be->next_label++;
+    be->break_label = ++be->next_label;
     be->default_label = be->break_label;
-    size_t jump_table = be->next_label++;
+    size_t jump_table = ++be->next_label;
     be_push_jump(be, jump_table);
 
     UNWRAP(be_compile_stmts(be, stmt->offset, stmt->extent));
@@ -795,11 +940,11 @@ static int be_compile_StmtSwitch(struct BackEnd* be, struct StmtSwitch* stmt)
     be_push_label(be, jump_table);
     struct TACEntry load = {
         .op = TACO_ASSIGN,
-        .arg1 = {.kind = TACA_TEMP},
+        .arg1 = {.kind = TACA_TEMP, .sizing = 8},
         .rc = &stmt->tok->rc,
     };
     UNWRAP(be_compile_expr(be, stmt->expr, &load.arg2));
-    be_push_tace(be, &load);
+    be_push_tace(be, &load, 0);
     struct SwitchCase* cases = be->switch_cases.data;
     for (size_t i = switch_case_offset; i < array_size(&be->switch_cases, sizeof(struct SwitchCase)); ++i)
     {
@@ -808,7 +953,7 @@ static int be_compile_StmtSwitch(struct BackEnd* be, struct StmtSwitch* stmt)
             .arg1 = taca_imm(cases[i].imm),
             .arg2 = taca_alabel(cases[i].label),
         };
-        be_push_tace(be, &_case);
+        be_push_tace(be, &_case, 0);
     }
     be_push_jump(be, be->default_label);
     be_push_label(be, be->break_label);
@@ -823,6 +968,7 @@ fail:
 static int be_compile_StmtReturn(struct BackEnd* be, struct StmtReturn* stmt)
 {
     int rc = 0;
+    int start_frame_size = be->frame_size;
     struct TACEntry entry = {
         .op = TACO_RETURN,
         .rc = &stmt->tok->rc,
@@ -831,26 +977,29 @@ static int be_compile_StmtReturn(struct BackEnd* be, struct StmtReturn* stmt)
     {
         UNWRAP(be_compile_expr(be, stmt->expr, &entry.arg1));
     }
-    be_push_tace(be, &entry);
+    be_push_tace(be, &entry, 0);
 fail:
+    be->frame_size = start_frame_size;
     return rc;
 }
 
 static int be_compile_StmtIf(struct BackEnd* be, struct StmtIf* stmt)
 {
     int rc = 0;
-    size_t else_lbl = be->next_label++;
+    int start_frame_size = be->frame_size;
+    size_t else_lbl = ++be->next_label;
     struct TACEntry e = {
         .op = TACO_BRZ,
         .arg2 = {.kind = TACA_ALABEL, .alabel = else_lbl},
     };
     UNWRAP(be_compile_expr(be, stmt->cond, &e.arg1));
-    be_push_tace(be, &e);
+    be_push_tace(be, &e, 0);
+    be->frame_size = start_frame_size;
     UNWRAP(be_compile_stmt(be, stmt->if_body));
 
     if (stmt->else_body)
     {
-        size_t end_lbl = be->next_label++;
+        size_t end_lbl = ++be->next_label;
         be_push_jump(be, end_lbl);
         be_push_label(be, else_lbl);
         UNWRAP(be_compile_stmt(be, stmt->else_body));
@@ -870,14 +1019,10 @@ static int be_compile_StmtLoop(struct BackEnd* be, struct StmtLoop* stmt)
     int rc = 0;
     size_t prev_continue_label = be->continue_label;
     size_t prev_break_label = be->break_label;
-    be->continue_label = be->next_label++;
-    size_t first_lbl = be->next_label++;
-    be->break_label = be->next_label++;
+    be->continue_label = ++be->next_label;
+    size_t first_lbl = ++be->next_label;
+    be->break_label = ++be->next_label;
 
-    // struct CompoundBlock new_cb;
-    // cb_init(&new_cb, bb, p);
-    // new_cb.break_label = break_lbl.buf;
-    // new_cb.continue_label = continue_lbl.buf;
     if (stmt->init)
     {
         UNWRAP(be_compile_stmt(be, stmt->init));
@@ -890,7 +1035,7 @@ static int be_compile_StmtLoop(struct BackEnd* be, struct StmtLoop* stmt)
 
     if (stmt->advance)
     {
-        UNWRAP(be_compile_stmt(be, stmt->advance));
+        UNWRAP(be_compile_stmt(be, &stmt->advance->ast));
     }
 
     if (!stmt->is_do_while)
@@ -899,12 +1044,14 @@ static int be_compile_StmtLoop(struct BackEnd* be, struct StmtLoop* stmt)
     }
     if (stmt->cond)
     {
+        int start_frame_size = be->frame_size;
         struct TACEntry brz = {
             .op = TACO_BRZ,
             .arg2 = {.kind = TACA_ALABEL, .alabel = be->break_label},
         };
         UNWRAP(be_compile_expr(be, stmt->cond, &brz.arg1));
-        be_push_tace(be, &brz);
+        be_push_tace(be, &brz, 0);
+        be->frame_size = start_frame_size;
     }
     if (stmt->is_do_while)
     {
@@ -925,17 +1072,17 @@ static int be_compile_Decl(struct BackEnd* be, struct Decl* decl)
     if (!decl->type) return 0;
 
     int rc = 0;
-    decl->frame_offset = be->frame_size;
-    be->frame_size += 8;
+    decl->frame_offset = round_to_alignment(be->frame_size, decl->align);
+    be->frame_size = decl->frame_offset + decl->size;
+    if (decl->size == 0) abort();
     be->max_frame_size = be->max_frame_size < be->frame_size ? be->frame_size : be->max_frame_size;
 
     if (decl->init)
     {
-        struct TACAddress obj = {
-            .kind = TACA_FRAME,
-            .frame_offset = decl->frame_offset,
-        };
-        UNWRAP(be_compile_expr_store(be, decl->init, obj));
+        struct Ast* init = decl->init;
+        int start_frame_size = be->frame_size;
+        UNWRAP(be_compile_init(be, init, decl->frame_offset, decl->size));
+        be->frame_size = start_frame_size;
     }
 fail:
     return rc;
@@ -966,7 +1113,10 @@ static int be_compile_ExprField(struct BackEnd* be, struct ExprField* e, struct 
 {
     int rc = 0;
     UNWRAP(be_compile_lvalue_ExprField(be, e, out));
-    UNWRAP(be_dereference(be, out));
+    if (!is_decl_array_or_function(e->decl))
+    {
+        UNWRAP(be_dereference(be, out, e->sizing));
+    }
 
 fail:
     return rc;
@@ -993,13 +1143,13 @@ static int be_compile_lvalue(struct BackEnd* be, struct Expr* e, struct TACAddre
         DISPATCH(EXPR_CAST, ExprCast);
         DISPATCH(EXPR_CALL, ExprCall);
         DISPATCH(EXPR_LIT, ExprLit);
-        DISPATCH(EXPR_OP, ExprOp);
+        DISPATCH(EXPR_BINOP, ExprBinOp);
+        DISPATCH(EXPR_UNOP, ExprUnOp);
+        DISPATCH(EXPR_BUILTIN, ExprBuiltin);
         case STMT_NONE: *out = s_taca_void; return 0;
         default:
-            parser_ferror(expr_to_rc(e),
-                          "error: be_compile_lvalue unhandled expr: %s (%d)\n",
-                          ast_kind_to_string(e->kind),
-                          e->kind);
+            parser_tok_error(
+                e->tok, "error: be_compile_lvalue unhandled expr: %s (%d)\n", ast_kind_to_string(e->kind), e->kind);
             return 1;
     }
     return 0;
@@ -1016,21 +1166,21 @@ static int be_compile_expr(struct BackEnd* be, struct Expr* e, struct TACAddress
         DISPATCH(EXPR_SYM, ExprSym);
         DISPATCH(EXPR_CALL, ExprCall);
         DISPATCH(EXPR_LIT, ExprLit);
-        DISPATCH(EXPR_OP, ExprOp);
+        DISPATCH(EXPR_BINOP, ExprBinOp);
+        DISPATCH(EXPR_UNOP, ExprUnOp);
+        DISPATCH(EXPR_BUILTIN, ExprBuiltin);
         DISPATCH(EXPR_CAST, ExprCast);
         DISPATCH(EXPR_FIELD, ExprField);
         default:
-            parser_ferror(expr_to_rc(e),
-                          "error: be_compile_expr unhandled expr: %s (%d)\n",
-                          ast_kind_to_string(e->kind),
-                          e->kind);
+            parser_tok_error(
+                e->tok, "error: be_compile_expr unhandled expr: %s (%d)\n", ast_kind_to_string(e->kind), e->kind);
             return 1;
     }
     return 0;
 #undef DISPATCH
 }
 
-static int be_compile_stmt(struct BackEnd* be, struct Expr* e)
+static int be_compile_stmt(struct BackEnd* be, struct Ast* e)
 {
 #define DISPATCH(ENUM, TYPE)                                                                                           \
     case ENUM: return be_compile_##TYPE(be, (struct TYPE*)e);
@@ -1052,8 +1202,17 @@ static int be_compile_stmt(struct BackEnd* be, struct Expr* e)
         case STMT_NONE: return 0;
         default:
         {
-            struct TACAddress _;
-            return be_compile_expr(be, e, &_);
+            if (ast_kind_is_expr(e->kind))
+            {
+                struct TACAddress _;
+                return be_compile_expr(be, (struct Expr*)e, &_);
+            }
+            else
+            {
+                parser_tok_error(
+                    e->tok, "error: be_compile_stmt unhandled stmt: %s (%d)\n", ast_kind_to_string(e->kind), e->kind);
+                return 1;
+            }
         }
     }
 #undef DISPATCH
@@ -1089,22 +1248,21 @@ int be_compile(struct BackEnd* be)
     int rc = 0;
 
     // then compile all functions
-    struct Expr* const* const expr_seqs = be->parser->expr_seqs.data;
-    struct Decl* const* const decl_seqs = be->parser->expr_seqs.data;
-    struct Expr* const* const exprs_data = be->parser->arr_exprs.data;
-    const size_t num_exprs = array_size(&be->parser->arr_exprs, sizeof(struct Expr*));
-    for (size_t i = 0; i < num_exprs; ++i)
+    struct Ast* const* const ast_seqs = be->parser->expr_seqs.data;
+    struct StmtBlock* const top = be->parser->top;
+
+    for (size_t i = 0; i < top->extent; ++i)
     {
-        struct Expr* expr = exprs_data[i];
-        if (expr->kind != STMT_DECLS) abort();
-        struct StmtDecls decls = *(struct StmtDecls*)expr;
-        for (size_t j = 0; j < decls.extent; ++j)
+        if (ast_seqs[top->offset + i]->kind != STMT_DECLS) abort();
+
+        struct StmtDecls* decls = (struct StmtDecls*)ast_seqs[top->offset + i];
+        if (decls->specs->is_typedef) continue;
+        for (size_t j = 0; j < decls->extent; ++j)
         {
-            if (expr_seqs[decls.offset + j]->kind != AST_DECL) abort();
-            struct Decl* decl = decl_seqs[decls.offset + j];
-            // skip struct definitions
-            if (!decl->type || decl->specs->is_typedef) continue;
-            if ((decl->type->kind == AST_DECLFN && !decl_get_def(decl)->init) || decl_get_def(decl)->specs->is_extern)
+            if (ast_seqs[decls->offset + j]->kind != AST_DECL) abort();
+            struct Decl* decl = (struct Decl*)ast_seqs[decls->offset + j];
+            struct Decl* def = decl->def ? decl->def : decl;
+            if ((decl->type->kind == AST_DECLFN && !def->init) || def->specs->is_extern)
             {
                 cg_declare_extern(be->cg, decl->name);
             }
@@ -1131,7 +1289,14 @@ int be_compile(struct BackEnd* be)
                     {
                         entry.arg1.kind = TACA_ARG;
                         entry.arg1.arg_idx = i;
-                        be_push_tace(be, &entry);
+                        if (i < declfn->extent)
+                            entry.arg1.sizing =
+                                ((struct ParamConversion*)be->elab->param_conversions.data + declfn->offset + i)
+                                    ->sizing;
+                        else
+                            entry.arg1.sizing = 8;
+                        if (entry.arg1.sizing > 8 || entry.arg1.sizing < -8 || entry.arg1.sizing == 0) abort();
+                        be_push_tace(be, &entry, 0);
                     }
 
                     if (declfn->is_varargs)

@@ -4,7 +4,7 @@
 
 void* autoheap_alloc(struct AutoHeap* heap, size_t alloc_size)
 {
-    void* const p = my_malloc(alloc_size);
+    void* const p = alloc_size ? my_malloc(alloc_size) : 0;
     array_push_ptr(&heap->arr, p);
     return p;
 }

@@ -39,6 +39,26 @@
             "externalConsole": false,
             "MIMode": "lldb",
             "setupCommands": []
+        },
+        {
+            "name": "(gdb) main",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceRoot}/out/main",
+            "args": [
+                "../lib/be.c",
+                "-I",
+                "../lib",
+                "-c",
+                "-o",
+                "be.asm"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/out",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "lldb",
+            "setupCommands": []
         }
     ]
 }

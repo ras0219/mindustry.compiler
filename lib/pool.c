@@ -35,6 +35,12 @@ void* pool_alloc(struct Pool* p, size_t sz)
     p->data = (void**)my_realloc(p->data, p->sz_buckets * sizeof(void*));
     return p->data[p->sz_buckets - 1] = my_malloc((4 << p->sz_buckets) * sz);
 }
+void* pool_alloc_zeroes(struct Pool* p, size_t sz)
+{
+    void* r = pool_alloc(p, sz);
+    memset(r, 0, sz);
+    return r;
+}
 void* pool_push(struct Pool* p, const void* src, size_t sz)
 {
     void* r = pool_alloc(p, sz);

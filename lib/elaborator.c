@@ -16,96 +16,7 @@
 #include "typestr.h"
 #include "unwrap.h"
 
-//#define X_TYPE_KIND_POOL(Y) Y(TYPE_DECL, TypeDecl) Y(TYPE_CVR, TypeCVR) Y(TYPE_PTR, TypePtr) Y(TYPE_ARR, TypeArr)
-//#define X_TYPE_KIND(Y) X_TYPE_KIND_POOL(Y) Y(TYPE_BASIC, TypeBasic)
-//#define Y_COMMA(E, T) E,
-// enum TypeKind
-//{
-//    X_TYPE_KIND(Y_COMMA)
-//};
-//#undef Y_COMMA
-//#define Y_COUNT(E, T) +1
-// enum
-//{
-//    TYPE_KIND_POOL_COUNT = X_TYPE_KIND_POOL(Y_COUNT),
-//};
-//#undef Y_COUNT
-//
-// struct TypeStorage
-//{
-//    struct PoolSet type_pool[TYPE_KIND_POOL_COUNT];
-//};
-//
-// struct TypeBasic
-//{
-//    uintptr_t kind;
-//    uintptr_t basic_type;
-//};
-
-// static const struct Expr s_expr_int_singleton = {.kind = TYPE_BUILTIN_INT};
-// static const struct TypeStr s_type_literal_int = {.expr = &s_expr_int_singleton};
-// static const struct Expr s_expr_char_singleton = {.kind = TYPE_BUILTIN_CHAR};
-// static const struct TypeStr s_type_literal_char = {.expr = &s_expr_char_singleton};
-// static const struct TypeStr s_type_literal_cstr = {.expr = &s_expr_char_singleton, .is_pointer = 1, .is_temporary =
-// 1};
-
 static const struct TypeStr s_type_unknown = {};
-
-#if 0
-static struct TypeStr declspecs_to_type(struct Parser* p, struct DeclSpecs* specs)
-{
-    struct TypeStr ty;
-    if (specs->type->type == LEX_INT)
-    {
-        ty = s_type_int;
-    }
-    else if (specs->type->type == LEX_LONG)
-    {
-        ty = s_type_long;
-    }
-    else if (specs->type->type == LEX_SHORT)
-    {
-        ty = s_type_short;
-    }
-    else if (specs->type->type == LEX_CHAR)
-    {
-        ty = s_type_char;
-    }
-    else if (specs->type->type == LEX_VOID)
-    {
-        ty = s_type_void;
-    }
-    else if (specs->type->type == LEX_MSTRING)
-    {
-        ty = s_type_mstr;
-    }
-    else if (specs->type->type == LEX_UNIT)
-    {
-        ty = s_type_unit;
-    }
-    else if (specs->type->type == LEX_STRUCT)
-    {
-        const char* str = token_str(p, specs->type + 1);
-        size_t len = strlen(str);
-        if (len + 2 > sizeof(ty.buf))
-        {
-            parser_ferror(&specs->type[1].rc, "error: struct name too long\n");
-            return s_type_unknown;
-        }
-        ty.used = len + 2;
-        ty.buf[0] = '$';
-        memcpy(ty.buf + 1, str, len);
-        ty.buf[len + 1] = '$';
-    }
-    else
-    {
-        parser_ferror(&specs->type->rc, "error: unknown type\n");
-        return s_type_unknown;
-    }
-    if (specs->is_const) typestr_add_const(&ty);
-    return ty;
-}
-#endif
 
 struct TypeTable
 {
@@ -115,9 +26,9 @@ struct TypeTable
     struct Array fn_args;
 };
 
-static __forceinline struct Decl** tt_get_decl(const struct TypeTable* tt, size_t i)
+static __forceinline struct DeclSpecs** tt_get_def(const struct TypeTable* tt, size_t i)
 {
-    return ((struct Decl**)tt->decls.data) + i;
+    return ((struct DeclSpecs**)tt->decls.data) + i;
 }
 
 static size_t findstr(const char* str, const char* const* heap, size_t heap_size)
@@ -125,9 +36,17 @@ static size_t findstr(const char* str, const char* const* heap, size_t heap_size
     size_t i = 0;
     for (; i < heap_size; ++i)
     {
-        if (strcmp(str, heap[i]) == 0) break;
+        if (heap[i] && strcmp(str, heap[i]) == 0) break;
     }
     return i;
+}
+
+static __forceinline size_t tt_insert_null(struct TypeTable* tt)
+{
+    const size_t n = array_size(&tt->typenames.arr, sizeof(const char*));
+    autoheap_alloc(&tt->typenames, 0);
+    array_push_ptr(&tt->decls, NULL);
+    return n;
 }
 
 static __forceinline size_t tt_find_insert_null(struct TypeTable* tt, const char* str)
@@ -159,12 +78,12 @@ static int32_t eval_constant(struct Elaborator* elab, struct Expr* e)
             {
                 if (lit->numeric > INT32_MAX)
                 {
-                    parser_ferror(expr_to_rc(e), "error: integer constant exceeded INT32_MAX: %llu\n", lit->numeric);
+                    parser_tok_error(e->tok, "error: integer constant exceeded INT32_MAX: %llu\n", lit->numeric);
                     return 0;
                 }
                 return lit->numeric;
             }
-            parser_ferror(expr_to_rc(e), "error: expected integer constant literal\n");
+            parser_tok_error(e->tok, "error: expected integer constant literal\n");
             return 0;
         }
         case EXPR_SYM:
@@ -177,67 +96,80 @@ static int32_t eval_constant(struct Elaborator* elab, struct Expr* e)
             parser_tok_error(sym->tok, "error: expected integer constant expression\n");
             return 0;
         }
-        case EXPR_OP:
+        case EXPR_BINOP:
         {
-            struct ExprOp* op = (struct ExprOp*)e;
+            struct ExprBinOp* op = (struct ExprBinOp*)e;
             int32_t l = eval_constant(elab, op->lhs);
-            if (op->rhs)
+            int32_t r = eval_constant(elab, op->rhs);
+            switch (op->tok->type)
             {
-                int32_t r = eval_constant(elab, op->rhs);
-                switch (op->tok->type)
+                case TOKEN_SYM1('*'):
                 {
-                    case TOKEN_SYM1('*'):
-                    {
-                        int64_t p = (int64_t)l * (int64_t)r;
-                        if (p > INT32_MAX || p < INT32_MIN)
-                            return parser_tok_error(op->tok, "error: integer constant exceeded INT32_MAX\n"), 0;
-                        return (int32_t)p;
-                    }
-                    case TOKEN_SYM1('|'):
-                    {
-                        int64_t p = (int64_t)l | (int64_t)r;
-                        if (p > INT32_MAX || p < INT32_MIN)
-                            return parser_tok_error(op->tok, "error: integer constant exceeded INT32_MAX\n"), 0;
-                        return (int32_t)p;
-                    }
-                    case TOKEN_SYM1('-'):
-                    {
-                        int64_t p = (int64_t)l - (int64_t)r;
-                        if (p > INT32_MAX || p < INT32_MIN)
-                            return parser_tok_error(op->tok, "error: integer constant exceeded INT32_MAX\n"), 0;
-                        return (int32_t)p;
-                    }
-                    case TOKEN_SYM1('+'):
-                    {
-                        int64_t p = (int64_t)l + (int64_t)r;
-                        if (p > INT32_MAX || p < INT32_MIN)
-                            return parser_tok_error(op->tok, "error: integer constant exceeded INT32_MAX\n"), 0;
-                        return (int32_t)p;
-                    }
-                    default: break;
+                    int64_t p = (int64_t)l * (int64_t)r;
+                    if (p > INT32_MAX || p < INT32_MIN)
+                        return parser_tok_error(op->tok, "error: integer constant exceeded INT32_MAX\n"), 0;
+                    return (int32_t)p;
                 }
-            }
-            else
-            {
-                switch (op->tok->type)
+                case TOKEN_SYM1('|'):
                 {
-                    case TOKEN_SYM1('+'): return l;
-                    default: break;
+                    int64_t p = (int64_t)l | (int64_t)r;
+                    if (p > INT32_MAX || p < INT32_MIN)
+                        return parser_tok_error(op->tok, "error: integer constant exceeded INT32_MAX\n"), 0;
+                    return (int32_t)p;
                 }
+                case TOKEN_SYM1('-'):
+                {
+                    int64_t p = (int64_t)l - (int64_t)r;
+                    if (p > INT32_MAX || p < INT32_MIN)
+                        return parser_tok_error(op->tok, "error: integer constant exceeded INT32_MAX\n"), 0;
+                    return (int32_t)p;
+                }
+                case TOKEN_SYM1('+'):
+                {
+                    int64_t p = (int64_t)l + (int64_t)r;
+                    if (p > INT32_MAX || p < INT32_MIN)
+                        return parser_tok_error(op->tok, "error: integer constant exceeded INT32_MAX\n"), 0;
+                    return (int32_t)p;
+                }
+                case TOKEN_SYM2('<', '<'):
+                {
+                    if (r < 0 || r > 32)
+                        return parser_tok_error(op->tok, "error: right hand side of '<<' was invalid: %d\n", r), 0;
+                    int64_t p = (int64_t)l << r;
+                    if (p > INT32_MAX || p < INT32_MIN)
+                        return parser_tok_error(op->tok, "error: integer constant exceeded INT32_MAX\n"), 0;
+                    return (int32_t)p;
+                }
+                default: break;
             }
             parser_tok_error(
                 op->tok, "error: unimplemented op '%s' in integer constant expression\n", token_str(elab->p, op->tok));
             return 0;
         }
-
+        case EXPR_UNOP:
+        {
+            struct ExprUnOp* expr = (void*)e;
+            if (expr->tok->type == TOKEN_SYM1('-'))
+            {
+                return -eval_constant(elab, expr->lhs);
+            }
+            else if (expr->tok->type == TOKEN_SYM1('+'))
+            {
+                return eval_constant(elab, expr->lhs);
+            }
+            parser_tok_error(e->tok,
+                             "error: unimplemented unary op for integer constant expression (%s)\n",
+                             token_str(elab->p, e->tok));
+            return 0;
+        }
         case EXPR_CAST:
         {
             struct ExprCast* expr = (void*)e;
             return eval_constant(elab, expr->expr);
         }
         default:
-            parser_ferror(
-                expr_to_rc(e), "error: expected integer constant expression (not %s)\n", ast_kind_to_string(e->kind));
+            parser_tok_error(
+                e->tok, "error: expected integer constant expression (not %s)\n", ast_kind_to_string(e->kind));
             return 0;
     }
 }
@@ -250,7 +182,7 @@ static int get_primitive_declspec_size(struct DeclSpecs* d)
 
     switch (d->tok->type)
     {
-        case LEX_VOID: parser_tok_error(d->tok, "error: cannot size field of type void\n"); return 1;
+        case LEX_VOID: return 0;
         case LEX_FLOAT:
         case LEX_SIGNED:
         case LEX_UNSIGNED:
@@ -264,90 +196,74 @@ static int get_primitive_declspec_size(struct DeclSpecs* d)
     }
 }
 
-static int get_decl_align(struct Elaborator* elab, struct Expr* e)
+static int get_decl_align(struct Elaborator* elab, struct Ast* e)
 {
+top:
     switch (e->kind)
     {
-        case AST_DECL: return ((struct Decl*)e)->align;
+        case AST_DECL: e = ((struct Decl*)e)->type; goto top;
         case AST_DECLPTR: return 8;
         case AST_DECLFN: return 1;
-        case AST_DECLARR: return get_decl_align(elab, ((struct DeclArr*)e)->type);
-        case AST_DECLSPEC:
-        {
-            struct DeclSpecs* d = (struct DeclSpecs*)e;
-            if (d->type)
-            {
-                return d->type->align;
-            }
-            else if (d->name)
-            {
-                uint32_t offset = tt_find_insert_null(elab->types, d->name);
-                struct Decl* const inner_decl = *tt_get_decl(elab->types, offset);
-                if (!inner_decl)
-                {
-                    parser_tok_error(d->tok, "error: '%s' was incomplete while getting alignment\n", d->name);
-                    return 1;
-                }
-                return inner_decl->align;
-            }
-            else if (d->tok->type == LEX_UUVALIST)
-            {
-                return 8;
-            }
+        case AST_DECLARR: e = ((struct DeclArr*)e)->type; goto top;
+        case AST_DECLSPEC: return ((struct DeclSpecs*)e)->align;
+        // {
+        //     struct DeclSpecs* d = ;
+        //     if (d->type)
+        //     {
+        //         e = &d->type->ast;
+        //         goto top;
+        //     }
+        //     else if (d->name)
+        //     {
+        //         uint32_t offset = tt_find_insert_null(elab->types, d->name);
+        //         struct TypeDef* const inner_decl = *tt_get_def(elab->types, offset);
+        //         if (!inner_decl)
+        //         {
+        //             parser_tok_error(d->tok, "error: '%s' was incomplete while getting alignment\n", d->name);
+        //             return 1;
+        //         }
+        //         return inner_decl->align;
+        //     }
+        //     else if (d->tok->type == LEX_UUVALIST)
+        //     {
+        //         return 8;
+        //     }
 
-            return get_primitive_declspec_size(d);
-        }
-        default: parser_ferror(expr_to_rc(e), "error: cannot calculate align of typeexpr\n"); return 1;
+        //     return get_primitive_declspec_size(d);
+        // }
+        default: parser_tok_error(e->tok, "error: cannot calculate align of typeexpr\n"); return 1;
     }
 }
 
-static int get_decl_size(struct Elaborator* elab, struct Expr* e)
+static int get_decl_size(struct Elaborator* elab, struct Ast* e)
 {
+top:
     switch (e->kind)
     {
-        case AST_DECL: return ((struct Decl*)e)->size;
+        case AST_DECL: e = ((struct Decl*)e)->type; goto top;
         case AST_DECLPTR: return 8;
-        case AST_DECLFN: return 0;
+        case AST_DECLFN: return 1;
         case AST_DECLARR:
         {
             struct DeclArr* d = (struct DeclArr*)e;
             int base = get_decl_size(elab, d->type);
-            if (!d->arity)
-            {
-                return 1;
-            }
-            long long numeric_arity = eval_constant(elab, d->arity);
-            if (numeric_arity > 0) d->integer_arity = numeric_arity;
-            if (numeric_arity >= 0 && numeric_arity < 0x7FFFFFFF) numeric_arity *= base;
-            if (numeric_arity < 0 || numeric_arity > 0x7FFFFFFF)
-            {
-                parser_tok_error(d->tok, "error: array arity must be between 1 and INT_MAX\n");
-                return 1;
-            }
-            return numeric_arity;
+            return d->integer_arity * base;
         }
         case AST_DECLSPEC:
         {
-            struct DeclSpecs* d = (struct DeclSpecs*)e;
-            if (d->type)
+            struct DeclSpecs* d = (void*)e;
+            if (d->_typedef)
             {
-                return get_decl_size(elab, &d->type->kind);
+                e = &d->_typedef->ast;
+                goto top;
             }
-            else if (d->name)
+            if (d->def)
             {
-                uint32_t offset = tt_find_insert_null(elab->types, d->name);
-                struct Decl* const inner_decl = *tt_get_decl(elab->types, offset);
-                if (!inner_decl)
-                {
-                    parser_tok_error(d->tok, "error: '%s' was incomplete while getting size\n", d->name);
-                    return 1;
-                }
-                return get_decl_size(elab, &inner_decl->kind);
+                return d->def->size;
             }
-
-            return get_primitive_declspec_size(d);
+            return d->size;
         }
-        default: parser_ferror(expr_to_rc(e), "error: cannot calculate size of decl\n"); return 1;
+        default: parser_tok_error(e->tok, "error: cannot calculate size of decl\n"); return 1;
     }
 }
 
@@ -379,6 +295,7 @@ static int get_decl_size(struct Elaborator* elab, struct Expr* e)
     Y(TYPE_BYTE_UNION, 'u')                                                                                            \
     Y(TYPE_BYTE_ENUM, 'e')                                                                                             \
     Y(TYPE_BYTE_POINTER, 'p')                                                                                          \
+    Y(TYPE_BYTE_ARRAY, '[')                                                                                            \
     Y(TYPE_BYTE_FUNCTION, '(')
 
 #define Y_COMMA(E, CH) E = CH,
@@ -388,9 +305,10 @@ enum
 };
 #undef Y_COMMA
 
+static const struct TypeStr s_type_void = {.buf = {1, TYPE_BYTE_VOID}};
 static const struct TypeStr s_type_literal_int = {.buf = {1, TYPE_BYTE_INT}};
 static const struct TypeStr s_type_literal_char = {.buf = {2, TYPE_BYTE_CHAR, 'c'}};
-static const struct TypeStr s_type_void = {.buf = {1, TYPE_BYTE_VOID}};
+// static const struct TypeStr s_type_void = {.buf = {1, TYPE_BYTE_VOID}};
 
 __forceinline static uint32_t typestr_get_offset_i(const struct TypeStr* ts, int i)
 {
@@ -406,9 +324,9 @@ __forceinline static uint32_t typestr_get_offset(const struct TypeStr* ts)
     return typestr_get_offset_i(ts, ts->buf[0]);
 }
 
-static void typestr_fmt(const struct TypeTable* tt, const struct TypeStr* ts, struct Array* buf)
+static void typestr_fmt(const struct TypeTable* tt, const struct TypeStr* ts, struct Array* buf);
+static void typestr_fmt_i(const struct TypeTable* tt, const struct TypeStr* ts, size_t i, struct Array* buf)
 {
-    size_t i = ts->buf[0];
     size_t depth = 0;
     const char* str;
     while (1)
@@ -438,7 +356,7 @@ static void typestr_fmt(const struct TypeTable* tt, const struct TypeStr* ts, st
             case 'v': str = "volatile "; goto append_continue;
             case 'r': str = "restrict "; goto append_continue;
             case ']': str = "array of "; goto append_continue;
-            case '[':
+            case TYPE_BYTE_ARRAY:
             {
                 uint32_t u;
                 i -= sizeof(u);
@@ -502,6 +420,11 @@ static void typestr_fmt(const struct TypeTable* tt, const struct TypeStr* ts, st
     }
 }
 
+static void typestr_fmt(const struct TypeTable* tt, const struct TypeStr* ts, struct Array* buf)
+{
+    typestr_fmt_i(tt, ts, ts->buf[0], buf);
+}
+
 static __forceinline int typestr_is_pointer(const struct TypeStr* ts)
 {
     return ts->buf[(int)ts->buf[0]] == TYPE_BYTE_POINTER;
@@ -547,15 +470,16 @@ static void typestr_dereference(struct TypeStr* ts)
 enum
 {
     TYPE_FLAGS_VOID = 1,
-    TYPE_FLAGS_CHAR = 2,
-    TYPE_FLAGS_INT = 4,
-    TYPE_FLAGS_POINTER = 8,
-    TYPE_FLAGS_STRUCT = 16,
-    TYPE_FLAGS_UNION = 32,
-    TYPE_FLAGS_FUNCTION = 64,
-    TYPE_FLAGS_VAR = 128,
-    TYPE_FLAGS_FLOAT = 256,
-    TYPE_FLAGS_ARRAY = 512,
+    TYPE_FLAGS_CHAR = 1 << 1,
+    TYPE_FLAGS_INT = 1 << 2,
+    TYPE_FLAGS_POINTER = 1 << 3,
+    TYPE_FLAGS_STRUCT = 1 << 4,
+    TYPE_FLAGS_UNION = 1 << 5,
+    TYPE_FLAGS_FUNCTION = 1 << 6,
+    TYPE_FLAGS_VAR = 1 << 7,
+    TYPE_FLAGS_FLOAT = 1 << 8,
+    TYPE_FLAGS_ARRAY = 1 << 9,
+    TYPE_FLAGS_SIGNED = 1 << 10,
 
     TYPE_MASK_HAS_FIELDS = TYPE_FLAGS_UNION | TYPE_FLAGS_STRUCT,
     TYPE_MASK_ARITH = TYPE_FLAGS_FLOAT | TYPE_FLAGS_INT,
@@ -574,13 +498,13 @@ unsigned int typestr_mask(const struct TypeStr* ts)
         case TYPE_BYTE_VARIADIC: return TYPE_FLAGS_VAR;
         case TYPE_BYTE_VOID: return TYPE_FLAGS_VOID;
         case TYPE_BYTE_CHAR:
-        case TYPE_BYTE_SCHAR:
+        case TYPE_BYTE_SCHAR: return TYPE_FLAGS_CHAR | TYPE_FLAGS_INT | TYPE_FLAGS_SIGNED;
         case TYPE_BYTE_UCHAR: return TYPE_FLAGS_CHAR | TYPE_FLAGS_INT;
         case TYPE_BYTE_ENUM:
         case TYPE_BYTE_INT:
         case TYPE_BYTE_SHORT:
         case TYPE_BYTE_LONG:
-        case TYPE_BYTE_LLONG:
+        case TYPE_BYTE_LLONG: return TYPE_FLAGS_INT | TYPE_FLAGS_SIGNED;
         case TYPE_BYTE_UINT:
         case TYPE_BYTE_USHORT:
         case TYPE_BYTE_ULONG:
@@ -590,7 +514,7 @@ unsigned int typestr_mask(const struct TypeStr* ts)
         case TYPE_BYTE_LDOUBLE: return TYPE_FLAGS_FLOAT;
         case TYPE_BYTE_POINTER: return TYPE_FLAGS_POINTER;
         case ']':
-        case '[': return TYPE_FLAGS_ARRAY;
+        case TYPE_BYTE_ARRAY: return TYPE_FLAGS_ARRAY;
         case TYPE_BYTE_STRUCT: return TYPE_FLAGS_STRUCT;
         case TYPE_BYTE_UNION: return TYPE_FLAGS_UNION;
         case TYPE_BYTE_FUNCTION: return TYPE_FLAGS_FUNCTION;
@@ -641,12 +565,12 @@ __forceinline static uint32_t typestr_pop_offset(struct TypeStr* ts)
     return r;
 }
 
-struct Decl* typestr_get_decl(struct TypeTable* tt, const struct TypeStr* ts)
+struct DeclSpecs* typestr_get_decl(struct TypeTable* tt, const struct TypeStr* ts)
 {
     char ch = ts->buf[(int)ts->buf[0]];
     if (ch == TYPE_BYTE_STRUCT || ch == TYPE_BYTE_UNION)
     {
-        return *tt_get_decl(tt, typestr_get_offset(ts));
+        return *tt_get_def(tt, typestr_get_offset(ts));
     }
     return NULL;
 }
@@ -660,7 +584,7 @@ static void typestr_decay(struct TypeStr* t)
     switch (ch)
     {
         case ']': t->buf[(int)t->buf[0]] = TYPE_BYTE_POINTER; return;
-        case '[':
+        case TYPE_BYTE_ARRAY:
         {
             t->buf[0] -= 4;
             t->buf[(int)t->buf[0]] = TYPE_BYTE_POINTER;
@@ -735,7 +659,7 @@ static void typestr_add_array(struct TypeStr* s, unsigned int n)
         s->buf[i] = ']';
     }
     else
-        typestr_append_offset(s, n, '[');
+        typestr_append_offset(s, n, TYPE_BYTE_ARRAY);
 }
 
 __forceinline static void typestr_add_pointer(struct TypeStr* s)
@@ -763,136 +687,93 @@ static void typestr_add_cvr(struct TypeStr* s, unsigned int mask)
     s->buf[0] = i;
 }
 
-static void typestr_append_decltype(const struct Expr* const* expr_seqs,
+static void typestr_append_decltype(const struct Ast* const* expr_seqs,
                                     struct TypeTable* tt,
                                     struct TypeStr* s,
-                                    const struct Expr* e)
+                                    const struct Ast* e);
+
+static void typestr_append_decltype_DeclSpecs(const struct Ast* const* expr_seqs,
+                                              struct TypeTable* tt,
+                                              struct TypeStr* s,
+                                              const struct DeclSpecs* d)
+{
+    if (d->_typedef)
+    {
+        return typestr_append_decltype(expr_seqs, tt, s, &d->_typedef->ast);
+    }
+    else if (d->tt_idx)
+    {
+        char ch;
+        if (d->is_struct)
+        {
+            ch = TYPE_BYTE_STRUCT;
+        }
+        else if (d->is_union)
+        {
+            ch = TYPE_BYTE_UNION;
+        }
+        else if (d->is_enum)
+        {
+            ch = TYPE_BYTE_ENUM;
+        }
+        else
+            abort();
+        typestr_append_offset(s, d->tt_idx - 1, ch);
+    }
+    else if (d->tok->type == LEX_UUVALIST)
+    {
+        s->buf[(int)++s->buf[0]] = TYPE_BYTE_VOID;
+        s->buf[(int)++s->buf[0]] = TYPE_BYTE_POINTER;
+    }
+    else
+    {
+        char ch;
+        switch (d->tok->type)
+        {
+            case LEX_VOID: ch = TYPE_BYTE_VOID; break;
+            case LEX_LONG:
+            case LEX_SHORT:
+            case LEX_INT:
+            case LEX_UUINT64:
+            case LEX_SIGNED:
+            case LEX_UNSIGNED:
+                if (d->is_short)
+                    ch = d->is_unsigned ? TYPE_BYTE_USHORT : TYPE_BYTE_SHORT;
+                else if (d->is_long)
+                    ch = d->is_unsigned ? TYPE_BYTE_ULONG : TYPE_BYTE_LONG;
+                else if (d->is_longlong || d->tok->type == LEX_UUINT64)
+                    ch = d->is_unsigned ? TYPE_BYTE_ULLONG : TYPE_BYTE_LLONG;
+                else
+                    ch = d->is_unsigned ? TYPE_BYTE_UINT : TYPE_BYTE_INT;
+                break;
+            case LEX_FLOAT: ch = TYPE_BYTE_FLOAT; break;
+            case LEX_DOUBLE: ch = d->is_long ? TYPE_BYTE_LDOUBLE : TYPE_BYTE_DOUBLE; break;
+            case LEX_CHAR:
+                ch = d->is_signed ? TYPE_BYTE_SCHAR : d->is_unsigned ? TYPE_BYTE_UCHAR : TYPE_BYTE_CHAR;
+                break;
+            default: abort();
+        }
+        s->buf[(int)++s->buf[0]] = ch;
+    }
+
+    unsigned int m = 0;
+    if (d->is_const) m |= TYPESTR_CVR_C;
+    if (d->is_volatile) m |= TYPESTR_CVR_V;
+    typestr_add_cvr(s, m);
+    return;
+}
+static void typestr_append_decltype(const struct Ast* const* expr_seqs,
+                                    struct TypeTable* tt,
+                                    struct TypeStr* s,
+                                    const struct Ast* e)
 {
 top:
     if (!e) abort();
     switch (e->kind)
     {
-        case EXPR_SYM:
-        {
-            e = (struct Expr*)((struct ExprSym*)e)->decl;
-            goto top;
-        }
-        case AST_DECLSPEC:
-        {
-            struct DeclSpecs* d = (struct DeclSpecs*)e;
-            if (d->type)
-            {
-                typestr_append_decltype(expr_seqs, tt, s, (struct Expr*)d->type);
-            }
-            else if (d->name)
-            {
-                uint32_t offset = tt_find_insert_null(tt, d->name);
-                char ch;
-                if (d->is_struct)
-                {
-                    ch = TYPE_BYTE_STRUCT;
-                }
-                else if (d->is_union)
-                {
-                    ch = TYPE_BYTE_UNION;
-                }
-                else if (d->is_enum)
-                {
-                    ch = TYPE_BYTE_ENUM;
-                }
-                else
-                {
-                    abort();
-                }
-                typestr_append_offset(s, offset, ch);
-            }
-            else if (d->tok->type == LEX_UUVALIST)
-            {
-                s->buf[(int)++s->buf[0]] = TYPE_BYTE_VOID;
-                s->buf[(int)++s->buf[0]] = TYPE_BYTE_POINTER;
-            }
-            else
-            {
-                char ch;
-                switch (d->tok->type)
-                {
-                    case LEX_VOID: ch = TYPE_BYTE_VOID; break;
-                    case LEX_LONG:
-                    case LEX_SHORT:
-                    case LEX_INT:
-                    case LEX_UUINT64:
-                    case LEX_SIGNED:
-                    case LEX_UNSIGNED:
-                        if (d->is_short)
-                            ch = d->is_unsigned ? TYPE_BYTE_USHORT : TYPE_BYTE_SHORT;
-                        else if (d->is_long)
-                            ch = d->is_unsigned ? TYPE_BYTE_ULONG : TYPE_BYTE_LONG;
-                        else if (d->is_longlong || d->tok->type == LEX_UUINT64)
-                            ch = d->is_unsigned ? TYPE_BYTE_ULLONG : TYPE_BYTE_LLONG;
-                        else
-                            ch = d->is_unsigned ? TYPE_BYTE_UINT : TYPE_BYTE_INT;
-                        break;
-                    case LEX_FLOAT: ch = TYPE_BYTE_FLOAT; break;
-                    case LEX_DOUBLE: ch = d->is_long ? TYPE_BYTE_LDOUBLE : TYPE_BYTE_DOUBLE; break;
-                    case LEX_CHAR:
-                        ch = d->is_signed ? TYPE_BYTE_SCHAR : d->is_unsigned ? TYPE_BYTE_UCHAR : TYPE_BYTE_CHAR;
-                        break;
-                    default: abort();
-                }
-                s->buf[(int)++s->buf[0]] = ch;
-            }
-            unsigned int m = 0;
-            if (d->is_const) m |= TYPESTR_CVR_C;
-            if (d->is_volatile) m |= TYPESTR_CVR_V;
-            typestr_add_cvr(s, m);
-            return;
-        }
-        case AST_DECL:
-        {
-            struct Decl* d = (struct Decl*)e;
-            if (d->type)
-            {
-                e = d->type;
-                goto top;
-            }
-            uint32_t offset;
-            if (d->name)
-            {
-                // struct/enum/union decl
-                offset = tt_find_insert_null(tt, d->name);
-            }
-            else
-            {
-                // anonymous struct/union/enum
-                char buf[] = "$00000000";
-                uint32_t anon_idx = d->anon_idx;
-                for (size_t i = 0; i < 8; ++i)
-                {
-                    buf[8 - i] = "0123456789ABCDEF"[0xF & anon_idx];
-                    anon_idx >>= 4;
-                }
-                offset = tt_find_insert_null(tt, buf);
-            }
-            char ch;
-            if (d->specs->is_struct)
-            {
-                ch = TYPE_BYTE_STRUCT;
-            }
-            else if (d->specs->is_union)
-            {
-                ch = TYPE_BYTE_UNION;
-            }
-            else if (d->specs->is_enum)
-            {
-                ch = TYPE_BYTE_ENUM;
-            }
-            else
-            {
-                abort();
-            }
-            typestr_append_offset(s, offset, ch);
-            return;
-        }
+        case EXPR_SYM: e = &((struct ExprSym*)e)->decl->ast; goto top;
+        case AST_DECL: e = ((struct Decl*)e)->type; goto top;
+        case AST_DECLSPEC: return typestr_append_decltype_DeclSpecs(expr_seqs, tt, s, (struct DeclSpecs*)e);
         case AST_DECLPTR:
         {
             struct DeclPtr* d = (struct DeclPtr*)e;
@@ -920,7 +801,8 @@ top:
             for (size_t i = 0; i < d->extent; ++i)
             {
                 struct TypeStr* arg_ts = array_push_zeroes(&args, sizeof(struct TypeStr));
-                typestr_append_decltype(expr_seqs, tt, arg_ts, expr_seqs[d->offset + i]);
+                struct StmtDecls* arg_decls = (void*)expr_seqs[d->offset + i];
+                typestr_append_decltype(expr_seqs, tt, arg_ts, expr_seqs[arg_decls->offset]);
             }
             if (d->is_varargs)
             {
@@ -953,14 +835,22 @@ top:
     fprintf(stderr, "typestr_append_decltype(, %s) failed\n", ast_kind_to_string(e->kind));
     *s = s_type_unknown;
 }
-static void typestr_from_decltype(const struct Expr* const* expr_seqs,
+
+static void typestr_from_decltype(const struct Ast* const* expr_seqs,
                                   struct TypeTable* tt,
                                   struct TypeStr* s,
-                                  struct Expr* e)
+                                  struct Ast* e)
 {
     // initialize type
     *s = s_type_unknown;
     typestr_append_decltype(expr_seqs, tt, s, e);
+}
+__forceinline static void typestr_from_decltype_Decl(const struct Ast* const* expr_seqs,
+                                                     struct TypeTable* tt,
+                                                     struct TypeStr* s,
+                                                     struct Decl* d)
+{
+    return typestr_from_decltype(expr_seqs, tt, s, &d->ast);
 }
 
 static size_t typestr_get_size_i(struct Elaborator* elab, const struct TypeStr* ts, int i)
@@ -972,7 +862,15 @@ static size_t typestr_get_size_i(struct Elaborator* elab, const struct TypeStr* 
     {
         case TYPE_BYTE_STRUCT:
         case TYPE_BYTE_UNION:
-            return get_decl_size(elab, (struct Expr*)*tt_get_decl(elab->types, typestr_get_offset_i(ts, i)));
+        {
+            struct DeclSpecs* specs = *tt_get_def(elab->types, typestr_get_offset_i(ts, i));
+            if (!specs)
+            {
+                typestr_error1(NULL, elab->types, "error: unable to get size of incomplete type: %.*s\n", ts);
+                return 1;
+            }
+            return specs->size;
+        }
         case TYPE_BYTE_ENUM: return 4;
         case TYPE_BYTE_POINTER: return 8;
         case TYPE_BYTE_UUVALIST: return 8;
@@ -984,15 +882,21 @@ static size_t typestr_get_size_i(struct Elaborator* elab, const struct TypeStr* 
         case TYPE_BYTE_INT: return 4;
         case TYPE_BYTE_USHORT:
         case TYPE_BYTE_SHORT: return 2;
+        case TYPE_BYTE_VOID:
         case TYPE_BYTE_UCHAR:
         case TYPE_BYTE_SCHAR:
         case TYPE_BYTE_CHAR: return 1;
+        case TYPE_BYTE_FUNCTION: return 1;
+        case TYPE_BYTE_ARRAY:
+        {
+            uint32_t offset = typestr_get_offset_i(ts, i);
+            size_t elem_size = typestr_get_size_i(elab, ts, i - sizeof(uint32_t) - 1);
+            if (elem_size > UINT32_MAX) abort();
+            return offset * elem_size;
+        }
         default:
         {
-            struct Array buf = {};
-            typestr_fmt(elab->types, ts, &buf);
-            fprintf(stderr, "error: unable to get size of type: %.*s\n", (int)buf.sz, (char*)buf.data);
-            array_destroy(&buf);
+            typestr_error1(NULL, elab->types, "error: unable to get size of type: %.*s\n", ts);
             return 1;
         }
     }
@@ -1023,383 +927,702 @@ static size_t typestr_get_elem_size(struct Elaborator* elab, const struct TypeSt
     }
 }
 
-static struct Decl* find_field_by_name(struct Decl* decl, const char* fieldname, struct Expr* const* const exprs)
+static int32_t typestr_calc_sizing(struct Elaborator* elab, const struct TypeStr* ts)
 {
-    if (!decl->init || decl->init->kind != STMT_BLOCK) abort();
-    struct StmtBlock* block = (struct StmtBlock*)decl->init;
+    size_t sz = typestr_get_size(elab, ts);
+    if (sz > INT32_MAX) abort();
+    if (typestr_mask(ts) & TYPE_FLAGS_SIGNED)
+        return -(int32_t)sz;
+    else
+        return sz;
+}
+
+static struct Decl* find_field_by_name(struct DeclSpecs* def, const char* fieldname, struct Decl* const* const decls)
+{
+    if (!def || !def->suinit) abort();
+    struct StmtBlock* block = def->suinit;
     for (size_t i = 0; i < block->extent; ++i)
     {
-        struct Expr* e = exprs[block->offset + i];
+        struct Decl* e = decls[block->offset + i];
         if (e->kind != STMT_DECLS) abort();
         struct StmtDecls* f = (struct StmtDecls*)e;
+        if (f->extent == 0 && !f->specs->name)
+        {
+            struct Decl* x = find_field_by_name(f->specs, fieldname, decls);
+            if (x) return x;
+        }
         for (size_t i = 0; i < f->extent; ++i)
         {
-            struct Expr* g = exprs[f->offset + i];
+            struct Decl* g = decls[f->offset + i];
             if (g->kind != AST_DECL) abort();
-            struct Decl* h = (struct Decl*)g;
-            if (!h->type)
+            if (g->name && strcmp(g->name, fieldname) == 0)
             {
-                if (!h->name)
-                {
-                    struct Decl* x = find_field_by_name(h, fieldname, exprs);
-                    if (x) return x;
-                }
+                return (struct Decl*)g;
             }
-            else if (!h->name)
-                abort();
-            else if (strcmp(h->name, fieldname) == 0)
-                return h;
         }
     }
     return NULL;
 }
+
+static int elaborate_decl(struct Elaborator* elab, struct Decl* specs);
+static int elaborate_declspecs(struct Elaborator* elab, struct DeclSpecs* specs);
+static void elaborate_stmt(struct Elaborator* elab, struct ElaborateDeclCtx* ctx, struct Ast* ast);
 static void elaborate_expr(struct Elaborator* elab,
                            struct ElaborateDeclCtx* ctx,
                            struct Expr* top_expr,
                            struct TypeStr* rty);
 
-static void elaborate_op(struct Elaborator* elab, struct ElaborateDeclCtx* ctx, struct ExprOp* e, struct TypeStr* rty)
+static int is_zero_constant(struct Expr* e)
+{
+    if (e->kind != EXPR_LIT) return 0;
+    struct ExprLit* lit = (void*)e;
+    if (lit->tok->type != LEX_NUMBER) return 0;
+    return lit->numeric == 0;
+}
+
+static void elaborate_binop(struct Elaborator* elab,
+                            struct ElaborateDeclCtx* ctx,
+                            struct ExprBinOp* e,
+                            struct TypeStr* rty)
 {
     elaborate_expr(elab, ctx, e->lhs, rty);
     const struct TypeStr orig_lhs = *rty;
     typestr_decay(rty);
     unsigned int lhs_mask = typestr_mask(rty);
 
-    if (e->rhs)
+    struct TypeStr rhs_ty;
+    elaborate_expr(elab, ctx, e->rhs, &rhs_ty);
+    const struct TypeStr orig_rhs = rhs_ty;
+    typestr_decay(&rhs_ty);
+    unsigned int rhs_mask = typestr_mask(&rhs_ty);
+    // check lhs mask
+    switch (e->tok->type)
     {
-        struct TypeStr rhs_ty;
-        elaborate_expr(elab, ctx, e->rhs, &rhs_ty);
-        const struct TypeStr orig_rhs = rhs_ty;
-        typestr_decay(&rhs_ty);
-        unsigned int rhs_mask = typestr_mask(&rhs_ty);
-        // check lhs mask
-        switch (e->tok->type)
-        {
-            case TOKEN_SYM2('<', '<'):
-            case TOKEN_SYM2('>', '>'):
-            case TOKEN_SYM3('<', '<', '='):
-            case TOKEN_SYM3('>', '>', '='):
-            case TOKEN_SYM1('|'):
-            case TOKEN_SYM1('&'):
-            case TOKEN_SYM1('^'):
-            case TOKEN_SYM1('%'):
-                if (!(lhs_mask & TYPE_FLAGS_INT))
+        case TOKEN_SYM2('<', '<'):
+        case TOKEN_SYM2('>', '>'):
+        case TOKEN_SYM3('<', '<', '='):
+        case TOKEN_SYM3('>', '>', '='):
+        case TOKEN_SYM1('|'):
+        case TOKEN_SYM1('&'):
+        case TOKEN_SYM1('^'):
+        case TOKEN_SYM1('%'):
+            if (!(lhs_mask & TYPE_FLAGS_INT))
+            {
+                typestr_error1(&e->tok->rc,
+                               elab->types,
+                               "error: expected integer type in first argument but got '%.*s'\n",
+                               &orig_lhs);
+                *rty = s_type_literal_int;
+            }
+            break;
+        case TOKEN_SYM1('/'):
+        case TOKEN_SYM1('*'):
+            if (!(lhs_mask & TYPE_MASK_ARITH))
+            {
+                typestr_error1(&e->tok->rc,
+                               elab->types,
+                               "error: expected arithmetic type in first argument but got '%.*s'\n",
+                               &orig_lhs);
+            }
+            break;
+        case TOKEN_SYM2('|', '|'):
+        case TOKEN_SYM2('&', '&'):
+        case TOKEN_SYM2('=', '='):
+        case TOKEN_SYM2('<', '='):
+        case TOKEN_SYM2('>', '='):
+        case TOKEN_SYM2('!', '='):
+        case TOKEN_SYM1('<'):
+        case TOKEN_SYM1('>'):
+        case TOKEN_SYM1('['):
+        case TOKEN_SYM1('+'):
+        case TOKEN_SYM1('-'):
+        case TOKEN_SYM2('+', '='):
+        case TOKEN_SYM2('-', '='):
+        case TOKEN_SYM1('?'):
+            if (!(lhs_mask & TYPE_MASK_SCALAR))
+            {
+                typestr_error1(&e->tok->rc,
+                               elab->types,
+                               "error: expected scalar type in first argument but got '%.*s'\n",
+                               &orig_lhs);
+                *rty = s_type_unknown;
+            }
+            break;
+        default: break;
+    }
+
+    // check rhs mask
+    switch (e->tok->type)
+    {
+        case TOKEN_SYM2('<', '<'):
+        case TOKEN_SYM2('>', '>'):
+        case TOKEN_SYM3('<', '<', '='):
+        case TOKEN_SYM3('>', '>', '='):
+        case TOKEN_SYM1('&'):
+        case TOKEN_SYM1('|'):
+        case TOKEN_SYM2('&', '='):
+        case TOKEN_SYM2('|', '='):
+        case TOKEN_SYM1('^'):
+        case TOKEN_SYM1('%'):
+            if (!(rhs_mask & TYPE_FLAGS_INT))
+            {
+                typestr_error1(&e->tok->rc,
+                               elab->types,
+                               "error: expected integer type in second argument but got '%.*s'\n",
+                               &orig_rhs);
+            }
+            break;
+        case TOKEN_SYM1('/'):
+        case TOKEN_SYM1('*'):
+        case TOKEN_SYM2('*', '='):
+        case TOKEN_SYM2('/', '='):
+            if (!(rhs_mask & TYPE_MASK_ARITH))
+            {
+                typestr_error1(&e->tok->rc,
+                               elab->types,
+                               "error: expected arithmetic type in second argument but got '%.*s'\n",
+                               &orig_rhs);
+            }
+            break;
+        case TOKEN_SYM2('|', '|'):
+        case TOKEN_SYM2('&', '&'):
+        case TOKEN_SYM2('=', '='):
+        case TOKEN_SYM2('<', '='):
+        case TOKEN_SYM2('>', '='):
+        case TOKEN_SYM2('!', '='):
+        case TOKEN_SYM1('<'):
+        case TOKEN_SYM1('>'):
+        case TOKEN_SYM1('['):
+        case TOKEN_SYM1('+'):
+        case TOKEN_SYM1('-'):
+        case TOKEN_SYM2('+', '='):
+        case TOKEN_SYM2('-', '='):
+            if (!(rhs_mask & TYPE_MASK_SCALAR))
+            {
+                typestr_error1(&e->tok->rc,
+                               elab->types,
+                               "error: expected scalar type in second argument but got '%.*s'\n",
+                               &orig_rhs);
+            }
+            break;
+        default: break;
+    }
+
+    switch (e->tok->type)
+    {
+        case TOKEN_SYM1('%'):
+        case TOKEN_SYM1('/'):
+        case TOKEN_SYM1('*'):
+        case TOKEN_SYM1('&'):
+        case TOKEN_SYM1('|'):
+        case TOKEN_SYM1('^'):
+        case TOKEN_SYM2('*', '='):
+        case TOKEN_SYM2('&', '='):
+        case TOKEN_SYM2('|', '='):
+        case TOKEN_SYM2('+', '='):
+        case TOKEN_SYM2('-', '='):
+        case TOKEN_SYM2('<', '<'):
+        case TOKEN_SYM2('>', '>'):
+        case TOKEN_SYM3('<', '<', '='):
+        case TOKEN_SYM3('>', '>', '='): break;
+        case TOKEN_SYM1('+'):
+            if (rhs_mask & lhs_mask & TYPE_FLAGS_POINTER)
+            {
+                typestr_error2(&e->tok->rc,
+                               elab->types,
+                               "error: expected only one pointer type, but got '%.*s' and '%.*s'\n",
+                               &orig_lhs,
+                               &orig_rhs);
+            }
+            if (rhs_mask & TYPE_FLAGS_POINTER)
+            {
+                *rty = rhs_ty;
+            }
+            if ((lhs_mask | rhs_mask) & TYPE_FLAGS_POINTER)
+            {
+                e->info = typestr_get_elem_size(elab, rty);
+            }
+            else
+            {
+                e->info = 1;
+            }
+            break;
+        case TOKEN_SYM1('-'):
+            if (lhs_mask & TYPE_FLAGS_POINTER)
+            {
+                e->info = typestr_get_elem_size(elab, rty);
+            }
+            else
+            {
+                e->info = 1;
+            }
+            if (rhs_mask & TYPE_FLAGS_POINTER)
+            {
+                if (!(lhs_mask & TYPE_FLAGS_POINTER))
                 {
-                    typestr_error1(&e->tok->rc,
+                    typestr_error2(&e->tok->rc,
                                    elab->types,
-                                   "error: expected integer type in first argument but got '%.*s'\n",
-                                   &orig_lhs);
-                    *rty = s_type_literal_int;
+                                   "error: expected both pointer types, but got '%.*s' and '%.*s'\n",
+                                   &orig_lhs,
+                                   &orig_rhs);
                 }
-                break;
-            case TOKEN_SYM1('/'):
-            case TOKEN_SYM1('*'):
-                if (!(lhs_mask & TYPE_MASK_ARITH))
+                *rty = s_type_literal_int;
+                e->info = -e->info;
+            }
+            break;
+        case TOKEN_SYM1('>'):
+        case TOKEN_SYM1('<'):
+        case TOKEN_SYM2('=', '='):
+        case TOKEN_SYM2('!', '='):
+        case TOKEN_SYM2('>', '='):
+        case TOKEN_SYM2('<', '='):
+        case TOKEN_SYM2('&', '&'):
+        case TOKEN_SYM2('|', '|'): *rty = s_type_literal_int; break;
+        case TOKEN_SYM1('='): typestr_implicit_conversion(elab->types, &e->tok->rc, &rhs_ty, rty); break;
+        case TOKEN_SYM1('['):
+            if (rhs_mask & lhs_mask & TYPE_FLAGS_POINTER || !((rhs_mask | lhs_mask) & TYPE_FLAGS_POINTER))
+            {
+                typestr_error2(&e->tok->rc,
+                               elab->types,
+                               "error: expected exactly one pointer type, but got '%.*s' and '%.*s'\n",
+                               &orig_lhs,
+                               &orig_rhs);
+            }
+            if (rhs_mask & TYPE_FLAGS_POINTER)
+            {
+                // normalize operation so pointer is always the LHS
+                struct Expr* f = e->lhs;
+                e->lhs = e->rhs;
+                e->rhs = f;
+                *rty = rhs_ty;
+            }
+            typestr_dereference(rty);
+            e->info = typestr_get_size(elab, rty);
+            break;
+        case TOKEN_SYM1(','):
+        case TOKEN_SYM1('?'): *rty = rhs_ty; break;
+        case TOKEN_SYM1(':'):
+            if (rhs_mask & lhs_mask & TYPE_MASK_ARITH)
+            {
+            }
+            else if (typestr_match(&orig_lhs, &orig_rhs))
+            {
+            }
+            else if (typestr_is_pointer(rty) && typestr_is_pointer(&rhs_ty))
+            {
+                --rty->buf[0];
+                --rhs_ty.buf[0];
+                unsigned int combined_cvr = typestr_strip_cvr(rty) | typestr_strip_cvr(&rhs_ty);
+                if (typestr_match(rty, &s_void))
                 {
-                    typestr_error1(&e->tok->rc,
-                                   elab->types,
-                                   "error: expected arithmetic type in first argument but got '%.*s'\n",
-                                   &orig_lhs);
+                    *rty = rhs_ty;
                 }
-                break;
-            case TOKEN_SYM2('|', '|'):
-            case TOKEN_SYM2('&', '&'):
-            case TOKEN_SYM2('=', '='):
-            case TOKEN_SYM2('<', '='):
-            case TOKEN_SYM2('>', '='):
-            case TOKEN_SYM2('!', '='):
-            case TOKEN_SYM1('<'):
-            case TOKEN_SYM1('>'):
-            case TOKEN_SYM1('['):
-            case TOKEN_SYM1('+'):
-            case TOKEN_SYM1('-'):
-            case TOKEN_SYM2('+', '='):
-            case TOKEN_SYM2('-', '='):
-            case TOKEN_SYM1('?'):
-                if (!(lhs_mask & TYPE_MASK_SCALAR))
+                if (typestr_match(&rhs_ty, &s_void) || typestr_match(rty, &rhs_ty))
                 {
-                    typestr_error1(&e->tok->rc,
-                                   elab->types,
-                                   "error: expected scalar type in first argument but got '%.*s'\n",
-                                   &orig_lhs);
+                    typestr_add_cvr(rty, combined_cvr);
+                    typestr_add_pointer(rty);
+                }
+                else
+                {
+                    typestr_error2(
+                        &e->tok->rc,
+                        elab->types,
+                        "error: unable to determine common pointer type in ternary between '%.*s' and '%.*s'\n",
+                        &orig_lhs,
+                        &orig_rhs);
                     *rty = s_type_unknown;
                 }
-                break;
-            default: break;
-        }
+            }
+            else if (typestr_is_pointer(rty) && is_zero_constant(e->rhs))
+            {
+            }
+            else if (typestr_is_pointer(&rhs_ty) && is_zero_constant(e->lhs))
+            {
+                *rty = rhs_ty;
+            }
+            else
+            {
+                typestr_error2(&e->tok->rc,
+                               elab->types,
+                               "error: unable to determine common type in ternary between '%.*s' and '%.*s'\n",
+                               &orig_lhs,
+                               &orig_rhs);
+                *rty = s_type_unknown;
+            }
+            break;
+        default:
+            fprintf(stderr, "warning: untyped binary operator '%s'\n", token_str(elab->p, e->tok));
+            *rty = s_type_unknown;
+            break;
+    }
+}
 
-        // check rhs mask
-        switch (e->tok->type)
-        {
-            case TOKEN_SYM2('<', '<'):
-            case TOKEN_SYM2('>', '>'):
-            case TOKEN_SYM3('<', '<', '='):
-            case TOKEN_SYM3('>', '>', '='):
-            case TOKEN_SYM1('&'):
-            case TOKEN_SYM1('|'):
-            case TOKEN_SYM2('&', '='):
-            case TOKEN_SYM2('|', '='):
-            case TOKEN_SYM1('^'):
-            case TOKEN_SYM1('%'):
-                if (!(rhs_mask & TYPE_FLAGS_INT))
-                {
-                    typestr_error1(&e->tok->rc,
-                                   elab->types,
-                                   "error: expected integer type in second argument but got '%.*s'\n",
-                                   &orig_rhs);
-                }
-                break;
-            case TOKEN_SYM1('/'):
-            case TOKEN_SYM1('*'):
-            case TOKEN_SYM2('*', '='):
-            case TOKEN_SYM2('/', '='):
-                if (!(rhs_mask & TYPE_MASK_ARITH))
-                {
-                    typestr_error1(&e->tok->rc,
-                                   elab->types,
-                                   "error: expected arithmetic type in second argument but got '%.*s'\n",
-                                   &orig_rhs);
-                }
-                break;
-            case TOKEN_SYM2('|', '|'):
-            case TOKEN_SYM2('&', '&'):
-            case TOKEN_SYM2('=', '='):
-            case TOKEN_SYM2('<', '='):
-            case TOKEN_SYM2('>', '='):
-            case TOKEN_SYM2('!', '='):
-            case TOKEN_SYM1('<'):
-            case TOKEN_SYM1('>'):
-            case TOKEN_SYM1('['):
-            case TOKEN_SYM1('+'):
-            case TOKEN_SYM1('-'):
-            case TOKEN_SYM2('+', '='):
-            case TOKEN_SYM2('-', '='):
-                if (!(rhs_mask & TYPE_MASK_SCALAR))
-                {
-                    typestr_error1(&e->tok->rc,
-                                   elab->types,
-                                   "error: expected scalar type in second argument but got '%.*s'\n",
-                                   &orig_rhs);
-                }
-                break;
-            default: break;
-        }
+static void elaborate_builtin(struct Elaborator* elab,
+                              struct ElaborateDeclCtx* ctx,
+                              struct ExprBuiltin* e,
+                              struct TypeStr* rty)
+{
+    switch (e->tok->type)
+    {
+        case LEX_SIZEOF:
+            if (e->expr1)
+            {
+                elaborate_expr(elab, ctx, e->expr1, rty);
+            }
+            else
+            {
+                elaborate_declspecs(elab, e->specs);
+                elaborate_decl(elab, e->type);
+                typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, rty, e->type);
+            }
+            e->sizeof_size = typestr_get_size(elab, rty);
+            *rty = s_type_literal_int;
+            break;
+        case LEX_UUVA_START:
+            elaborate_expr(elab, ctx, e->expr2, rty);
+            elaborate_expr(elab, ctx, e->expr1, rty);
+            break;
+        case LEX_UUVA_ARG:
+            elaborate_expr(elab, ctx, e->expr1, rty);
+            elaborate_declspecs(elab, e->specs);
+            elaborate_decl(elab, e->type);
+            typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, rty, e->type);
+            break;
+        case LEX_UUVA_END: *rty = s_type_void; break;
+        default:
+            parser_tok_error(e->tok, "error: unimplemented builtin\n");
+            *rty = s_type_unknown;
+            break;
+    }
+}
 
-        switch (e->tok->type)
-        {
-            case TOKEN_SYM1('%'):
-            case TOKEN_SYM1('/'):
-            case TOKEN_SYM1('*'):
-            case TOKEN_SYM1('&'):
-            case TOKEN_SYM1('|'):
-            case TOKEN_SYM1('^'):
-            case TOKEN_SYM2('*', '='):
-            case TOKEN_SYM2('&', '='):
-            case TOKEN_SYM2('|', '='):
-            case TOKEN_SYM2('+', '='):
-            case TOKEN_SYM2('-', '='):
-            case TOKEN_SYM2('<', '<'):
-            case TOKEN_SYM2('>', '>'):
-            case TOKEN_SYM3('<', '<', '='):
-            case TOKEN_SYM3('>', '>', '='): break;
-            case LEX_UUVA_START: break;
-            case TOKEN_SYM1('+'):
-                if (rhs_mask & lhs_mask & TYPE_FLAGS_POINTER)
-                {
-                    typestr_error2(&e->tok->rc,
-                                   elab->types,
-                                   "error: expected only one pointer type, but got '%.*s' and '%.*s'\n",
-                                   &orig_lhs,
-                                   &orig_rhs);
-                }
-                if (rhs_mask & TYPE_FLAGS_POINTER)
-                {
-                    *rty = rhs_ty;
-                }
-                if ((lhs_mask | rhs_mask) & TYPE_FLAGS_POINTER)
-                {
-                    e->size = typestr_get_elem_size(elab, rty);
-                }
-                else
-                {
-                    e->size = 1;
-                }
-                break;
-            case TOKEN_SYM1('-'):
-                if (lhs_mask & TYPE_FLAGS_POINTER)
-                {
-                    e->size = typestr_get_elem_size(elab, rty);
-                }
-                else
-                {
-                    e->size = 1;
-                }
-                if (rhs_mask & TYPE_FLAGS_POINTER)
-                {
-                    if (!(lhs_mask & TYPE_FLAGS_POINTER))
-                    {
-                        typestr_error2(&e->tok->rc,
-                                       elab->types,
-                                       "error: expected both pointer types, but got '%.*s' and '%.*s'\n",
-                                       &orig_lhs,
-                                       &orig_rhs);
-                    }
-                    *rty = s_type_literal_int;
-                    e->size = -e->size;
-                }
-                break;
-            case TOKEN_SYM1('>'):
-            case TOKEN_SYM1('<'):
-            case TOKEN_SYM2('=', '='):
-            case TOKEN_SYM2('!', '='):
-            case TOKEN_SYM2('>', '='):
-            case TOKEN_SYM2('<', '='):
-            case TOKEN_SYM2('&', '&'):
-            case TOKEN_SYM2('|', '|'): *rty = s_type_literal_int; break;
-            case TOKEN_SYM1('='): typestr_implicit_conversion(elab->types, &e->tok->rc, &rhs_ty, rty); break;
-            case TOKEN_SYM1('['):
-                if (rhs_mask & lhs_mask & TYPE_FLAGS_POINTER || !((rhs_mask | lhs_mask) & TYPE_FLAGS_POINTER))
-                {
-                    typestr_error2(&e->tok->rc,
-                                   elab->types,
-                                   "error: expected exactly one pointer type, but got '%.*s' and '%.*s'\n",
-                                   &orig_lhs,
-                                   &orig_rhs);
-                }
-                if (rhs_mask & TYPE_FLAGS_POINTER)
-                {
-                    // normalize operation so pointer is always the LHS
-                    struct Expr* f = e->lhs;
-                    e->lhs = e->rhs;
-                    e->rhs = f;
-                    *rty = rhs_ty;
-                }
+static void elaborate_unop(struct Elaborator* elab,
+                           struct ElaborateDeclCtx* ctx,
+                           struct ExprUnOp* e,
+                           struct TypeStr* rty)
+{
+    elaborate_expr(elab, ctx, e->lhs, rty);
+    const struct TypeStr orig_lhs = *rty;
+    typestr_decay(rty);
+    unsigned int lhs_mask = typestr_mask(rty);
+    switch (e->tok->type)
+    {
+        case TOKEN_SYM1('-'):
+            if (!(lhs_mask & TYPE_MASK_ARITH))
+            {
+                typestr_error1(&e->tok->rc,
+                               elab->types,
+                               "error: expected arithmetic type in first argument but got '%.*s'\n",
+                               &orig_lhs);
+                *rty = s_type_literal_int;
+            }
+            break;
+        case TOKEN_SYM1('*'):
+            if (typestr_is_pointer(rty))
+            {
                 typestr_dereference(rty);
-                e->size = typestr_get_size(elab, rty);
-                break;
-            case TOKEN_SYM1(','):
-            case TOKEN_SYM1('?'): *rty = rhs_ty; break;
-            case TOKEN_SYM1(':'):
-                if (rhs_mask & lhs_mask & TYPE_MASK_ARITH)
+            }
+            else
+            {
+                typestr_error1(&e->tok->rc, elab->types, "error: cannot dereference value of type '%.*s'\n", rty);
+                *rty = s_type_unknown;
+            }
+            break;
+        case TOKEN_SYM1('&'):
+        {
+            *rty = orig_lhs;
+            typestr_add_pointer(rty);
+            break;
+        }
+        case TOKEN_SYM2('+', '+'):
+        case TOKEN_SYM2('-', '-'): break;
+        case TOKEN_SYM1('~'):
+            if (!(lhs_mask & TYPE_FLAGS_INT))
+            {
+                typestr_error1(&e->tok->rc,
+                               elab->types,
+                               "error: expected integer type in first argument but got '%.*s'\n",
+                               &orig_lhs);
+            }
+            *rty = s_type_literal_int;
+            break;
+        case TOKEN_SYM1('!'):
+            if (!(lhs_mask & TYPE_MASK_SCALAR))
+            {
+                typestr_error1(&e->tok->rc,
+                               elab->types,
+                               "error: expected scalar type in first argument but got '%.*s'\n",
+                               &orig_lhs);
+            }
+            *rty = s_type_literal_int;
+            break;
+        default:
+            fprintf(stderr, "warning: untyped unary operator '%s'\n", token_str(elab->p, e->tok));
+            *rty = s_type_unknown;
+            break;
+    }
+}
+static void elaborate_stmts(struct Elaborator* elab, struct ElaborateDeclCtx* ctx, size_t offset, size_t extent)
+{
+    struct Ast** seqs = elab->p->expr_seqs.data;
+    for (size_t i = 0; i < extent; ++i)
+    {
+        elaborate_stmt(elab, ctx, seqs[offset + i]);
+    }
+}
+
+static void elaborate_init_ty(struct Elaborator* elab, struct TypeStr dty, struct Ast* ast);
+static void elaborate_init(struct Elaborator* elab, struct Decl* decl, struct Ast* ast)
+{
+    struct TypeStr dty;
+    typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, &dty, decl);
+    typestr_strip_cvr(&dty);
+    elaborate_init_ty(elab, dty, ast);
+}
+static void elaborate_init_ty(struct Elaborator* elab, struct TypeStr dty, struct Ast* ast)
+{
+    switch (dty.buf[(int)dty.buf[0]])
+    {
+        case TYPE_BYTE_ARRAY:
+            if (ast->kind == AST_INIT)
+            {
+                struct AstInit* init = (void*)ast;
+                uint32_t extent = typestr_pop_offset(&dty);
+                if (extent == 0)
                 {
+                    parser_tok_error(ast->tok, "error: array must have nonzero extent\n");
+                    return;
                 }
-                else if (typestr_match(&orig_lhs, &orig_rhs))
+                if (init->designator_extent)
                 {
+                    parser_tok_error(ast->tok, "error: unimplemented array initializer type.\n");
+                    break;
                 }
-                else if (typestr_is_pointer(rty) && typestr_is_pointer(&rhs_ty))
+                else
                 {
-                    --rty->buf[0];
-                    --rhs_ty.buf[0];
-                    unsigned int combined_cvr = typestr_strip_cvr(rty) | typestr_strip_cvr(&rhs_ty);
-                    if (typestr_match(rty, &s_void))
+                    size_t j;
+
+                    for (j = 0; init->init && j < extent; init = init->next, ++j)
                     {
-                        *rty = rhs_ty;
+                        elaborate_init_ty(elab, dty, init->init);
                     }
-                    if (typestr_match(&rhs_ty, &s_void) || typestr_match(rty, &rhs_ty))
+                    if (init->init && j == extent)
                     {
-                        typestr_add_cvr(rty, combined_cvr);
-                        typestr_add_pointer(rty);
+                        parser_tok_error(init->tok, "error: too many initializer expressions. Expected %zu.\n", extent);
+                        return;
+                    }
+                }
+            }
+            else
+                parser_tok_error(ast->tok, "error: unimplemented array initializer type.\n");
+            break;
+        case TYPE_BYTE_UNION: parser_tok_error(ast->tok, "error: unimplemented union initializer type.\n"); break;
+        case TYPE_BYTE_STRUCT:
+            if (ast->kind == AST_INIT)
+            {
+                struct AstInit* init = (void*)ast;
+
+                struct DeclSpecs* specs = typestr_get_decl(elab->types, &dty);
+                if (!specs)
+                {
+                    parser_tok_error(ast->tok, "error: incomplete type\n");
+                    return;
+                }
+                size_t j = 0, k = 0;
+                struct Ast** seqs = elab->p->expr_seqs.data;
+                while (init->init && j < specs->suinit->extent)
+                {
+                    if (init->designator_extent)
+                    {
+                        if (init->designator_extent > 1)
+                        {
+                            parser_tok_error(init->tok,
+                                             "error: mixing designation types in initializer list is unsupported.\n");
+                            return;
+                        }
+                        const struct Designator* d =
+                            (const struct Designator*)elab->p->designators.data + init->designator_offset;
+                        if (d->field)
+                        {
+                            struct Decl* maybe_field = find_field_by_name(specs, d->field, elab->p->expr_seqs.data);
+                            if (maybe_field)
+                            {
+                                elaborate_init(elab, maybe_field, init->init);
+                                init->offset = maybe_field->frame_offset;
+                                init->sizing = maybe_field->size;
+                                if (maybe_field->size == 0) abort();
+                            }
+                            else
+                            {
+                                parser_tok_error(init->tok, "error: could not find field '%s'.\n", d->field);
+                            }
+                        }
+                        else
+                        {
+                            parser_tok_error(init->tok, "error: array designators not implemented.\n");
+                        }
                     }
                     else
                     {
-                        typestr_error2(
-                            &e->tok->rc,
-                            elab->types,
-                            "error: unable to determine common pointer type in ternary between '%.*s' and '%.*s'\n",
-                            &orig_lhs,
-                            &orig_rhs);
-                        *rty = s_type_unknown;
+                    }
+                    init = init->next;
+                }
+                {
+                    while (init->init && j < specs->suinit->extent)
+                    {
+                        struct Ast* fields = seqs[specs->suinit->offset + j];
+                        if (fields->kind != STMT_DECLS) abort();
+                        struct StmtDecls* sdecls = (struct StmtDecls*)fields;
+
+                        while (init->init && k < sdecls->extent)
+                        {
+                            struct Ast* field = seqs[sdecls->offset + k];
+                            if (field->kind != AST_DECL) abort();
+                            struct Decl* fdecl = (struct Decl*)field;
+                            elaborate_init(elab, fdecl, init->init);
+
+                            init = init->next;
+                            ++k;
+                        }
+                        ++j;
+                    }
+                    if (init->init && j == specs->suinit->extent)
+                    {
+                        parser_tok_error(init->tok,
+                                         "error: too many initializer expressions. Expected %zu.\n",
+                                         specs->suinit->extent);
+                        return;
                     }
                 }
-                else
-                {
-                    typestr_error2(&e->tok->rc,
-                                   elab->types,
-                                   "error: unable to determine common type in ternary between '%.*s' and '%.*s'\n",
-                                   &orig_lhs,
-                                   &orig_rhs);
-                    *rty = s_type_unknown;
-                }
-                break;
-            default:
-                fprintf(stderr, "warning: untyped binary operator '%s'\n", token_str(elab->p, e->tok));
-                *rty = s_type_unknown;
-                break;
-        }
-    }
-    else
-    {
-        switch (e->tok->type)
-        {
-            case LEX_UUVA_END: break;
-            case TOKEN_SYM1('-'):
-                if (!(lhs_mask & TYPE_MASK_ARITH))
-                {
-                    typestr_error1(&e->tok->rc,
-                                   elab->types,
-                                   "error: expected arithmetic type in first argument but got '%.*s'\n",
-                                   &orig_lhs);
-                    *rty = s_type_literal_int;
-                }
-                break;
-            case TOKEN_SYM1('*'):
-                if (typestr_is_pointer(rty))
-                {
-                    typestr_dereference(rty);
-                }
-                else
-                {
-                    typestr_error1(&e->tok->rc, elab->types, "error: cannot dereference value of type '%.*s'\n", rty);
-                    *rty = s_type_unknown;
-                }
-                break;
-            case TOKEN_SYM1('&'):
+            }
+            else
             {
-                *rty = orig_lhs;
-                typestr_add_pointer(rty);
+                goto expr_init;
+            }
+            break;
+        case TYPE_BYTE_FUNCTION:
+        {
+            elaborate_stmt(elab, NULL, ast);
+            break;
+        }
+        default:
+        {
+        expr_init:
+            if (!ast_kind_is_expr(ast->kind))
+            {
+                parser_tok_error(ast->tok, "error: expected expression in object initialization\n");
                 break;
             }
-            case TOKEN_SYM2('+', '+'):
-            case TOKEN_SYM2('-', '-'): break;
-            case TOKEN_SYM1('~'):
-                if (!(lhs_mask & TYPE_FLAGS_INT))
-                {
-                    typestr_error1(&e->tok->rc,
-                                   elab->types,
-                                   "error: expected integer type in first argument but got '%.*s'\n",
-                                   &orig_lhs);
-                }
-                *rty = s_type_literal_int;
-                break;
-            case TOKEN_SYM1('!'):
-                if (!(lhs_mask & TYPE_MASK_SCALAR))
-                {
-                    typestr_error1(&e->tok->rc,
-                                   elab->types,
-                                   "error: expected scalar type in first argument but got '%.*s'\n",
-                                   &orig_lhs);
-                }
-                *rty = s_type_literal_int;
-                break;
-            case LEX_SIZEOF:
-                e->size = typestr_get_size(elab, rty);
-                *rty = s_type_literal_int;
-                break;
-            default:
-                fprintf(stderr, "warning: untyped unary operator '%s'\n", token_str(elab->p, e->tok));
-                *rty = s_type_unknown;
-                break;
+            // standard expression initialization
+            struct TypeStr ts;
+            elaborate_expr(elab, NULL, (struct Expr*)ast, &ts);
+            typestr_implicit_conversion(elab->types, &ast->tok->rc, &ts, &dty);
         }
     }
 }
 
-static void elaborate_exprs(struct Elaborator* elab, struct ElaborateDeclCtx* ctx, size_t offset, size_t extent)
+#define DISPATCH(X, Y)                                                                                                 \
+    case X: return elaborate_stmt_##Y(elab, ctx, (struct Y*)ast)
+
+static void elaborate_stmt_StmtCase(struct Elaborator* elab, struct ElaborateDeclCtx* ctx, struct StmtCase* stmt)
 {
-    struct TypeStr ty;
-    struct Expr** seqs = elab->p->expr_seqs.data;
-    for (size_t i = 0; i < extent; ++i)
+    if (stmt->expr) stmt->value = eval_constant(elab, stmt->expr);
+}
+
+static void elaborate_stmt(struct Elaborator* elab, struct ElaborateDeclCtx* ctx, struct Ast* ast)
+{
+    if (ast_kind_is_expr(ast->kind))
     {
-        elaborate_expr(elab, ctx, seqs[offset + i], &ty);
+        struct TypeStr ts;
+        return elaborate_expr(elab, ctx, (struct Expr*)ast, &ts);
+    }
+    void* top = ast;
+    switch (ast->kind)
+    {
+        DISPATCH(STMT_CASE, StmtCase);
+        case STMT_NONE:
+        case STMT_BREAK:
+        case STMT_CONTINUE:
+        case STMT_GOTO: return;
+        case STMT_LABEL:
+        {
+            struct StmtLabel* expr = top;
+            return elaborate_stmt(elab, ctx, expr->stmt);
+        }
+        case STMT_RETURN:
+        {
+            struct StmtReturn* stmt = top;
+            if (stmt->expr)
+            {
+                struct TypeStr ts;
+                elaborate_expr(elab, ctx, stmt->expr, &ts);
+            }
+
+            return;
+        }
+        case STMT_IF:
+        {
+            struct StmtIf* stmt = top;
+            struct TypeStr ts;
+            elaborate_expr(elab, ctx, stmt->cond, &ts);
+            elaborate_stmt(elab, ctx, stmt->if_body);
+            if (stmt->else_body)
+            {
+                elaborate_stmt(elab, ctx, stmt->else_body);
+            }
+            return;
+        }
+        case STMT_LOOP:
+        {
+            struct StmtLoop* e = top;
+            struct TypeStr ts;
+            elaborate_stmt(elab, ctx, e->body);
+            if (e->advance) elaborate_expr(elab, ctx, e->advance, &ts);
+            if (e->cond) elaborate_expr(elab, ctx, e->cond, &ts);
+            if (e->init) elaborate_stmt(elab, ctx, e->init);
+            return;
+        }
+        case AST_DECL:
+        {
+            struct Decl* d = top;
+            if (!d->type) abort();
+            elaborate_decl(elab, d);
+
+            // typestr_from_decltype(elab->p->expr_seqs.data, elab->types, rty, d->type);
+            // TODO: ensure valid initialization
+            // typestr_implicit_conversion(elab->types, expr_to_rc(d->init), &init_ty, rty);
+            return;
+        }
+        case STMT_DECLS:
+        {
+            struct StmtDecls* stmt = top;
+            elaborate_declspecs(elab, stmt->specs);
+            elaborate_stmts(elab, ctx, stmt->offset, stmt->extent);
+            return;
+        }
+        case STMT_BLOCK:
+        {
+            struct StmtBlock* stmt = top;
+            elaborate_stmts(elab, ctx, stmt->offset, stmt->extent);
+            return;
+        }
+        case STMT_SWITCH:
+        {
+            struct StmtSwitch* stmt = top;
+            struct TypeStr ts;
+            elaborate_expr(elab, ctx, stmt->expr, &ts);
+            typestr_decay(&ts);
+            if (!(typestr_mask(&ts) & TYPE_MASK_SCALAR))
+            {
+                typestr_error1(&stmt->tok->rc,
+                               elab->types,
+                               "error: expected scalar type in switch condition but got '%.*s'\n",
+                               &ts);
+            }
+            elaborate_stmts(elab, ctx, stmt->offset, stmt->extent);
+            return;
+        }
+        default: parser_tok_error(NULL, "error: unknown stmt kind: %s\n", ast_kind_to_string(ast->kind)); return;
     }
 }
 
@@ -1411,21 +1634,6 @@ static void elaborate_expr(struct Elaborator* elab,
     void* top = top_expr;
     switch (top_expr->kind)
     {
-        case STMT_NONE:
-        case STMT_BREAK:
-        case STMT_CONTINUE:
-        case STMT_GOTO: *rty = s_type_void; return;
-        case STMT_CASE:
-        {
-            struct StmtCase* stmt = top;
-            if (stmt->expr) stmt->value = eval_constant(elab, stmt->expr);
-            return;
-        }
-        case STMT_LABEL:
-        {
-            struct StmtLabel* expr = top;
-            return elaborate_expr(elab, ctx, expr->stmt, rty);
-        }
         case EXPR_LIT:
         {
             struct ExprLit* expr = top;
@@ -1444,48 +1652,24 @@ static void elaborate_expr(struct Elaborator* elab,
                 parser_tok_error(expr->tok, "error: unknown literal type: %s\n", lexstate_to_string(expr->tok->type));
                 *rty = s_type_unknown;
             }
-            return;
+            break;
         }
 
         case EXPR_SYM:
         {
             struct ExprSym* esym = top;
-            typestr_from_decltype(elab->p->expr_seqs.data, elab->types, rty, (struct Expr*)esym->decl);
-            return;
+            typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, rty, esym->decl);
+            typestr_decay(rty);
+            break;
         }
         case EXPR_CAST:
         {
             struct ExprCast* expr = top;
-            elaborate_expr(elab, ctx, (struct Expr*)expr->type, rty);
             elaborate_expr(elab, ctx, expr->expr, rty);
-            typestr_from_decltype(elab->p->expr_seqs.data, elab->types, rty, (struct Expr*)expr->type);
-            return;
-        }
-        case STMT_RETURN:
-        {
-            struct StmtReturn* stmt = top;
-            if (stmt->expr)
-            {
-                elaborate_expr(elab, ctx, stmt->expr, rty);
-            }
-            else
-            {
-                *rty = s_type_void;
-            }
-
-            return;
-        }
-        case STMT_IF:
-        {
-            struct StmtIf* stmt = top;
-            elaborate_expr(elab, ctx, stmt->cond, rty);
-            elaborate_expr(elab, ctx, stmt->if_body, rty);
-            if (stmt->else_body)
-            {
-                elaborate_expr(elab, ctx, stmt->else_body, rty);
-            }
-            *rty = s_type_void;
-            return;
+            elaborate_declspecs(elab, expr->specs);
+            elaborate_decl(elab, expr->type);
+            typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, rty, expr->type);
+            break;
         }
         case EXPR_CALL:
         {
@@ -1542,7 +1726,9 @@ static void elaborate_expr(struct Elaborator* elab,
                 if (i < args_fn_extent)
                 {
                     const struct TypeStr* orig_tt_arg = (struct TypeStr*)elab->types->fn_args.data + i + args_fn_offset;
-                    typestr_implicit_conversion(elab->types, expr_to_rc(arg_expr), &arg_expr_ty, orig_tt_arg);
+                    typestr_implicit_conversion(elab->types, &arg_expr->tok->rc, &arg_expr_ty, orig_tt_arg);
+                    ((struct ParamConversion*)elab->param_conversions.data + i + args_fn_offset)->sizing =
+                        typestr_calc_sizing(elab, orig_tt_arg);
                 }
                 else
                 {
@@ -1550,14 +1736,14 @@ static void elaborate_expr(struct Elaborator* elab,
                     unsigned int lhs_mask = typestr_mask(&arg_expr_ty);
                     if (!(lhs_mask & TYPE_MASK_SCALAR))
                     {
-                        typestr_error1(expr_to_rc(arg_expr),
+                        typestr_error1(&arg_expr->tok->rc,
                                        elab->types,
                                        "error: expected scalar type in variadic arguments but got '%.*s'\n",
                                        &orig_arg_expr_ty);
                     }
                 }
             }
-            return;
+            break;
         }
         case EXPR_FIELD:
         {
@@ -1566,12 +1752,12 @@ static void elaborate_expr(struct Elaborator* elab,
             const struct TypeStr orig_lhs = *rty;
             if (e->is_arrow) typestr_dereference(rty);
             unsigned int cvr_mask = typestr_strip_cvr(rty);
-            struct Decl* decl = typestr_get_decl(elab->types, rty);
-            if (decl)
+            struct DeclSpecs* specs = typestr_get_decl(elab->types, rty);
+            if (specs)
             {
                 // find field in decl
                 struct Decl* field =
-                    find_field_by_name(decl, e->fieldname, (struct Expr* const*)elab->p->expr_seqs.data);
+                    find_field_by_name(specs, e->fieldname, (struct Decl* const*)elab->p->expr_seqs.data);
                 if (field)
                 {
                     e->decl = field;
@@ -1581,7 +1767,7 @@ static void elaborate_expr(struct Elaborator* elab,
                 else
                 {
                     parser_tok_error(
-                        e->tok, "error: could not find member '%s' in type '%s'\n", e->fieldname, decl->name);
+                        e->tok, "error: could not find member '%s' in type '%s'\n", e->fieldname, specs->name);
                     *rty = s_type_unknown;
                 }
             }
@@ -1605,118 +1791,15 @@ static void elaborate_expr(struct Elaborator* elab,
                 }
                 *rty = s_type_unknown;
             }
-            return;
+            break;
         }
-        case EXPR_OP: elaborate_op(elab, ctx, top, rty); return;
-        case STMT_LOOP:
-        {
-            struct StmtLoop* e = top;
-            elaborate_expr(elab, ctx, e->body, rty);
-            if (e->advance) elaborate_expr(elab, ctx, e->advance, rty);
-            if (e->cond) elaborate_expr(elab, ctx, e->cond, rty);
-            if (e->init) elaborate_expr(elab, ctx, e->init, rty);
-            return;
-        }
-        case AST_DECL:
-        {
-            struct Decl* d = top;
-            if (!d->type) return;
-
-            if (d->type->kind == AST_DECLARR)
-            {
-                struct DeclArr* arr = (void*)d->type;
-                if (arr->arity == NULL)
-                {
-                    if (d->init)
-                    {
-                        // arr->integer_arity = block->extent;
-                        if (d->init->kind == AST_INIT)
-                        {
-                            struct ASTInit* i = (void*)d->init;
-                            arr->integer_arity = i->extent;
-                        }
-                        else if (d->init->kind == EXPR_LIT)
-                        {
-                            struct ExprLit* l = (void*)d->init;
-                            arr->integer_arity = strlen(l->text) + 1;
-                        }
-                        else
-                        {
-                            parser_tok_error(
-                                d->id,
-                                "error: array initializer must be either a string literal or an initializer list\n");
-                        }
-                    }
-                    else
-                    {
-                        parser_tok_error(
-                            d->id,
-                            "error: definition of variable with array type needs an explicit size or an initializer\n");
-                    }
-                }
-            }
-
-            typestr_from_decltype(elab->p->expr_seqs.data, elab->types, rty, d->type);
-            if (d->init)
-            {
-                struct TypeStr init_ty;
-                struct Decl* parent = ctx->decl;
-                ctx->decl = d;
-                elaborate_expr(elab, ctx, d->init, &init_ty);
-                ctx->decl = parent;
-                // TODO: ensure valid initialization
-                // typestr_implicit_conversion(elab->types, expr_to_rc(d->init), &init_ty, rty);
-            }
-            return;
-        }
-        case AST_INIT:
-        {
-            struct ASTInit* block = top;
-            // TODO: validate initializer lists
-            for (size_t i = 0; i < block->extent; ++i)
-            {
-                struct Expr* e = ((struct Expr**)elab->p->expr_seqs.data)[block->offset + i];
-                struct TypeStr s;
-                elaborate_expr(elab, ctx, e, &s);
-            }
-            typestr_from_decltype(elab->p->expr_seqs.data, elab->types, rty, ctx->decl->type);
-            return;
-        }
-        case STMT_DECLS:
-        {
-            struct StmtDecls* stmt = top;
-            elaborate_exprs(elab, ctx, stmt->offset, stmt->extent);
-            *rty = s_type_void;
-            return;
-        }
-        case STMT_BLOCK:
-        {
-            struct StmtBlock* stmt = top;
-            elaborate_exprs(elab, ctx, stmt->offset, stmt->extent);
-            *rty = s_type_void;
-            return;
-        }
-        case STMT_SWITCH:
-        {
-            struct StmtSwitch* stmt = top;
-            elaborate_expr(elab, ctx, stmt->expr, rty);
-            typestr_decay(rty);
-            if (!(typestr_mask(rty) & TYPE_MASK_SCALAR))
-            {
-                typestr_error1(&stmt->tok->rc,
-                               elab->types,
-                               "error: expected scalar type in switch condition but got '%.*s'\n",
-                               rty);
-            }
-            elaborate_exprs(elab, ctx, stmt->offset, stmt->extent);
-            *rty = s_type_void;
-            return;
-        }
-        default:
-            parser_tok_error(NULL, "error: unknown ast kind: %s\n", ast_kind_to_string(top_expr->kind));
-            *rty = s_type_unknown;
-            return;
+        case EXPR_BINOP: elaborate_binop(elab, ctx, top, rty); break;
+        case EXPR_UNOP: elaborate_unop(elab, ctx, top, rty); break;
+        case EXPR_BUILTIN: elaborate_builtin(elab, ctx, top, rty); break;
+        default: parser_tok_error(NULL, "error: unknown expr kind: %s\n", ast_kind_to_string(top_expr->kind)); return;
     }
+
+    top_expr->sizing = typestr_calc_sizing(elab, rty);
 }
 
 static __forceinline size_t round_to_alignment(size_t size, size_t align)
@@ -1725,125 +1808,237 @@ static __forceinline size_t round_to_alignment(size_t size, size_t align)
     return n - (n % align);
 }
 
-static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
+static void elaborate_decltype(struct Elaborator* elab, struct Ast* ast, struct Ast* init)
 {
-    int rc = 0;
-    if (decl->type)
+    switch (ast->kind)
     {
-        decl->size = get_decl_size(elab, decl->type);
-        decl->align = get_decl_align(elab, decl->type);
-        if (!decl->init) return 0;
-
-        struct ElaborateDeclCtx ctx = {
-            .decl = decl,
-        };
-
-        struct TypeStr ty;
-        elaborate_expr(elab, &ctx, decl->init, &ty);
-        UNWRAP(parser_has_errors());
-    }
-    else if (decl->specs->is_enum && decl->init)
-    {
-        if (decl->init->kind != STMT_DECLS) abort();
-        struct StmtDecls* block = (struct StmtDecls*)decl->init;
-        struct Expr** const seqs = elab->p->expr_seqs.data;
-        int enum_value = 0;
-        for (size_t i = 0; i < block->extent; ++i)
+        case AST_DECLARR:
         {
-            if (seqs[i + block->offset]->kind != AST_DECL) abort();
-            struct Decl* edecl = (struct Decl*)seqs[i + block->offset];
-            if (edecl->init)
+            struct DeclArr* arr = (void*)ast;
+            elaborate_decltype(elab, arr->type, NULL);
+            if (arr->arity == NULL)
             {
-                edecl->enum_value = enum_value = eval_constant(elab, edecl->init);
+                if (init)
+                {
+                    // arr->integer_arity = block->extent;
+                    if (init->kind == AST_INIT)
+                    {
+                        struct AstInit* i = (void*)init;
+                        size_t n = 0;
+                        while (i->init)
+                            ++n, i = i->next;
+                        arr->integer_arity = n;
+                    }
+                    else if (init->kind == EXPR_LIT)
+                    {
+                        struct ExprLit* l = (void*)init;
+                        arr->integer_arity = strlen(l->text) + 1;
+                    }
+                    else
+                    {
+                        parser_tok_error(
+                            init->tok,
+                            "error: array initializer must be either a string literal or an initializer list\n");
+                    }
+                }
             }
             else
             {
-                edecl->enum_value = enum_value++;
+                arr->integer_arity = eval_constant(elab, arr->arity);
             }
-            edecl->is_enum_constant = 1;
+            break;
         }
-
-        if (decl->name)
+        case AST_DECLFN:
         {
-            size_t i = tt_find_insert_null(elab->types, decl->name);
-            struct Decl** d = tt_get_decl(elab->types, i);
-            if (*d != NULL)
-            {
-                UNWRAP(parser_tok_error(decl->id, "error: redefinition of enum '%s'\n", decl->name));
-            }
-            *d = decl;
+            struct DeclFn* fn = (void*)ast;
+            elaborate_decltype(elab, fn->type, NULL);
+            elaborate_stmts(elab, NULL, fn->offset, fn->extent);
+            break;
         }
+        case AST_DECLPTR:
+        {
+            struct DeclPtr* ptr = (void*)ast;
+            elaborate_decltype(elab, ptr->type, NULL);
+            break;
+        }
+        case AST_DECLSPEC: /* already elaborated */ break;
+        default: parser_tok_error(ast->tok, "error: unimplemented decltype.\n"); break;
     }
-    else if (decl->init)
+}
+
+static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
+{
+    int rc = 0;
+    decl->elaborated = 1;
+    elaborate_decltype(elab, decl->type, decl->init);
+    if (!decl->specs->is_typedef)
     {
-        // struct/union definition
-        if (decl->init->kind != STMT_BLOCK) abort();
-        struct StmtBlock* block = (struct StmtBlock*)decl->init;
+        decl->size = get_decl_size(elab, decl->type);
+        decl->align = get_decl_align(elab, decl->type);
 
-        size_t struct_align = 1;
-        size_t struct_size = 0;
-
-        struct Expr** const seqs = elab->p->expr_seqs.data;
-        for (size_t i = 0; i < block->extent; ++i)
+        if (decl->size == 0)
         {
-            if (seqs[i + block->offset]->kind != STMT_DECLS) abort();
-            struct StmtDecls* decls = (struct StmtDecls*)seqs[i + block->offset];
-            for (size_t j = 0; j < decls->extent; ++j)
+            /* type may be incomplete */
+            if (decl->specs->is_extern)
             {
-                if (seqs[decls->offset + j]->kind != AST_DECL) abort();
-                struct Decl* field = (struct Decl*)seqs[decls->offset + j];
-                // nested struct definition
-                if (field->specs->is_struct) continue;
-                if (field->init && field->name)
-                {
-                    return parser_tok_error(field->id, "error: structure and union fields cannot have initializers\n");
-                }
-                UNWRAP(elaborate_decl(elab, field));
-                // insert padding
-                struct_size = round_to_alignment(struct_size, field->align);
-                field->frame_offset = struct_size;
-                struct_size += field->size;
-                if (struct_align < field->align) struct_align = field->align;
+                /* it's extern -- OK */
+            }
+            else if (decl->arg_index > 0 && !((struct Decl*)decl->specs->parent)->init)
+            {
+                /* arg of function prototype -- OK */
+            }
+            else
+            {
+                parser_tok_error(decl->tok, "error: definition of object with incomplete size\n");
+                return 0;
             }
         }
 
-        if (struct_size == 0) struct_size = 1;
-        struct_size = round_to_alignment(struct_size, struct_align);
-        decl->align = struct_align;
-        decl->size = struct_size;
-
-        if (decl->name)
+        if (decl->init)
         {
-            size_t i = tt_find_insert_null(elab->types, decl->name);
-            struct Decl** d = tt_get_decl(elab->types, i);
-            if (*d != NULL)
+            struct TypeStr ts = {};
+            typestr_append_decltype(elab->p->expr_seqs.data, elab->types, &ts, decl->type);
+
+            if (typestr_is_fn(&ts))
             {
-                UNWRAP(parser_tok_error(decl->id, "error: redefinition of struct/union '%s'\n", decl->name));
+                if (decl->type->kind != AST_DECLFN) abort();
+                struct DeclFn* fn = (void*)decl->type;
+                uint32_t f_offset = typestr_get_offset(&ts);
+                size_t begin = f_offset ? arrsz_at(&elab->types->fn_args_ends, f_offset - 1) : 0;
+                size_t end = arrsz_at(&elab->types->fn_args_ends, f_offset);
+                struct ParamConversion* paramcvs = elab->param_conversions.data;
+                if (end - begin < fn->extent) abort();
+                for (size_t i = 0; i < fn->extent; ++i)
+                {
+                    paramcvs[fn->offset + i].sizing =
+                        typestr_calc_sizing(elab, (struct TypeStr*)elab->types->fn_args.data + begin + i);
+                }
+                typestr_pop_offset(&ts);
+                decl->fn_ret_sizing = typestr_calc_sizing(elab, &ts);
             }
-            *d = decl;
+
+            elaborate_init(elab, decl, decl->init);
         }
     }
+    UNWRAP(parser_has_errors());
 
 fail:
     return rc;
 }
 
-static int elaborate_decls(struct Elaborator* elab, struct Expr** declstmts, size_t count)
+static int elaborate_declspecs(struct Elaborator* elab, struct DeclSpecs* specs)
 {
     int rc = 0;
-    struct Expr** const seqs = elab->p->expr_seqs.data;
-    for (size_t i = 0; i < count; ++i)
+    specs->elaborated = 1;
+    if (specs->_typedef)
     {
-        if (declstmts[i]->kind != STMT_DECLS) abort();
-        struct StmtDecls* decls = (struct StmtDecls*)declstmts[i];
-        for (size_t j = 0; j < decls->extent; ++j)
+    }
+    else if (specs->is_enum || specs->is_union || specs->is_struct)
+    {
+        if (specs->name)
         {
-            if (seqs[decls->offset + j]->kind != AST_DECL) abort();
-            struct Decl* decl = (struct Decl*)seqs[decls->offset + j];
+            specs->tt_idx = tt_find_insert_null(elab->types, specs->name) + 1;
+        }
+        else
+        {
+            specs->tt_idx = tt_insert_null(elab->types) + 1;
+        }
+        if (specs->is_enum)
+        {
+            specs->size = 4;
+            specs->align = 4;
+            if (specs->enum_init)
+            {
+                struct StmtDecls* block = specs->enum_init;
+                struct Expr** const seqs = elab->p->expr_seqs.data;
+                int enum_value = 0;
+                for (size_t i = 0; i < block->extent; ++i)
+                {
+                    if (seqs[i + block->offset]->kind != AST_DECL) abort();
+                    struct Decl* edecl = (struct Decl*)seqs[i + block->offset];
+                    if (edecl->init)
+                    {
+                        if (!ast_kind_is_expr(edecl->init->kind))
+                        {
+                            UNWRAP(parser_tok_error(edecl->init->tok, "error: expected constant integer expression\n"));
+                        }
+                        edecl->enum_value = enum_value = eval_constant(elab, (struct Expr*)edecl->init);
+                    }
+                    else
+                    {
+                        edecl->enum_value = enum_value++;
+                    }
+                    edecl->is_enum_constant = 1;
+                }
+            }
+        }
+        else if (specs->suinit)
+        {
+            // struct/union definition
+            struct StmtBlock* block = specs->suinit;
 
-            UNWRAP(elaborate_decl(elab, decl));
+            size_t struct_align = 1;
+            size_t struct_size = 0;
+
+            struct Ast** const seqs = elab->p->expr_seqs.data;
+            for (size_t i = 0; i < block->extent; ++i)
+            {
+                if (seqs[i + block->offset]->kind != STMT_DECLS) abort();
+                struct StmtDecls* decls = (struct StmtDecls*)seqs[i + block->offset];
+                UNWRAP(elaborate_declspecs(elab, decls->specs));
+                for (size_t j = 0; j < decls->extent; ++j)
+                {
+                    if (seqs[decls->offset + j]->kind != AST_DECL) abort();
+                    struct Decl* field = (struct Decl*)seqs[decls->offset + j];
+                    UNWRAP(elaborate_decl(elab, field));
+                    if (field->type || !field->name)
+                    {
+                        if (field->init && field->name)
+                        {
+                            return parser_tok_error(field->tok,
+                                                    "error: structure and union fields cannot have initializers\n");
+                        }
+                        // insert padding
+                        struct_size = round_to_alignment(struct_size, field->align);
+                        field->frame_offset = struct_size;
+                        struct_size += field->size;
+                        if (struct_align < field->align) struct_align = field->align;
+                    }
+                }
+            }
+
+            if (struct_size == 0) struct_size = 1;
+            struct_size = round_to_alignment(struct_size, struct_align);
+            specs->align = struct_align;
+            specs->size = struct_size;
+        }
+
+        struct DeclSpecs** ttdef = tt_get_def(elab->types, specs->tt_idx - 1);
+
+        if (specs->enum_init || specs->suinit)
+        {
+            if (*ttdef)
+            {
+                parser_tok_error(specs->tok, "error: multiple definitions of type.\n");
+                parser_tok_error((*ttdef)->tok, "info: previous definition\n");
+                UNWRAP(1);
+            }
+            *ttdef = specs;
+        }
+
+        specs->def = *ttdef;
+        if (specs->def)
+        {
+            specs->size = specs->def->size;
+            specs->align = specs->def->align;
         }
     }
+    else
+    {
+        specs->size = get_primitive_declspec_size(specs);
+        specs->align = specs->size;
+    }
+
 fail:
     return rc;
 }
@@ -1859,7 +2054,11 @@ void elaborator_init(struct Elaborator* elab, struct Parser* p)
 int elaborate(struct Elaborator* elab)
 {
     struct Parser* const p = elab->p;
-    return elaborate_decls(elab, p->arr_exprs.data, p->arr_exprs.sz / sizeof(struct Expr*));
+    if (elab->param_conversions.sz != 0) abort();
+    array_push_zeroes(&elab->param_conversions,
+                      sizeof(struct ParamConversion) * array_size(&p->expr_seqs, sizeof(void*)));
+    elaborate_stmt(elab, NULL, &p->top->ast);
+    return parser_has_errors();
 }
 
 static void tt_destroy(struct TypeTable* tt)

@@ -1,5 +1,8 @@
 #pragma once
 
+#include <stddef.h>
+#include <stdint.h>
+
 #include "fwd.h"
 
 #define X_TACO_KIND(Y)                                                                                                 \
@@ -52,6 +55,7 @@
     Y(TACA_TEMP)                                                                                                       \
     Y(TACA_ARG_ADDR)                                                                                                   \
     Y(TACA_REF)                                                                                                        \
+    Y(TACA_REF_LVALUE)                                                                                                 \
     Y(TACA_CONST)                                                                                                      \
     Y(TACA_CONST_ADDR)                                                                                                 \
     Y(TACA_PARAM)
@@ -82,6 +86,7 @@ const char* taco_to_string(enum TACOKind k);
 struct TACAddress
 {
     enum TACAKind kind;
+    int32_t sizing;
     union
     {
         const char* literal;
@@ -99,7 +104,6 @@ struct TACAddress
 struct TACEntry
 {
     enum TACOKind op;
-    unsigned int width;
     struct TACAddress arg1, arg2;
     const struct RowCol* rc;
 };

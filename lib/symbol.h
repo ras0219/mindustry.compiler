@@ -12,11 +12,22 @@ struct Attribute
 
 struct DeclSpecs
 {
-    struct Expr kind;
+    INHERIT_AST;
 
-    const struct Token* tok;
-    struct Decl* type;
     const char* name;
+    /* stored +1 so 0 means uninitialized */
+    uint32_t tt_idx;
+
+    /* encompassing function or struct */
+    struct Ast* parent;
+
+    struct Decl* _typedef;
+    struct StmtBlock* suinit;
+    struct StmtDecls* enum_init;
+    struct DeclSpecs* def;
+    size_t size;
+    size_t align;
+
     struct Attribute attr;
 
     unsigned int is_struct : 1;
@@ -40,9 +51,9 @@ struct DeclSpecs
 
 struct DeclPtr
 {
-    struct Expr kind;
-    const struct Token* tok;
-    struct Expr* type;
+    INHERIT_AST;
+
+    struct Ast* type;
     struct Attribute attr;
     int is_const : 1;
     int is_volatile : 1;
@@ -51,9 +62,9 @@ struct DeclPtr
 
 struct DeclFn
 {
-    struct Expr kind;
-    const struct Token* tok;
-    struct Expr* type;
+    INHERIT_AST;
+
+    struct Ast* type;
     unsigned is_varargs : 1;
     size_t offset;
     size_t extent;
@@ -61,47 +72,41 @@ struct DeclFn
 
 struct DeclArr
 {
-    struct Expr kind;
-    const struct Token* tok;
-    struct Expr* type;
+    INHERIT_AST;
+
+    struct Ast* type;
     struct Expr* arity;
     unsigned int integer_arity;
 };
 
 struct Decl
 {
-    struct Expr kind;
+    INHERIT_AST;
 
-    const struct Token* id;
     const char* name;
-    // valid only if name == NULL
-    size_t anon_idx;
     struct Attribute attr;
     struct DeclSpecs* specs;
+    struct Ast* type;
+
     struct Decl* def;
-    struct Expr* init;
-    // encompassing function
-    struct Decl* parent_decl;
+    struct Ast* init;
+
     // 0 means not an argument, 1 means first argument, etc
     unsigned int arg_index;
-    unsigned int is_enum_constant : 1;
     union
     {
-        int enum_value;
         unsigned int arity;
+        int32_t fn_ret_sizing;
     };
-
-    struct Expr* type;
 
     // elaboration information
     int elab_index;
+    size_t size;
+    size_t align;
+
+    unsigned int is_enum_constant : 1;
+    int enum_value;
 
     // backend information
     size_t frame_offset;
-    size_t size;
-    size_t align;
 };
-
-const struct RowCol* decl_to_rc(const struct Decl*);
-
-struct Decl* decl_get_def(struct Decl*);
