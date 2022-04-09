@@ -32,26 +32,22 @@ enum
     TACA_LNAME_IS_MEMORY = 1,
     TACA_FRAME_IS_MEMORY = 1,
     TACA_REF_IS_MEMORY = 1,
-    TACA_REF_LVALUE_IS_MEMORY = 1,
     TACA_PARAM_IS_MEMORY = 1,
     TACA_CONST_IS_MEMORY = 1,
-    TACA_CONST_ADDR_IS_MEMORY = 0,
     TACA_ARG_IS_MEMORY = 1,
     TACA_ALABEL_IS_MEMORY = 0,
     TACA_LLABEL_IS_MEMORY = 1,
     TACA_TEMP_IS_MEMORY = 0,
-
-    TACA_ARG_ADDR_IS_MEMORY = 0,
-    TACA_FRAME_ADDR_IS_MEMORY = 0,
-    TACA_NAME_ADDR_IS_MEMORY = 1,
-    TACA_LNAME_ADDR_IS_MEMORY = 0,
 };
 
 #define Y_IS_MEMORY(Z) Z##_IS_MEMORY,
 static const char s_table_taca_is_memory[TACA_KIND_COUNT] = {X_TACA_KIND(Y_IS_MEMORY)};
 #undef Y_IS_MEMORY
 
-__forceinline static int taca_is_memory(enum TACAKind kind) { return s_table_taca_is_memory[kind]; }
+__forceinline static int taca_is_memory(const struct TACAddress* addr)
+{
+    return addr->kind == TACA_NAME || (!addr->is_addr && s_table_taca_is_memory[addr->kind]);
+}
 
 static __forceinline void cg_debug(struct CodeGen* cg, const char* fmt, ...)
 {
@@ -150,7 +146,7 @@ static int cg_gen_taca(struct CodeGen* cg, struct TACAddress addr, struct Activa
     int rc = 0;
     switch (addr.kind)
     {
-        case TACA_NAME_ADDR:
+        case TACA_NAME:
             if (cg->target == CG_TARGET_MACOS_GAS)
             {
                 array_push_byte(&cg->code, '_');
@@ -158,20 +154,13 @@ static int cg_gen_taca(struct CodeGen* cg, struct TACAddress addr, struct Activa
             array_appends(&cg->code, addr.name);
             array_appends(&cg->code, "@GOTPCREL(%rip)");
             break;
-        case TACA_LNAME_ADDR:
-            if (cg->target == CG_TARGET_MACOS_GAS)
-            {
-                array_push_byte(&cg->code, '_');
-            }
-            array_appends(&cg->code, addr.name);
-            break;
         case TACA_LNAME:
             if (cg->target == CG_TARGET_MACOS_GAS)
             {
                 array_push_byte(&cg->code, '_');
             }
             array_appends(&cg->code, addr.name);
-            array_appends(&cg->code, "(%rip)");
+            if (!addr.is_addr) array_appends(&cg->code, "(%rip)");
             break;
         case TACA_LITERAL: array_appends(&cg->code, addr.literal); break;
         case TACA_IMM: array_appendf(&cg->code, "$%zu", addr.imm); break;
@@ -227,31 +216,12 @@ static int cg_gen_load(struct CodeGen* cg, struct TACAddress addr, int reg, stru
         return 0;
     }
     int rc = 0;
-
-    if (addr.kind == TACA_FRAME_ADDR)
-    {
-        addr.kind = TACA_FRAME;
-        array_appends(&cg->code, "    leaq ");
-    }
-    else if (addr.kind == TACA_ARG_ADDR)
-    {
-        addr.kind = TACA_ARG;
-        array_appends(&cg->code, "    leaq ");
-    }
-    else if (addr.kind == TACA_LNAME_ADDR)
-    {
-        addr.kind = TACA_LNAME;
-        array_appends(&cg->code, "    leaq ");
-    }
-    else if (addr.kind == TACA_CONST_ADDR)
-    {
-        addr.kind = TACA_CONST;
-        array_appends(&cg->code, "    leaq ");
-    }
-    else
+    if (!addr.is_addr)
     {
         goto not_address;
     }
+    addr.is_addr = 0;
+    array_appends(&cg->code, "    leaq ");
     rc = cg_gen_taca(cg, addr, frame);
     array_appendf(&cg->code, ", %s\n", s_reg_names[reg]);
     return rc;
@@ -272,7 +242,7 @@ not_address:;
     }
     if (addr.kind == TACA_NAME)
     {
-        addr.kind = TACA_NAME_ADDR;
+        addr.is_addr = 1;
         array_appends(&cg->code, "    movq ");
         rc = cg_gen_taca(cg, addr, frame);
         array_appendf(&cg->code, ", %s\n", s_reg_names[reg]);
@@ -351,16 +321,6 @@ static int cg_gen_store_frame(struct CodeGen* cg, size_t i, int reg, struct Acti
     return cg_gen_store(cg, addr, reg, frame);
 }
 
-__forceinline static struct TACAddress taca_deref_rax(int32_t sizing)
-{
-    struct TACAddress r = {
-        .kind = TACA_LITERAL,
-        .literal = "(%rax)",
-        .sizing = sizing,
-    };
-    return r;
-}
-
 static int cg_add(struct CodeGen* cg, size_t i, const struct TACEntry* taces, struct ActivationRecord* frame)
 {
     int rc = 0;
@@ -372,9 +332,55 @@ fail:
     return rc;
 }
 
+static int cg_memcpy(
+    struct CodeGen* cg, struct TACAddress arg1, struct TACAddress arg2, int32_t sizing, struct ActivationRecord* frame)
+{
+    int rc = 0;
+    UNWRAP(cg_gen_load(cg, arg2, REG_RAX, frame));
+    UNWRAP(cg_gen_load(cg, arg1, REG_RBX, frame));
+    int32_t j = 0;
+    for (; j + 8 < sizing; j += 8)
+    {
+        array_appendf(&cg->code, "    movq %d(%%rax), %%rcx\n", j);
+        array_appendf(&cg->code, "    movq %%rcx, %d(%%rbx)\n", j);
+    }
+    switch (sizing - j)
+    {
+        case 8:
+        case -8:
+            array_appendf(&cg->code, "    movq %d(%%rax), %%rcx\n", j);
+            array_appendf(&cg->code, "    movq %%rcx, %d(%%rbx)\n", j);
+            break;
+        case 4:
+        case -4:
+            array_appendf(&cg->code, "    movl %d(%%rax), %%ecx\n", j);
+            array_appendf(&cg->code, "    movl %%ecx, %d(%%rbx)\n", j);
+            break;
+        case 2:
+        case -2:
+            array_appendf(&cg->code, "    movw %d(%%rax), %%cx\n", j);
+            array_appendf(&cg->code, "    movw %%cx, %d(%%rbx)\n", j);
+            break;
+        case 1:
+        case -1:
+            array_appendf(&cg->code, "    movb %d(%%rax), %%cl\n", j);
+            array_appendf(&cg->code, "    movb %%cl, %d(%%rbx)\n", j);
+            break;
+        default: UNWRAP(parser_ferror(NULL, "error: invalid sizing: %d\n", sizing - j));
+    }
+fail:
+    return rc;
+}
+
 static int cg_assign(struct CodeGen* cg, struct TACAddress arg1, struct TACAddress arg2, struct ActivationRecord* frame)
 {
     int rc = 0;
+    if (!arg2.is_addr)
+    {
+        arg2.is_addr = 1;
+        UNWRAP(cg_memcpy(cg, arg1, arg2, arg2.sizing, frame));
+        goto fail;
+    }
     UNWRAP(cg_gen_load(cg, arg2, REG_RAX, frame));
     UNWRAP(cg_gen_store(cg, arg1, REG_RAX, frame));
 fail:
@@ -466,7 +472,7 @@ static int cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t 
         case TACO_CALL:
             array_appends(&cg->code, "    movb $0, %al\n");
             array_appends(&cg->code, "    callq ");
-            if (taca_is_memory(tace->arg1.kind))
+            if (taca_is_memory(&tace->arg1))
             {
                 array_push_byte(&cg->code, '*');
             }
@@ -475,10 +481,12 @@ static int cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t 
             UNWRAP(cg_gen_store_frame(cg, i, REG_RAX, frame));
             break;
         case TACO_LOAD:
-            UNWRAP(cg_gen_load(cg, tace->arg1, REG_RAX, frame));
-            UNWRAP(cg_gen_load(cg, taca_deref_rax(tace->arg2.sizing), REG_RAX, frame));
-            UNWRAP(cg_gen_store_frame(cg, i, REG_RAX, frame));
+        {
+            struct TACAddress arg1 = tace->arg1;
+            arg1.is_addr = 1;
+            UNWRAP(cg_memcpy(cg, arg1, tace->arg2, arg1.sizing, frame));
             break;
+        }
         simple_binary:
             UNWRAP(cg_gen_load(cg, tace->arg2, REG_RBX, frame));
             UNWRAP(cg_gen_load(cg, tace->arg1, REG_RAX, frame));

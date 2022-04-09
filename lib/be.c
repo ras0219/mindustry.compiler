@@ -73,7 +73,8 @@ __forceinline static struct TACAddress taca_alabel(size_t l)
 __forceinline static struct TACAddress taca_const_addr(size_t const_idx)
 {
     struct TACAddress ret = {
-        .kind = TACA_CONST_ADDR,
+        .kind = TACA_CONST,
+        .is_addr = 1,
         .const_idx = const_idx,
         .sizing = 8,
     };
@@ -94,9 +95,12 @@ static struct TACAddress be_push_tace(struct BackEnd* be, const struct TACEntry*
     const size_t offset = array_size(&be->code, sizeof(struct TACEntry));
     array_push(&be->code, e, sizeof(struct TACEntry));
     if (e->op == TACO_ASSIGN && e->arg2.kind == TACA_VOID) abort();
-    if (e->arg1.sizing > 8) abort();
-    if (e->arg2.sizing > 8) abort();
-    if (e->arg2.sizing == 0 && (e->arg2.kind != TACA_VOID && e->arg2.kind != TACA_ALABEL)) abort();
+    if (!e->arg1.is_addr && e->arg1.sizing > 8 && e->op != TACO_LOAD) abort();
+    if (!e->arg2.is_addr && e->arg2.sizing > 8 && e->op != TACO_ASSIGN && e->op != TACO_LOAD) abort();
+    if (e->arg2.sizing == 0 && (e->arg2.kind != TACA_VOID && e->arg2.kind != TACA_ALABEL))
+    {
+        parser_ferror(e->rc, "0 sized arg\n");
+    }
     struct TACAddress ret = {
         .kind = TACA_REF,
         .ref = offset,
@@ -123,72 +127,17 @@ static void be_push_jump(struct BackEnd* be, size_t n)
 
 static int be_compile_increment(struct BackEnd* be, struct TACAddress* addr, size_t offset)
 {
-    switch (addr->kind)
+    if (addr->kind == TACA_FRAME && addr->is_addr)
     {
-        case TACA_FRAME_ADDR: addr->frame_offset += offset; break;
-        case TACA_NAME_ADDR:
-        case TACA_ARG_ADDR:
-        case TACA_FRAME:
-        case TACA_ARG:
-        case TACA_REF:
-        {
-            struct TACEntry tace = {
-                .op = TACO_ADD,
-                .arg1 = *addr,
-                .arg2 =
-                    {
-                        .kind = TACA_IMM,
-                        .imm = offset,
-                        .sizing = 8,
-                    },
-            };
-            *addr = be_push_tace(be, &tace, addr->sizing);
-            break;
-        }
-        default: return parser_tok_error(NULL, "error: %s: unhandled taca: %s\n", __func__, taca_to_string(addr->kind));
+        addr->frame_offset += offset;
+        return 0;
     }
-    return 0;
-}
-
-static struct TACAddress be_deref(struct BackEnd* be, const struct TACAddress* in, int32_t sizing)
-{
-    struct TACAddress out = *in;
-    switch (out.kind)
-    {
-        case TACA_FRAME_ADDR:
-            out.kind = TACA_FRAME;
-            out.sizing = sizing;
-            break;
-        case TACA_ARG_ADDR:
-            out.kind = TACA_ARG;
-            out.sizing = sizing;
-            break;
-        case TACA_NAME_ADDR:
-            out.kind = TACA_NAME;
-            out.sizing = sizing;
-            break;
-        case TACA_LNAME_ADDR:
-            out.kind = TACA_LNAME;
-            out.sizing = sizing;
-            break;
-        default:
-        {
-            if (out.sizing != 8) abort();
-            struct TACEntry tace = {
-                .op = TACO_LOAD,
-                .arg1 = out,
-                .arg2 = {.sizing = sizing},
-            };
-            if (sizing > 8) abort();
-            return be_push_tace(be, &tace, sizing);
-        }
-    }
-    return out;
-}
-
-static int be_dereference(struct BackEnd* be, struct TACAddress* out, int32_t sizing)
-{
-    *out = be_deref(be, out, sizing);
+    struct TACEntry tace = {
+        .op = TACO_ADD,
+        .arg1 = *addr,
+        .arg2 = taca_imm(8),
+    };
+    *addr = be_push_tace(be, &tace, addr->sizing);
     return 0;
 }
 
@@ -203,30 +152,7 @@ static struct TACAddress be_ensure_ref(struct BackEnd* be, const struct TACAddre
     return be_push_tace(be, &tace, in->sizing);
 }
 
-__attribute__((unused)) static int be_addressof(struct BackEnd* be, struct TACAddress* out)
-{
-    int rc = 0;
-    switch (out->kind)
-    {
-        case TACA_FRAME:
-            out->kind = TACA_FRAME_ADDR;
-            out->sizing = 8;
-            break;
-        case TACA_ARG:
-            out->kind = TACA_ARG_ADDR;
-            out->sizing = 8;
-            break;
-        case TACA_NAME:
-            out->kind = TACA_NAME_ADDR;
-            out->sizing = 8;
-            break;
-        default: UNWRAP(parser_tok_error(NULL, "error: cannot take address of TACA %d\n", out->kind));
-    }
-fail:
-    return rc;
-}
-
-__attribute__((unused)) static int be_alloc_temp(struct BackEnd* be, int32_t sizing, struct TACAddress* out)
+static struct TACAddress be_alloc_temp(struct BackEnd* be, int32_t sizing)
 {
     struct TACAddress o = {
         .kind = TACA_FRAME,
@@ -235,8 +161,46 @@ __attribute__((unused)) static int be_alloc_temp(struct BackEnd* be, int32_t siz
     };
     be->frame_size += sizing < 0 ? -sizing : sizing;
     if (be->max_frame_size < be->frame_size) be->max_frame_size = be->frame_size;
-    *out = o;
+    return o;
+}
+
+static struct TACAddress be_deref(struct BackEnd* be, const struct TACAddress* in, int32_t sizing)
+{
+    if (in->is_addr)
+    {
+        struct TACAddress out = *in;
+        out.is_addr = 0;
+        out.sizing = sizing;
+        return out;
+    }
+    else
+    {
+        if (in->sizing != 8) abort();
+        struct TACAddress out = be_alloc_temp(be, sizing);
+        struct TACEntry tace = {
+            .op = TACO_LOAD,
+            .arg1 = out,
+            .arg2 = *in,
+        };
+        be_push_tace(be, &tace, sizing);
+        return out;
+    }
+}
+
+static int be_dereference(struct BackEnd* be, struct TACAddress* out, int32_t sizing)
+{
+    *out = be_deref(be, out, sizing);
     return 0;
+}
+
+__attribute__((unused)) static int be_addressof(struct BackEnd* be, struct TACAddress* out)
+{
+    int rc = 0;
+    if (out->is_addr) UNWRAP(parser_tok_error(NULL, "error: cannot take address of TACA %d\n", out->kind));
+
+    out->is_addr = 1;
+fail:
+    return rc;
 }
 
 static int be_compile_stmt(struct BackEnd* be, struct Ast* e);
@@ -260,15 +224,17 @@ static int be_compile_init(struct BackEnd* be, struct Ast* e, size_t frame_offse
     }
     else
     {
-        if (sizing > 8) abort();
-        struct TACEntry assign = {.op = TACO_ASSIGN,
-                                  .arg1 =
-                                      {
-                                          .kind = TACA_FRAME_ADDR,
-                                          .frame_offset = frame_offset,
-                                          .sizing = sizing,
-                                      },
-                                  .rc = &e->tok->rc};
+        struct TACEntry assign = {
+            .op = TACO_ASSIGN,
+            .arg1 =
+                {
+                    .kind = TACA_FRAME,
+                    .is_addr = 1,
+                    .frame_offset = frame_offset,
+                    .sizing = sizing,
+                },
+            .rc = &e->tok->rc,
+        };
         UNWRAP(be_compile_expr(be, (struct Expr*)e, &assign.arg2));
         be_push_tace(be, &assign, 0);
     }
@@ -401,22 +367,23 @@ top:
 static int be_compile_lvalue_ExprSym(struct BackEnd* be, struct ExprSym* e, struct TACAddress* out)
 {
     struct Decl* decl = e->decl;
+    out->is_addr = 1;
     if (decl->specs->parent)
     {
         if (decl->arg_index > 0)
         {
-            out->kind = TACA_ARG_ADDR;
+            out->kind = TACA_ARG;
             out->arg_idx = decl->arg_index - 1;
         }
         else
         {
-            out->kind = TACA_FRAME_ADDR;
+            out->kind = TACA_FRAME;
             out->frame_offset = decl->frame_offset;
         }
     }
     else
     {
-        out->kind = decl->specs->is_static ? TACA_LNAME_ADDR : TACA_NAME_ADDR;
+        out->kind = decl->specs->is_static ? TACA_LNAME : TACA_NAME;
         out->name = decl->name;
     }
     out->sizing = 8;
@@ -603,6 +570,7 @@ static int be_compile_lvalue_ExprUnOp(struct BackEnd* be, struct ExprUnOp* e, st
     tace.rc = &e->tok->rc;
     switch (e->tok->type)
     {
+        case TOKEN_SYM1('*'): UNWRAP(be_compile_expr(be, e->lhs, out)); goto fail;
         default:
             UNWRAP(parser_tok_error(
                 e->tok, "error: be_compile_lvalue_ExprUnOp unimplemented op (%s)\n", token_str(be->parser, e->tok)));
@@ -621,11 +589,12 @@ static int be_compile_ExprBuiltin(struct BackEnd* be, struct ExprBuiltin* e, str
         case LEX_UUVA_START:
             // see https://uclibc.org/docs/psABI-x86_64.pdf
             tace.op = TACO_ASSIGN;
-            tace.arg2.kind = TACA_FRAME_ADDR;
+            tace.arg2.kind = TACA_FRAME;
+            tace.arg2.is_addr = 1;
             tace.arg2.frame_offset = 0;
             tace.arg2.sizing = 8;
             UNWRAP(be_compile_lvalue(be, e->expr1, &tace.arg1));
-            if (tace.arg1.kind != TACA_FRAME_ADDR)
+            if (tace.arg1.kind != TACA_FRAME || !tace.arg1.is_addr)
                 UNWRAP(
                     parser_tok_error(e->tok, "error: first argument of __builtin_va_start must be a local variable\n"));
             be_push_tace(be, &tace, 0);
@@ -641,7 +610,8 @@ static int be_compile_ExprBuiltin(struct BackEnd* be, struct ExprBuiltin* e, str
             be_push_tace(be, &tace, 0);
             tace.arg1.frame_offset += 4;
             tace.arg1.sizing = 8;
-            tace.arg2.kind = TACA_ARG_ADDR;
+            tace.arg2.kind = TACA_ARG;
+            tace.arg2.is_addr = 1;
             tace.arg2.arg_idx = 6;
             be_push_tace(be, &tace, 0);
             tace.arg1.frame_offset += 8;
@@ -1221,7 +1191,7 @@ static int be_compile_stmt(struct BackEnd* be, struct Ast* e)
 static void be_debug_print_taca(const struct TACAddress* addr)
 {
     char buf[64];
-    int i = snprintf(buf, sizeof(buf), "%-15s", taca_to_string(addr->kind));
+    int i = snprintf(buf, sizeof(buf), "%-15s:%u:%d", taca_to_string(addr->kind), addr->is_addr, addr->sizing);
     if (i < sizeof(buf))
     {
         switch (addr->kind)
@@ -1229,13 +1199,10 @@ static void be_debug_print_taca(const struct TACAddress* addr)
             case TACA_CONST: snprintf(buf + i, sizeof(buf) - i, " %zu", addr->const_idx); break;
             case TACA_ALABEL: snprintf(buf + i, sizeof(buf) - i, " %zu", addr->alabel); break;
             case TACA_IMM: snprintf(buf + i, sizeof(buf) - i, " %zu", addr->imm); break;
-            case TACA_FRAME_ADDR:
             case TACA_FRAME: snprintf(buf + i, sizeof(buf) - i, " %zu", addr->frame_offset); break;
             case TACA_REF: snprintf(buf + i, sizeof(buf) - i, " %zu", addr->ref); break;
-            case TACA_NAME_ADDR:
             case TACA_NAME: snprintf(buf + i, sizeof(buf) - i, " %s", addr->name); break;
             case TACA_PARAM: snprintf(buf + i, sizeof(buf) - i, " %zu", addr->param_idx); break;
-            case TACA_ARG_ADDR:
             case TACA_ARG: snprintf(buf + i, sizeof(buf) - i, " %zu", addr->arg_idx); break;
             default: break;
         }

@@ -939,27 +939,12 @@ static int32_t typestr_calc_sizing(struct Elaborator* elab, const struct TypeStr
 
 static struct Decl* find_field_by_name(struct DeclSpecs* def, const char* fieldname, struct Decl* const* const decls)
 {
-    if (!def || !def->suinit) abort();
-    struct StmtBlock* block = def->suinit;
-    for (size_t i = 0; i < block->extent; ++i)
+    if (!def || !def->suinit || !def->first_member) abort();
+    struct Decl* field = def->first_member;
+    while (field)
     {
-        struct Decl* e = decls[block->offset + i];
-        if (e->kind != STMT_DECLS) abort();
-        struct StmtDecls* f = (struct StmtDecls*)e;
-        if (f->extent == 0 && !f->specs->name)
-        {
-            struct Decl* x = find_field_by_name(f->specs, fieldname, decls);
-            if (x) return x;
-        }
-        for (size_t i = 0; i < f->extent; ++i)
-        {
-            struct Decl* g = decls[f->offset + i];
-            if (g->kind != AST_DECL) abort();
-            if (g->name && strcmp(g->name, fieldname) == 0)
-            {
-                return (struct Decl*)g;
-            }
-        }
+        if (strcmp(field->name, fieldname) == 0) return field;
+        field = field->next_member;
     }
     return NULL;
 }
@@ -1371,143 +1356,99 @@ static void elaborate_stmts(struct Elaborator* elab, struct ElaborateDeclCtx* ct
     }
 }
 
-static void elaborate_init_ty(struct Elaborator* elab, struct TypeStr dty, struct Ast* ast);
-static void elaborate_init(struct Elaborator* elab, struct Decl* decl, struct Ast* ast)
+static void elaborate_init_ty(struct Elaborator* elab, size_t offset, struct TypeStr dty, struct Ast* ast);
+static void elaborate_init(struct Elaborator* elab, size_t offset, struct Decl* decl, struct Ast* ast)
 {
     struct TypeStr dty;
     typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, &dty, decl);
     typestr_strip_cvr(&dty);
-    elaborate_init_ty(elab, dty, ast);
+    elaborate_init_ty(elab, offset, dty, ast);
 }
-static void elaborate_init_ty(struct Elaborator* elab, struct TypeStr dty, struct Ast* ast)
+
+static void elaborate_init_ty_AstInit(struct Elaborator* elab, size_t offset, struct TypeStr dty, struct AstInit* init)
 {
     switch (dty.buf[(int)dty.buf[0]])
     {
         case TYPE_BYTE_ARRAY:
-            if (ast->kind == AST_INIT)
+            uint32_t extent = typestr_pop_offset(&dty);
+            size_t elem_size = typestr_get_size(elab, &dty);
+            if (extent == 0)
             {
-                struct AstInit* init = (void*)ast;
-                uint32_t extent = typestr_pop_offset(&dty);
-                if (extent == 0)
-                {
-                    parser_tok_error(ast->tok, "error: array must have nonzero extent\n");
-                    return;
-                }
-                if (init->designator_extent)
-                {
-                    parser_tok_error(ast->tok, "error: unimplemented array initializer type.\n");
-                    break;
-                }
-                else
-                {
-                    size_t j;
-
-                    for (j = 0; init->init && j < extent; init = init->next, ++j)
-                    {
-                        elaborate_init_ty(elab, dty, init->init);
-                    }
-                    if (init->init && j == extent)
-                    {
-                        parser_tok_error(init->tok, "error: too many initializer expressions. Expected %zu.\n", extent);
-                        return;
-                    }
-                }
+                parser_tok_error(init->tok, "error: array must have nonzero extent\n");
+                return;
+            }
+            if (init->designator_extent)
+            {
+                parser_tok_error(init->tok, "error: designators in array initializers are unimplemented.\n");
+                break;
             }
             else
-                parser_tok_error(ast->tok, "error: unimplemented array initializer type.\n");
+            {
+                size_t j;
+
+                for (j = 0; init->init && j < extent; init = init->next, ++j)
+                {
+                    elaborate_init_ty(elab, offset + j * elem_size, dty, init->init);
+                    init->sizing = typestr_calc_sizing(elab, &dty);
+                    if (init->sizing == 0) abort();
+                }
+                if (init->init && j == extent)
+                {
+                    parser_tok_error(init->tok, "error: too many initializer expressions. Expected %zu.\n", extent);
+                    return;
+                }
+            }
             break;
-        case TYPE_BYTE_UNION: parser_tok_error(ast->tok, "error: unimplemented union initializer type.\n"); break;
+        case TYPE_BYTE_UNION: parser_tok_error(init->tok, "error: unimplemented union initializer type.\n"); break;
         case TYPE_BYTE_STRUCT:
-            if (ast->kind == AST_INIT)
+            struct DeclSpecs* specs = typestr_get_decl(elab->types, &dty);
+            if (!specs)
             {
-                struct AstInit* init = (void*)ast;
+                parser_tok_error(init->tok, "error: incomplete type\n");
+                return;
+            }
+            while (init->init && j < specs->suinit->extent)
+            {
+                struct Ast* fields = seqs[specs->suinit->offset + j];
+                if (fields->kind != STMT_DECLS) abort();
+                struct StmtDecls* sdecls = (struct StmtDecls*)fields;
 
-                struct DeclSpecs* specs = typestr_get_decl(elab->types, &dty);
-                if (!specs)
+                while (init->init && k < sdecls->extent)
                 {
-                    parser_tok_error(ast->tok, "error: incomplete type\n");
-                    return;
-                }
-                size_t j = 0, k = 0;
-                struct Ast** seqs = elab->p->expr_seqs.data;
-                while (init->init && j < specs->suinit->extent)
-                {
-                    if (init->designator_extent)
-                    {
-                        if (init->designator_extent > 1)
-                        {
-                            parser_tok_error(init->tok,
-                                             "error: mixing designation types in initializer list is unsupported.\n");
-                            return;
-                        }
-                        const struct Designator* d =
-                            (const struct Designator*)elab->p->designators.data + init->designator_offset;
-                        if (d->field)
-                        {
-                            struct Decl* maybe_field = find_field_by_name(specs, d->field, elab->p->expr_seqs.data);
-                            if (maybe_field)
-                            {
-                                elaborate_init(elab, maybe_field, init->init);
-                                init->offset = maybe_field->frame_offset;
-                                init->sizing = maybe_field->size;
-                                if (maybe_field->size == 0) abort();
-                            }
-                            else
-                            {
-                                parser_tok_error(init->tok, "error: could not find field '%s'.\n", d->field);
-                            }
-                        }
-                        else
-                        {
-                            parser_tok_error(init->tok, "error: array designators not implemented.\n");
-                        }
-                    }
-                    else
-                    {
-                    }
+                    struct Ast* field = seqs[sdecls->offset + k];
+                    if (field->kind != AST_DECL) abort();
+                    struct Decl* fdecl = (struct Decl*)field;
+                    elaborate_init(elab, fdecl, init->init);
+
                     init = init->next;
+                    ++k;
                 }
-                {
-                    while (init->init && j < specs->suinit->extent)
-                    {
-                        struct Ast* fields = seqs[specs->suinit->offset + j];
-                        if (fields->kind != STMT_DECLS) abort();
-                        struct StmtDecls* sdecls = (struct StmtDecls*)fields;
-
-                        while (init->init && k < sdecls->extent)
-                        {
-                            struct Ast* field = seqs[sdecls->offset + k];
-                            if (field->kind != AST_DECL) abort();
-                            struct Decl* fdecl = (struct Decl*)field;
-                            elaborate_init(elab, fdecl, init->init);
-
-                            init = init->next;
-                            ++k;
-                        }
-                        ++j;
-                    }
-                    if (init->init && j == specs->suinit->extent)
-                    {
-                        parser_tok_error(init->tok,
-                                         "error: too many initializer expressions. Expected %zu.\n",
-                                         specs->suinit->extent);
-                        return;
-                    }
-                }
+                ++j;
             }
-            else
+            if (init->init && j == specs->suinit->extent)
             {
-                goto expr_init;
+                parser_tok_error(
+                    init->tok, "error: too many initializer expressions. Expected %zu.\n", specs->suinit->extent);
+                return;
             }
-            break;
-        case TYPE_BYTE_FUNCTION:
-        {
-            elaborate_stmt(elab, NULL, ast);
-            break;
-        }
+        default:
+    }
+}
+
+static void elaborate_init_ty(struct Elaborator* elab, size_t offset, struct TypeStr dty, struct Ast* ast)
+{
+    if (ast->kind == AST_INIT)
+    {
+        return elaborate_init_ty_AstInit(elab, offset, dty, (struct AstInit*)ast);
+    }
+    switch (dty.buf[(int)dty.buf[0]])
+    {
+        case TYPE_BYTE_ARRAY: parser_tok_error(ast->tok, "error: unimplemented array initializer type.\n"); break;
+        case TYPE_BYTE_UNION: parser_tok_error(ast->tok, "error: unimplemented union initializer type.\n"); break;
+        case TYPE_BYTE_FUNCTION: elaborate_stmt(elab, NULL, ast); break;
+        case TYPE_BYTE_STRUCT:
         default:
         {
-        expr_init:
             if (!ast_kind_is_expr(ast->kind))
             {
                 parser_tok_error(ast->tok, "error: expected expression in object initialization\n");
@@ -1896,7 +1837,7 @@ static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
 
         if (decl->init)
         {
-            struct TypeStr ts = {};
+            struct TypeStr ts = {0};
             typestr_append_decltype(elab->p->expr_seqs.data, elab->types, &ts, decl->type);
 
             if (typestr_is_fn(&ts))
@@ -1980,17 +1921,30 @@ static int elaborate_declspecs(struct Elaborator* elab, struct DeclSpecs* specs)
             size_t struct_align = 1;
             size_t struct_size = 0;
 
+            struct Decl** p_next_decl = &specs->first_member;
+
             struct Ast** const seqs = elab->p->expr_seqs.data;
             for (size_t i = 0; i < block->extent; ++i)
             {
                 if (seqs[i + block->offset]->kind != STMT_DECLS) abort();
                 struct StmtDecls* decls = (struct StmtDecls*)seqs[i + block->offset];
                 UNWRAP(elaborate_declspecs(elab, decls->specs));
+                if (decls->extent == 0 && !decls->specs->name)
+                {
+                    // nested anonymous struct/union
+                    *p_next_decl = decls->specs->first_member;
+                    while ((*p_next_decl)->next_member)
+                    {
+                        p_next_decl = &(*p_next_decl)->next_member;
+                    }
+                }
                 for (size_t j = 0; j < decls->extent; ++j)
                 {
                     if (seqs[decls->offset + j]->kind != AST_DECL) abort();
                     struct Decl* field = (struct Decl*)seqs[decls->offset + j];
                     UNWRAP(elaborate_decl(elab, field));
+                    *p_next_decl = field;
+                    p_next_decl = &field->next_member;
                     if (field->type || !field->name)
                     {
                         if (field->init && field->name)

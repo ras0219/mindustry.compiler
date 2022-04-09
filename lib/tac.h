@@ -44,20 +44,14 @@
     Y(TACA_LITERAL)                                                                                                    \
     Y(TACA_IMM)                                                                                                        \
     Y(TACA_NAME)                                                                                                       \
-    Y(TACA_NAME_ADDR)                                                                                                  \
     Y(TACA_LNAME)                                                                                                      \
-    Y(TACA_LNAME_ADDR)                                                                                                 \
     Y(TACA_ALABEL)                                                                                                     \
     Y(TACA_LLABEL)                                                                                                     \
     Y(TACA_FRAME)                                                                                                      \
-    Y(TACA_FRAME_ADDR)                                                                                                 \
     Y(TACA_ARG)                                                                                                        \
     Y(TACA_TEMP)                                                                                                       \
-    Y(TACA_ARG_ADDR)                                                                                                   \
     Y(TACA_REF)                                                                                                        \
-    Y(TACA_REF_LVALUE)                                                                                                 \
     Y(TACA_CONST)                                                                                                      \
-    Y(TACA_CONST_ADDR)                                                                                                 \
     Y(TACA_PARAM)
 
 #define Y_SUM(Z) +1
@@ -86,6 +80,7 @@ const char* taco_to_string(enum TACOKind k);
 struct TACAddress
 {
     enum TACAKind kind;
+    uint8_t is_addr : 1;
     int32_t sizing;
     union
     {

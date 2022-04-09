@@ -23,6 +23,7 @@ struct DeclSpecs
 
     struct Decl* _typedef;
     struct StmtBlock* suinit;
+    struct Decl* first_sufield;
     struct StmtDecls* enum_init;
     struct DeclSpecs* def;
     size_t size;
@@ -103,6 +104,7 @@ struct Decl
     int elab_index;
     size_t size;
     size_t align;
+    struct Decl* next_field;
 
     unsigned int is_enum_constant : 1;
     int enum_value;
