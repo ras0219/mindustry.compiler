@@ -10,7 +10,7 @@ project(mindustry.compiler C)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
-add_compile_options(-Werror -std=c11 -Wall -Wno-parentheses -Wno-missing-braces)
+add_compile_options(-Werror -std=c11 -Wall -Wno-parentheses -Wno-missing-braces -Wno-comment -Wno-format-truncation)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Webassembly")
     set(CMAKE_RUNTIME_OUTPUT_DIRECTORY web)
@@ -73,5 +73,6 @@ else()
     file(GLOB_RECURSE TEST_SOURCES tests/*)
     add_executable(runall-test ${TEST_SOURCES})
     target_link_libraries(runall-test PRIVATE mindcc-lib)
-    add_test(AllTests runall-test)
+
+    add_custom_target(test COMMAND runall-test)
 endif()

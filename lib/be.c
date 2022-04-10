@@ -500,6 +500,8 @@ static int be_compile_lvalue_ExprOp(struct BackEnd* be, struct ExprOp* e, struct
                 e->tok, "error: be_compile_lvalue_ExprOp unimplemented op (%s)\n", token_str(be->parser, e->tok)));
     }
 
+    (void)tace;
+
 fail:
     return rc;
 }

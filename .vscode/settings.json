@@ -36,6 +36,7 @@
         "__split_buffer": "c",
         "bitset": "c",
         "unordered_map": "c",
-        "tac.h": "c"
+        "tac.h": "c",
+        "compilermacros.h": "c"
     }
 }
