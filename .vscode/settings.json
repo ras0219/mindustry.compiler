@@ -37,6 +37,7 @@
         "bitset": "c",
         "unordered_map": "c",
         "tac.h": "c",
-        "locale": "c"
+        "locale": "c",
+        "compilermacros.h": "c"
     }
 }

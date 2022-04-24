@@ -8,6 +8,7 @@
 struct Preprocessor* preproc_alloc(const char* include_paths);
 void preproc_free(struct Preprocessor* pp);
 int preproc_file(struct Preprocessor* pp, FILE* f, const char* filename);
+int preproc_text(struct Preprocessor* pp, const char* text);
 int preproc_define(struct Preprocessor* pp, const char* macro);
 const struct Token* preproc_tokens(const struct Preprocessor* pp);
 const char* preproc_stringpool(const struct Preprocessor* pp);

@@ -23,7 +23,7 @@ struct DeclSpecs
 
     struct Decl* _typedef;
     struct StmtBlock* suinit;
-    struct Decl* first_sufield;
+    struct Decl* first_member;
     struct StmtDecls* enum_init;
     struct DeclSpecs* def;
     size_t size;

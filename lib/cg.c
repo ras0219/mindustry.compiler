@@ -1,5 +1,6 @@
 #include "cg.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -49,7 +50,7 @@ __forceinline static int taca_is_memory(const struct TACAddress* addr)
     return addr->kind == TACA_NAME || (!addr->is_addr && s_table_taca_is_memory[addr->kind]);
 }
 
-static __forceinline void cg_debug(struct CodeGen* cg, const char* fmt, ...)
+static void cg_debug(struct CodeGen* cg, const char* fmt, ...)
 {
     if (cg->fdebug)
     {
@@ -593,7 +594,7 @@ int cg_gen_taces(struct CodeGen* cg, const struct TACEntry* taces, size_t n_tace
         {
             ++num_args;
         }
-        if (tace->arg2.kind == TACO_PARAM && tace->arg2.param_idx > max_params)
+        if (tace->arg2.kind == TACA_PARAM && tace->arg2.param_idx > max_params)
         {
             max_params = tace->arg2.param_idx;
         }

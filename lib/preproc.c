@@ -525,6 +525,22 @@ top:
         or_value = *out_value;
         goto top;
     }
+
+    if (cur->type == TOKEN_SYM1('?'))
+    {
+        int left, right;
+        cur = pp_parse_if_expr(pp, cur + 1, &left);
+        if (!cur) return NULL;
+        if (cur->type != TOKEN_SYM1(':'))
+        {
+            parser_tok_error(cur, "error: incomplete ternary operator in macro expression\n");
+            return NULL;
+        }
+        cur = pp_parse_if_expr(pp, cur + 1, &right);
+        if (!cur) return NULL;
+        *out_value = *out_value ? left : right;
+    }
+
     return cur;
 }
 
@@ -550,10 +566,7 @@ static int pp_flush_expr(struct Preprocessor* pp)
         int value = 0;
         const struct Token* cur = pp_parse_if_expr(pp, (struct Token*)pp->toks.data + expansion_start, &value);
 
-        if (!cur)
-        {
-            UNWRAP(1);
-        }
+        UNWRAP(!cur);
         if (cur->type != LEX_EOF)
         {
             UNWRAP(parser_tok_error(cur, "error: expected end of macro condition\n"));
@@ -630,9 +643,15 @@ static int pp_handle_directive(struct Preprocessor* pp, Lexer* l)
                 HANDLE_DIRECTIVE("pragma", PP_PRAGMA);
                 HANDLE_DIRECTIVE("define", PP_DEFINE);
                 HANDLE_DIRECTIVE("undef", PP_UNDEF);
-                if (STREQ_LIT(l->tok, l->sz, "error") || STREQ_LIT(l->tok, l->sz, "warning"))
+                if (STREQ_LIT(l->tok, l->sz, "warning"))
                 {
-                    fprintf(stderr, "%s:%d: #%s\n", l->tok_rc.file, l->tok_rc.row, l->tok);
+                    parser_fmsg(warn, &l->tok_rc, "#warning\n");
+                    pp->preproc = PP_IGNORE;
+                    return 0;
+                }
+                if (STREQ_LIT(l->tok, l->sz, "error"))
+                {
+                    parser_ferror(&l->tok_rc, "#error\n");
                     pp->preproc = PP_IGNORE;
                     return 0;
                 }
@@ -1501,6 +1520,50 @@ fail:
     return rc;
 }
 
+static int lex_text(struct Lexer* l, const char* text)
+{
+    int rc = 0;
+    UNWRAP(lex(l, text, strlen(text)));
+    UNWRAP(end_lex(l));
+fail:
+    return rc;
+}
+
+static int preproc_text_impl(struct Preprocessor* pp, const char* text, const char* filename)
+{
+    const size_t prev_cur_file = pp->cur_file;
+    pp->cur_file = pp_find_insert_file(&pp->filenames, filename);
+    struct ParsedFile* file = (struct ParsedFile*)pp->filenames.data + pp->cur_file;
+    int rc = 0;
+    if (file->pragma_once)
+    {
+        struct Token* tok = array_push_zeroes(&pp->toks, sizeof(struct Token));
+        tok->type = LEX_EOF;
+        tok->basic_type = LEX_EOF;
+        tok->rc.file = file->filename;
+    }
+    else
+    {
+        struct SubLexer sublex;
+        sublex.self = pp;
+        init_lexer(&sublex.lexer, file->filename, &pp_sublex_on_token);
+        array_push_ptr(&pp->files_open, file->filename);
+
+        rc = lex_text(&sublex.lexer, text);
+        array_pop_ptr(&pp->files_open);
+    }
+    UNWRAP(rc);
+    if (pp->toks.sz == 0 ||
+        ((struct Token*)pp->toks.data)[array_size(&pp->toks, sizeof(struct Token)) - 1].type != LEX_EOF)
+    {
+        fprintf(stderr, "internal compiler error after parsing %s\n", filename);
+        abort();
+    }
+fail:
+    pp->cur_file = prev_cur_file;
+    return rc;
+}
+
 static void preproc_merge_strings(struct Preprocessor* pp)
 {
     struct Array buf = {};
@@ -1542,6 +1605,13 @@ static void preproc_merge_strings(struct Preprocessor* pp)
 int preproc_file(struct Preprocessor* pp, FILE* f, const char* filename)
 {
     int rc = preproc_file_impl(pp, f, filename);
+    if (!rc) preproc_merge_strings(pp);
+    return rc;
+}
+
+int preproc_text(struct Preprocessor* pp, const char* text)
+{
+    int rc = preproc_text_impl(pp, text, "<text>");
     if (!rc) preproc_merge_strings(pp);
     return rc;
 }

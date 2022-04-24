@@ -1,6 +1,7 @@
 #include "elaborator.h"
 
 #include <limits.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -944,7 +945,7 @@ static struct Decl* find_field_by_name(struct DeclSpecs* def, const char* fieldn
     while (field)
     {
         if (strcmp(field->name, fieldname) == 0) return field;
-        field = field->next_member;
+        field = field->next_field;
     }
     return NULL;
 }
@@ -1370,6 +1371,7 @@ static void elaborate_init_ty_AstInit(struct Elaborator* elab, size_t offset, st
     switch (dty.buf[(int)dty.buf[0]])
     {
         case TYPE_BYTE_ARRAY:
+        {
             uint32_t extent = typestr_pop_offset(&dty);
             size_t elem_size = typestr_get_size(elab, &dty);
             if (extent == 0)
@@ -1399,26 +1401,31 @@ static void elaborate_init_ty_AstInit(struct Elaborator* elab, size_t offset, st
                 }
             }
             break;
+        }
         case TYPE_BYTE_UNION: parser_tok_error(init->tok, "error: unimplemented union initializer type.\n"); break;
         case TYPE_BYTE_STRUCT:
+        {
             struct DeclSpecs* specs = typestr_get_decl(elab->types, &dty);
             if (!specs)
             {
                 parser_tok_error(init->tok, "error: incomplete type\n");
                 return;
             }
+            struct Ast** const seqs = elab->p->expr_seqs.data;
+            size_t j = 0;
             while (init->init && j < specs->suinit->extent)
             {
                 struct Ast* fields = seqs[specs->suinit->offset + j];
                 if (fields->kind != STMT_DECLS) abort();
                 struct StmtDecls* sdecls = (struct StmtDecls*)fields;
 
+                size_t k = 0;
                 while (init->init && k < sdecls->extent)
                 {
                     struct Ast* field = seqs[sdecls->offset + k];
                     if (field->kind != AST_DECL) abort();
                     struct Decl* fdecl = (struct Decl*)field;
-                    elaborate_init(elab, fdecl, init->init);
+                    elaborate_init(elab, offset, fdecl, init->init);
 
                     init = init->next;
                     ++k;
@@ -1431,7 +1438,8 @@ static void elaborate_init_ty_AstInit(struct Elaborator* elab, size_t offset, st
                     init->tok, "error: too many initializer expressions. Expected %zu.\n", specs->suinit->extent);
                 return;
             }
-        default:
+        }
+        default: parser_ice_tok(init->tok); break;
     }
 }
 
@@ -1858,7 +1866,7 @@ static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
                 decl->fn_ret_sizing = typestr_calc_sizing(elab, &ts);
             }
 
-            elaborate_init(elab, decl, decl->init);
+            elaborate_init(elab, 0, decl, decl->init);
         }
     }
     UNWRAP(parser_has_errors());
@@ -1933,9 +1941,9 @@ static int elaborate_declspecs(struct Elaborator* elab, struct DeclSpecs* specs)
                 {
                     // nested anonymous struct/union
                     *p_next_decl = decls->specs->first_member;
-                    while ((*p_next_decl)->next_member)
+                    while ((*p_next_decl)->next_field)
                     {
-                        p_next_decl = &(*p_next_decl)->next_member;
+                        p_next_decl = &(*p_next_decl)->next_field;
                     }
                 }
                 for (size_t j = 0; j < decls->extent; ++j)
@@ -1944,7 +1952,7 @@ static int elaborate_declspecs(struct Elaborator* elab, struct DeclSpecs* specs)
                     struct Decl* field = (struct Decl*)seqs[decls->offset + j];
                     UNWRAP(elaborate_decl(elab, field));
                     *p_next_decl = field;
-                    p_next_decl = &field->next_member;
+                    p_next_decl = &field->next_field;
                     if (field->type || !field->name)
                     {
                         if (field->init && field->name)

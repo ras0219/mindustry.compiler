@@ -892,7 +892,8 @@ fail:
 
 static const struct Token* parse_declarator_arr(Parser* p, const struct Token* cur_tok, struct DeclArr** out_declarr)
 {
-    struct DeclArr* arr = *out_declarr = pool_alloc_zeroes(&p->ast_pools[AST_DECLARR], sizeof(struct DeclArr));
+    struct DeclArr* arr = *out_declarr = pool_alloc(&p->ast_pools[AST_DECLARR], sizeof(struct DeclArr));
+    memset(arr, 0, sizeof(struct DeclArr));
     arr->kind = AST_DECLARR;
     arr->tok = cur_tok;
     ++cur_tok;
