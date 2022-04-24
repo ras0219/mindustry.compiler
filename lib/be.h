@@ -7,9 +7,9 @@
 
 struct BackEnd
 {
-    struct Parser* parser;
-    struct Elaborator* elab;
-    struct CodeGen* cg;
+    Parser* parser;
+    Elaborator* elab;
+    CodeGen* cg;
 
     // Set of program string literals for coalescing. Does not own their memory.
     struct Array aszConstants;
@@ -21,7 +21,7 @@ struct BackEnd
 
     struct Scope scope;
 
-    struct Decl* cur_decl;
+    Decl* cur_decl;
     struct DeclFn* cur_fn;
     struct Array switch_cases;
     size_t continue_label;

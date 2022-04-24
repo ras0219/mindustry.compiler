@@ -234,10 +234,11 @@ int parse_initializer(struct TestState* state)
                        "  int data;"
                        "};"
                        "struct Array arr = { 1, 2, 3 };"
-                       "struct Array arr2 = { .sz = 1 };"));
+                       "struct Array arr2 = { .sz = 1 };"
+                       "struct Array arr3 = { .cap = 1, 4 };"));
 
     struct Expr** const exprs = (struct Expr**)parser->expr_seqs.data;
-    REQUIRE_EQ(3, parser->top->extent);
+    REQUIRE_EQ(4, parser->top->extent);
     {
         struct StmtDecls* decls = (struct StmtDecls*)exprs[parser->top->offset + 1];
         REQUIRE_EQ(STMT_DECLS, decls->kind);
@@ -258,7 +259,23 @@ int parse_initializer(struct TestState* state)
         REQUIRE(def->init && def->init->kind == AST_INIT);
         struct AstInit* init = (struct AstInit*)def->init;
         REQUIRE(init->next);
-        REQUIRE_NULL(init->next->next);
+        REQUIRE_NULL(init->next->init);
+        REQUIRE_EQ(1, init->designator_extent);
+        struct Designator* designators = parser->designators.data;
+        REQUIRE_STR_EQ("sz", designators[init->designator_offset].field);
+    }
+    {
+        struct StmtDecls* decls = (struct StmtDecls*)exprs[parser->top->offset + 3];
+        struct Decl* def = (struct Decl*)exprs[decls->offset];
+        REQUIRE(def->init && def->init->kind == AST_INIT);
+        struct AstInit* init = (struct AstInit*)def->init;
+        REQUIRE(init->next);
+        REQUIRE(init->next->next);
+        REQUIRE_NULL(init->next->next->init);
+        REQUIRE_EQ(1, init->designator_extent);
+        struct Designator* designators = parser->designators.data;
+        REQUIRE_STR_EQ("cap", designators[init->designator_offset].field);
+        REQUIRE_EQ(0, init->next->designator_extent);
     }
 
     rc = 0;

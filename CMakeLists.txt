@@ -10,7 +10,7 @@ project(mindustry.compiler C)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 add_compile_options(-Werror -std=c11 -Wall -Wno-parentheses -Wno-missing-braces -Wno-comment)
-if(NOT CLANG)
+if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
     add_compile_options(-Wno-format-truncation)
 endif()
 

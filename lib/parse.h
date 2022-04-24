@@ -8,7 +8,7 @@
 #include "pool.h"
 #include "scope.h"
 
-typedef struct Parser
+struct Parser
 {
     struct AutoHeap strings_to_free;
 
@@ -20,14 +20,16 @@ typedef struct Parser
 
     // exprs
     struct Pool ast_pools[AST_KIND_END_POOLS + 1];
+    /// Array<struct Expr*>
     struct Array expr_seqs;
+    /// Array<Designator> from AstInit::designator_offset
     struct Array designators;
 
     // top-level expressions
     struct StmtBlock* top;
 
     const char* tk_strdata;
-} Parser;
+};
 
 enum Precedence
 {
