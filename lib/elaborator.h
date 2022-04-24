@@ -1,16 +1,25 @@
 #pragma once
 #pragma once
 
+#include <stdint.h>
 #include <stdio.h>
 
 #include "array.h"
 #include "fwd.h"
+
+struct ParamConversion
+{
+    int32_t frame_offset;
+    int32_t sizing;
+};
 
 struct Elaborator
 {
     struct Parser* p;
 
     struct TypeTable* types;
+
+    struct Array param_conversions;
 
     FILE* fdebug;
 };

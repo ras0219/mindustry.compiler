@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "compilermacros.h"
 #include "freevar.h"
 
 #define X_AST_POOL_KIND(Y)                                                                                             \
@@ -10,8 +11,10 @@
     Y(EXPR_FIELD)                                                                                                      \
     Y(EXPR_LIT)                                                                                                        \
     Y(EXPR_CAST)                                                                                                       \
-    Y(EXPR_OP)                                                                                                         \
+    Y(EXPR_BINOP)                                                                                                      \
+    Y(EXPR_UNOP)                                                                                                       \
     Y(EXPR_CALL)                                                                                                       \
+    Y(EXPR_BUILTIN)                                                                                                    \
     Y(AST_INIT)                                                                                                        \
     Y(AST_DINIT)                                                                                                       \
     Y(AST_DECL)                                                                                                        \
@@ -29,9 +32,10 @@
     Y(STMT_BLOCK)                                                                                                      \
     Y(STMT_LABEL)                                                                                                      \
     Y(STMT_BREAK)                                                                                                      \
-    Y(STMT_CONTINUE)
+    Y(STMT_CONTINUE)                                                                                                   \
+    Y(STMT_NONE)
 
-#define X_AST_UNPOOL_KIND(Y) Y(STMT_NONE) Y(TYPE_BUILTIN_INT) Y(TYPE_BUILTIN_CHAR)
+#define X_AST_UNPOOL_KIND(Y) Y(TYPE_BUILTIN_INT) Y(TYPE_BUILTIN_CHAR)
 
 #define X_AST_KIND(Y) X_AST_POOL_KIND(Y) X_AST_UNPOOL_KIND(Y)
 
@@ -53,96 +57,185 @@ enum
 int ast_kind_is_expr(enum AstKind k);
 const char* ast_kind_to_string(enum AstKind k);
 
-struct Expr
+struct Ast
 {
     enum AstKind kind;
+    const struct Token* tok;
+    unsigned int elaborated : 1;
 };
+
+#define INHERIT_AST                                                                                                    \
+    union                                                                                                              \
+    {                                                                                                                  \
+        struct Ast ast;                                                                                                \
+        struct                                                                                                         \
+        {                                                                                                              \
+            enum AstKind kind;                                                                                         \
+            const struct Token* tok;                                                                                   \
+            unsigned int elaborated : 1;                                                                               \
+        };                                                                                                             \
+    }
+
+struct Expr
+{
+    INHERIT_AST;
+
+    int32_t sizing;
+};
+
+#define INHERIT_EXPR                                                                                                   \
+    union                                                                                                              \
+    {                                                                                                                  \
+        struct Expr expr_base;                                                                                         \
+        struct                                                                                                         \
+        {                                                                                                              \
+            INHERIT_AST;                                                                                               \
+            int32_t sizing;                                                                                            \
+        };                                                                                                             \
+    }
 
 struct ExprLit
 {
-    struct Expr kind;
+    INHERIT_EXPR;
 
-    const struct Token* tok;
     const char* text;
     uint64_t numeric;
 };
+#define AST_STRUCT_EXPR_LIT ExprLit
+#define AST_KIND_ExprLit EXPR_LIT
 
 struct ExprCast
 {
-    struct Expr kind;
+    INHERIT_EXPR;
 
     struct Expr* expr;
+    struct DeclSpecs* specs;
     struct Decl* type;
 };
+#define AST_STRUCT_EXPR_CAST ExprCast
+#define AST_KIND_ExprCast EXPR_CAST
+
+struct ExprBuiltin
+{
+    INHERIT_EXPR;
+
+    struct Expr *expr1, *expr2;
+    struct DeclSpecs* specs;
+    struct Decl* type;
+    size_t sizeof_size;
+};
+#define AST_STRUCT_EXPR_BUILTIN ExprBuiltin
+#define AST_KIND_ExprBuiltin EXPR_BUILTIN
 
 struct ExprSym
 {
-    struct Expr kind;
+    INHERIT_EXPR;
 
-    const struct Token* tok;
     struct Decl* decl;
 };
+#define AST_STRUCT_EXPR_SYM ExprSym
+#define AST_KIND_ExprSym EXPR_SYM
 
 struct ExprField
 {
-    struct Expr kind;
+    INHERIT_EXPR;
+
     int is_arrow : 1;
-    const struct Token* tok;
     const struct Token* field_tok;
     const char* fieldname;
     struct Expr* lhs;
+    /* filled by elaboration */
     struct Decl* decl;
 };
+#define AST_STRUCT_EXPR_FIELD ExprField
+#define AST_KIND_ExprField EXPR_FIELD
 
-struct ExprOp
+struct ExprBinOp
 {
-    struct Expr kind;
+    INHERIT_EXPR;
 
-    const struct Token* tok;
     struct Expr* lhs;
-    // NULL for unary operators
     struct Expr* rhs;
     // additional info for certain operations
-    //  * '++'/'--', 1 if postfix
     //  * '[','+', size of element
-    //  * 'sizeof', size of decl
-    int size;
+    int info;
 };
+#define AST_STRUCT_EXPR_BINOP ExprBinOp
+#define AST_KIND_ExprBinOp EXPR_BINOP
+
+struct ExprUnOp
+{
+    INHERIT_EXPR;
+
+    struct Expr* lhs;
+    // additional info for certain operations
+    //  * '++'/'--', 1 if postfix
+    //  * 'sizeof', size of decl
+    int info;
+};
+#define AST_STRUCT_EXPR_UNOP ExprUnOp
+#define AST_KIND_ExprUnOp EXPR_UNOP
 
 struct ExprCall
 {
-    struct Expr kind;
-    const struct Token* tok;
+    INHERIT_EXPR;
     struct Expr* fn;
     size_t offset;
     size_t extent;
 };
+#define AST_STRUCT_EXPR_CALL ExprCall
+#define AST_KIND_ExprCall EXPR_CALL
+
+struct Designator
+{
+    const char* field;
+    struct Expr* array_expr;
+};
+
+struct AstInit
+{
+    INHERIT_AST;
+
+    // null signifies end of list
+    struct Ast* init;
+    size_t designator_offset;
+    size_t designator_extent;
+    struct AstInit* next;
+
+    uint32_t offset;
+    int32_t sizing;
+};
 
 struct StmtReturn
 {
-    struct Expr kind;
-    const struct Token* tok;
+    INHERIT_AST;
+
     // may be null
     struct Expr* expr;
 };
+
 struct StmtDecls
 {
-    struct Expr kind;
+    INHERIT_AST;
+
+    struct DeclSpecs* specs;
+
     size_t offset;
     size_t extent;
 };
 struct StmtIf
 {
-    struct Expr kind;
+    INHERIT_AST;
+
     struct Expr* cond;
-    struct Expr* if_body;
+    struct Ast* if_body;
     // may be null
-    struct Expr* else_body;
+    struct Ast* else_body;
 };
 struct StmtSwitch
 {
-    struct Expr kind;
-    const struct Token* tok;
+    INHERIT_AST;
+
     struct Expr* expr;
     // body
     size_t offset;
@@ -150,24 +243,26 @@ struct StmtSwitch
 };
 struct StmtCase
 {
-    struct Expr kind;
-    const struct Token* tok;
+    INHERIT_AST;
+
     struct Expr* expr;
-    // filled by elaboration
+    // filled by elaboration to the numeric case value
     size_t value;
 };
 struct StmtGoto
 {
-    struct Expr kind;
+    INHERIT_AST;
+
     const struct Token* dst;
 };
 struct StmtLoop
 {
-    struct Expr kind;
+    INHERIT_AST;
+
     struct Expr* cond;
-    struct Expr* body;
+    struct Ast* body;
     // null for while/dowhile
-    struct Expr* init;
+    struct Ast* init;
     // null for while/dowhile
     struct Expr* advance;
 
@@ -175,14 +270,8 @@ struct StmtLoop
 };
 struct StmtBlock
 {
-    struct Expr kind;
-    size_t offset;
-    size_t extent;
-};
-struct ASTInit
-{
-    struct Expr kind;
-    const struct Token* tok;
+    INHERIT_AST;
+
     size_t offset;
     size_t extent;
 };
@@ -196,19 +285,15 @@ struct ASTDInit
 };
 struct StmtLabel
 {
-    struct Expr kind;
-    const struct Token* tok;
-    struct Expr* stmt;
+    INHERIT_AST;
+
+    struct Ast* stmt;
 };
 struct StmtBreak
 {
-    struct Expr kind;
-    const struct Token* tok;
+    INHERIT_AST;
 };
 struct StmtContinue
 {
-    struct Expr kind;
-    const struct Token* tok;
+    INHERIT_AST;
 };
-
-const struct RowCol* expr_to_rc(const struct Expr* expr);

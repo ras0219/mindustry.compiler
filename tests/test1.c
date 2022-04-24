@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "ast.h"
 #include "cg.h"
 #include "errors.h"
 #include "parse.h"
@@ -82,19 +83,20 @@ int parse_main(struct TestState* state)
     struct Preprocessor* pp;
     SUBTEST(test_parse(state, &parser, &pp, "int main() {}"));
 
-    REQUIRE_EQ(1, array_size(&parser->arr_exprs, sizeof(struct Expr*)));
-    struct StmtDecls* decls = (struct StmtDecls*)*(struct Expr**)parser->arr_exprs.data;
-    REQUIRE_EQ(STMT_DECLS, decls->kind.kind);
+    REQUIRE_EQ(1, parser->top->extent);
+    struct Expr** const exprs = parser->expr_seqs.data;
+    struct StmtDecls* decls = (struct StmtDecls*)exprs[parser->top->offset];
+    REQUIRE_EQ(STMT_DECLS, decls->kind);
     REQUIRE_EQ(1, decls->extent);
     struct Decl* main = (struct Decl*)((struct Expr**)parser->expr_seqs.data)[decls->offset];
-    REQUIRE_EQ(AST_DECL, main->kind.kind);
-    REQUIRE_STR_EQ("main", token_str(parser, main->id));
+    REQUIRE_EQ(AST_DECL, main->kind);
+    REQUIRE_STR_EQ("main", main->name);
     struct DeclFn* mainfn = (struct DeclFn*)main->type;
-    REQUIRE_EQ(AST_DECLFN, mainfn->kind.kind);
+    REQUIRE_EQ(AST_DECLFN, mainfn->kind);
     struct DeclSpecs* mainrty = (struct DeclSpecs*)mainfn->type;
-    REQUIRE_EQ(AST_DECLSPEC, mainrty->kind.kind);
+    REQUIRE_EQ(AST_DECLSPEC, mainrty->kind);
     REQUIRE_NULL(mainrty->name);
-    REQUIRE_NULL(mainrty->type);
+    REQUIRE_NULL(mainrty->def);
     REQUIREZ(mainrty->is_long);
     REQUIREZ(mainrty->is_short);
     REQUIREZ(mainrty->is_enum);
@@ -123,18 +125,19 @@ int parse_typedef(struct TestState* state)
     struct Preprocessor* pp;
     SUBTEST(test_parse(state, &parser, &pp, "typedef unsigned long size_t;"));
 
-    REQUIRE_EQ(1, array_size(&parser->arr_exprs, sizeof(struct Expr*)));
-    struct StmtDecls* decls = (struct StmtDecls*)((struct Expr**)parser->arr_exprs.data)[0];
-    REQUIRE_EQ(STMT_DECLS, decls->kind.kind);
+    REQUIRE_EQ(1, parser->top->extent);
+    struct Expr** const exprs = parser->expr_seqs.data;
+    struct StmtDecls* decls = (struct StmtDecls*)exprs[parser->top->offset];
+    REQUIRE_EQ(STMT_DECLS, decls->kind);
     REQUIRE_EQ(1, decls->extent);
     struct Decl* def = (struct Decl*)((struct Expr**)parser->expr_seqs.data)[decls->offset];
-    REQUIRE_EQ(AST_DECL, def->kind.kind);
-    REQUIRE_STR_EQ("size_t", token_str(parser, def->id));
+    REQUIRE_EQ(AST_DECL, def->kind);
+    REQUIRE_STR_EQ("size_t", def->name);
     REQUIRE(def->type);
     struct DeclSpecs* defspecs = (struct DeclSpecs*)def->type;
-    REQUIRE_EQ(AST_DECLSPEC, defspecs->kind.kind);
+    REQUIRE_EQ(AST_DECLSPEC, defspecs->kind);
     REQUIRE_NULL(defspecs->name);
-    REQUIRE_NULL(defspecs->type);
+    REQUIRE_NULL(defspecs->def);
     REQUIRE(defspecs->is_long);
     REQUIRE(defspecs->is_unsigned);
     REQUIRE(defspecs->is_typedef);
@@ -171,16 +174,16 @@ int parse_struct(struct TestState* state)
                        "};"));
 
     struct Expr** const exprs = parser->expr_seqs.data;
-    REQUIRE_EQ(2, array_size(&parser->arr_exprs, sizeof(struct Expr*)));
-    struct StmtDecls* decls = (struct StmtDecls*)((struct Expr**)parser->arr_exprs.data)[1];
-    REQUIRE_EQ(STMT_DECLS, decls->kind.kind);
-    REQUIRE_EQ(1, decls->extent);
-    struct Decl* def = (struct Decl*)exprs[decls->offset];
-    REQUIRE_EQ(AST_DECL, def->kind.kind);
-    REQUIRE_STR_EQ("Array", token_str(parser, def->id));
-    REQUIRE_NULL(def->type);
-    REQUIRE(def->init && def->init->kind == STMT_BLOCK);
-    struct StmtBlock* blk = (struct StmtBlock*)def->init;
+    REQUIRE_EQ(2, parser->top->extent);
+    struct StmtDecls* decls = (struct StmtDecls*)exprs[parser->top->offset + 1];
+    REQUIRE_EQ(STMT_DECLS, decls->kind);
+    REQUIRE_EQ(0, decls->extent);
+    REQUIRE(decls->specs);
+    struct DeclSpecs* def = decls->specs;
+    REQUIRE_STR_EQ("Array", def->name);
+    REQUIRE(def->is_struct);
+    REQUIRE(def->suinit);
+    struct StmtBlock* blk = def->suinit;
     REQUIRE_EQ(3, blk->extent);
     // "size_t sz;"
     REQUIRE(exprs[blk->offset] && exprs[blk->offset]->kind == STMT_DECLS);
@@ -188,11 +191,11 @@ int parse_struct(struct TestState* state)
     REQUIRE(mem1->extent == 1);
     REQUIRE(exprs[mem1->offset] && exprs[mem1->offset]->kind == AST_DECL);
     struct Decl* mem1def = (struct Decl*)exprs[mem1->offset];
-    REQUIRE_STR_EQ("sz", token_str(parser, mem1def->id));
+    REQUIRE_STR_EQ("sz", mem1def->name);
     REQUIRE(mem1def->type && mem1def->type->kind == AST_DECLSPEC);
     struct DeclSpecs* mem1specs = (struct DeclSpecs*)mem1def->type;
-    REQUIRE(mem1specs->type);
-    REQUIRE_STR_EQ("size_t", token_str(parser, mem1specs->type->id));
+    REQUIRE_STR_EQ("size_t", mem1specs->name);
+    REQUIRE(mem1specs->_typedef);
 
     rc = 0;
 fail:
@@ -234,26 +237,28 @@ int parse_initializer(struct TestState* state)
                        "struct Array arr2 = { .sz = 1 };"));
 
     struct Expr** const exprs = (struct Expr**)parser->expr_seqs.data;
-    REQUIRE_EQ(3, array_size(&parser->arr_exprs, sizeof(struct Expr*)));
+    REQUIRE_EQ(3, parser->top->extent);
     {
-        struct StmtDecls* decls = (struct StmtDecls*)((struct Expr**)parser->arr_exprs.data)[1];
-        REQUIRE_EQ(STMT_DECLS, decls->kind.kind);
+        struct StmtDecls* decls = (struct StmtDecls*)exprs[parser->top->offset + 1];
+        REQUIRE_EQ(STMT_DECLS, decls->kind);
         REQUIRE_EQ(1, decls->extent);
         struct Decl* def = (struct Decl*)exprs[decls->offset];
-        REQUIRE_EQ(AST_DECL, def->kind.kind);
-        REQUIRE_STR_EQ("arr", token_str(parser, def->id));
+        REQUIRE_EQ(AST_DECL, def->kind);
+        REQUIRE_STR_EQ("arr", def->name);
         REQUIRE(def->init && def->init->kind == AST_INIT);
-        struct ASTInit* init = (struct ASTInit*)def->init;
-        REQUIRE_EQ(3, init->extent);
-        REQUIRE_EQ(EXPR_LIT, exprs[init->offset]->kind);
+        struct AstInit* init = (struct AstInit*)def->init;
+        REQUIRE(init->next);
+        REQUIRE(init->next->next);
+        REQUIRE(init->next->next->next);
+        REQUIRE_NULL(init->next->next->next->next);
     }
     {
-        struct StmtDecls* decls = (struct StmtDecls*)((struct Expr**)parser->arr_exprs.data)[2];
+        struct StmtDecls* decls = (struct StmtDecls*)exprs[parser->top->offset + 2];
         struct Decl* def = (struct Decl*)exprs[decls->offset];
         REQUIRE(def->init && def->init->kind == AST_INIT);
-        struct ASTInit* init = (struct ASTInit*)def->init;
-        REQUIRE_EQ(1, init->extent);
-        REQUIRE_EQ(EXPR_LIT, exprs[init->offset]->kind);
+        struct AstInit* init = (struct AstInit*)def->init;
+        REQUIRE(init->next);
+        REQUIRE_NULL(init->next->next);
     }
 
     rc = 0;
