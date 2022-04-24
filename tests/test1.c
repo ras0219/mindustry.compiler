@@ -285,6 +285,41 @@ fail:
     return rc;
 }
 
+int parse_initializer2(struct TestState* state)
+{
+    int rc = 1;
+    struct Parser* parser;
+    struct Preprocessor* pp;
+    // from https://en.cppreference.com/w/c/language/initialization
+    SUBTEST(test_parse(state,
+                       &parser,
+                       &pp,
+                       "int a[2];" // initializes a to {0, 0}
+                       "int main(void)"
+                       "{"
+                       "    int i;"        // initializes i to an indeterminate value
+                       "    static int j;" // initializes j to 0
+                       "    int k = 1;"    // initializes k to 1
+                       ""
+                       "" // initializes int x[3] to 1,3,5
+                       "" // initializes int* p to &x[0]
+                       "    int x[] = { 1, 3, 5 }, *p = x;"
+                       ""
+                       ""   // initializes w (an array of two structs) to
+                       "\n" // { { {1,0,0}, 0}, { {2,0,0}, 0} }
+                       "    struct {int a[3], b;} w[] = {[0].a = {1}, [1].a[0] = 2};"
+                       "}"));
+
+    // struct Expr** const exprs = (struct Expr**)parser->expr_seqs.data;
+    REQUIRE_EQ(2, parser->top->extent);
+
+    rc = 0;
+fail:
+    if (parser) my_free(parser);
+    if (pp) preproc_free(pp);
+    return rc;
+}
+
 int main()
 {
     struct TestState _state = {};
@@ -294,6 +329,7 @@ int main()
     RUN_TEST(parse_typedef);
     RUN_TEST(parse_struct);
     RUN_TEST(parse_initializer);
+    RUN_TEST(parse_initializer2);
 
     printf("%d tests. %d failed. %d assertions. %d failed.\n",
            state->tests,
