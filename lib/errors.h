@@ -26,4 +26,6 @@ int parser_vfmsg(enum LogChannel chan, const struct RowCol* rc, const char* fmt,
 int parser_ice(const struct RowCol* rc);
 int parser_ice_tok(const struct Token* tok);
 void parser_print_errors(FILE* f);
+void parser_print_warns(FILE* f);
+void parser_print_msgs(FILE* f);
 void parser_clear_errors();

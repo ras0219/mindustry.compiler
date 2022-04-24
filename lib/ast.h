@@ -13,6 +13,7 @@
     Y(EXPR_OP)                                                                                                         \
     Y(EXPR_CALL)                                                                                                       \
     Y(AST_INIT)                                                                                                        \
+    Y(AST_DINIT)                                                                                                       \
     Y(AST_DECL)                                                                                                        \
     Y(AST_DECLSPEC)                                                                                                    \
     Y(AST_DECLFN)                                                                                                      \
@@ -184,6 +185,14 @@ struct ASTInit
     const struct Token* tok;
     size_t offset;
     size_t extent;
+};
+// TODO: represent designator-list
+struct ASTDInit
+{
+    struct Expr kind;
+    const struct Token* tok;
+    struct Expr* designator;
+    struct Expr* next;
 };
 struct StmtLabel
 {

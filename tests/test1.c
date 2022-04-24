@@ -61,6 +61,7 @@ int test_parse(struct TestState* state, struct Parser** parser, struct Preproces
     return 0;
 
 fail:
+    if (parser_has_errors()) parser_print_msgs(stderr);
     if (*parser)
     {
         my_free(*parser);
@@ -115,29 +116,21 @@ fail:
     return rc;
 }
 
-int parse_struct(struct TestState* state)
+int parse_typedef(struct TestState* state)
 {
     int rc = 1;
     struct Parser* parser;
     struct Preprocessor* pp;
-    SUBTEST(test_parse(state,
-                       &parser,
-                       &pp,
-                       "typedef unsigned long size_t;\n"
-                       "struct Array"
-                       "{"
-                       "  size_t sz;"
-                       "  size_t cap;"
-                       "  void* data;"
-                       "};"));
+    SUBTEST(test_parse(state, &parser, &pp, "typedef unsigned long size_t;"));
 
-    REQUIRE_EQ(2, array_size(&parser->arr_exprs, sizeof(struct Expr*)));
-    struct StmtDecls* decls = (struct StmtDecls*)*(struct Expr**)parser->arr_exprs.data;
+    REQUIRE_EQ(1, array_size(&parser->arr_exprs, sizeof(struct Expr*)));
+    struct StmtDecls* decls = (struct StmtDecls*)((struct Expr**)parser->arr_exprs.data)[0];
     REQUIRE_EQ(STMT_DECLS, decls->kind.kind);
     REQUIRE_EQ(1, decls->extent);
     struct Decl* def = (struct Decl*)((struct Expr**)parser->expr_seqs.data)[decls->offset];
     REQUIRE_EQ(AST_DECL, def->kind.kind);
     REQUIRE_STR_EQ("size_t", token_str(parser, def->id));
+    REQUIRE(def->type);
     struct DeclSpecs* defspecs = (struct DeclSpecs*)def->type;
     REQUIRE_EQ(AST_DECLSPEC, defspecs->kind.kind);
     REQUIRE_NULL(defspecs->name);
@@ -161,6 +154,53 @@ fail:
     return rc;
 }
 
+int parse_struct(struct TestState* state)
+{
+    int rc = 1;
+    struct Parser* parser;
+    struct Preprocessor* pp;
+    SUBTEST(test_parse(state,
+                       &parser,
+                       &pp,
+                       "typedef unsigned long size_t;\n"
+                       "struct Array"
+                       "{"
+                       "  size_t sz;"
+                       "  size_t cap;"
+                       "  void* data;"
+                       "};"));
+
+    struct Expr** const exprs = parser->expr_seqs.data;
+    REQUIRE_EQ(2, array_size(&parser->arr_exprs, sizeof(struct Expr*)));
+    struct StmtDecls* decls = (struct StmtDecls*)((struct Expr**)parser->arr_exprs.data)[1];
+    REQUIRE_EQ(STMT_DECLS, decls->kind.kind);
+    REQUIRE_EQ(1, decls->extent);
+    struct Decl* def = (struct Decl*)exprs[decls->offset];
+    REQUIRE_EQ(AST_DECL, def->kind.kind);
+    REQUIRE_STR_EQ("Array", token_str(parser, def->id));
+    REQUIRE_NULL(def->type);
+    REQUIRE(def->init && def->init->kind == STMT_BLOCK);
+    struct StmtBlock* blk = (struct StmtBlock*)def->init;
+    REQUIRE_EQ(3, blk->extent);
+    // "size_t sz;"
+    REQUIRE(exprs[blk->offset] && exprs[blk->offset]->kind == STMT_DECLS);
+    struct StmtDecls* mem1 = (struct StmtDecls*)exprs[blk->offset];
+    REQUIRE(mem1->extent == 1);
+    REQUIRE(exprs[mem1->offset] && exprs[mem1->offset]->kind == AST_DECL);
+    struct Decl* mem1def = (struct Decl*)exprs[mem1->offset];
+    REQUIRE_STR_EQ("sz", token_str(parser, mem1def->id));
+    REQUIRE(mem1def->type && mem1def->type->kind == AST_DECLSPEC);
+    struct DeclSpecs* mem1specs = (struct DeclSpecs*)mem1def->type;
+    REQUIRE(mem1specs->type);
+    REQUIRE_STR_EQ("size_t", token_str(parser, mem1specs->type->id));
+
+    rc = 0;
+fail:
+    if (parser) my_free(parser);
+    if (pp) preproc_free(pp);
+    return rc;
+}
+
 int preproc_ternary(struct TestState* state)
 {
     int rc = 1;
@@ -176,13 +216,62 @@ fail:
     return rc;
 }
 
+int parse_initializer(struct TestState* state)
+{
+    int rc = 1;
+    struct Parser* parser;
+    struct Preprocessor* pp;
+    SUBTEST(test_parse(state,
+                       &parser,
+                       &pp,
+                       "struct Array"
+                       "{"
+                       "  int sz;"
+                       "  int cap;"
+                       "  int data;"
+                       "};"
+                       "struct Array arr = { 1, 2, 3 };"
+                       "struct Array arr2 = { .sz = 1 };"));
+
+    struct Expr** const exprs = (struct Expr**)parser->expr_seqs.data;
+    REQUIRE_EQ(3, array_size(&parser->arr_exprs, sizeof(struct Expr*)));
+    {
+        struct StmtDecls* decls = (struct StmtDecls*)((struct Expr**)parser->arr_exprs.data)[1];
+        REQUIRE_EQ(STMT_DECLS, decls->kind.kind);
+        REQUIRE_EQ(1, decls->extent);
+        struct Decl* def = (struct Decl*)exprs[decls->offset];
+        REQUIRE_EQ(AST_DECL, def->kind.kind);
+        REQUIRE_STR_EQ("arr", token_str(parser, def->id));
+        REQUIRE(def->init && def->init->kind == AST_INIT);
+        struct ASTInit* init = (struct ASTInit*)def->init;
+        REQUIRE_EQ(3, init->extent);
+        REQUIRE_EQ(EXPR_LIT, exprs[init->offset]->kind);
+    }
+    {
+        struct StmtDecls* decls = (struct StmtDecls*)((struct Expr**)parser->arr_exprs.data)[2];
+        struct Decl* def = (struct Decl*)exprs[decls->offset];
+        REQUIRE(def->init && def->init->kind == AST_INIT);
+        struct ASTInit* init = (struct ASTInit*)def->init;
+        REQUIRE_EQ(1, init->extent);
+        REQUIRE_EQ(EXPR_LIT, exprs[init->offset]->kind);
+    }
+
+    rc = 0;
+fail:
+    if (parser) my_free(parser);
+    if (pp) preproc_free(pp);
+    return rc;
+}
+
 int main()
 {
     struct TestState _state = {};
     struct TestState* state = &_state;
     RUN_TEST(preproc_ternary);
     RUN_TEST(parse_main);
+    RUN_TEST(parse_typedef);
     RUN_TEST(parse_struct);
+    RUN_TEST(parse_initializer);
 
     printf("%d tests. %d failed. %d assertions. %d failed.\n",
            state->tests,
