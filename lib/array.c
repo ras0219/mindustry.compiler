@@ -63,29 +63,16 @@ size_t array_appends(struct Array* arr, const char* s)
     return n;
 }
 
-int array_appendf(struct Array* arr, const char* fmt, ...)
+void array_appendf(struct Array* arr, const char* fmt, ...)
 {
     va_list argp;
     va_start(argp, fmt);
-
-    const size_t start_offset = arr->sz;
-    const size_t remain = arr->cap - arr->sz;
-
-    int size_req = vsnprintf((char*)arr->data + start_offset, remain, fmt, argp);
-
-    if (size_req + 1 > remain)
-    {
-        array_alloc(arr, size_req + 1);
-        size_req = vsnprintf((char*)arr->data + start_offset, size_req + 1, fmt, argp);
-        // pop null byte
-        --arr->sz;
-    }
-    else if (size_req >= 0)
-    {
-        arr->sz += size_req;
-    }
+    va_list args2;
+    va_copy(args2, argp);
+    const int size_req = vsnprintf(NULL, 0, fmt, argp);
+    vsnprintf(array_alloc(arr, size_req + 1), size_req + 1, fmt, args2);
+    // pop null byte
+    --arr->sz;
 
     va_end(argp);
-
-    return size_req;
 }

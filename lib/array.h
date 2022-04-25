@@ -40,7 +40,7 @@ void array_pop(struct Array* arr, size_t sz);
 void array_destroy(struct Array* arr);
 
 // Does not append null byte
-int array_appendf(struct Array* arr, const char* fmt, ...);
+void array_appendf(struct Array* arr, const char* fmt, ...);
 
 /// Does not append null byte
 /// @return bytes appended

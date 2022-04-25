@@ -112,3 +112,6 @@ struct Decl
     // backend information
     size_t frame_offset;
 };
+
+#define AST_STRUCT_AST_DECL Decl
+#define AST_KIND_Decl AST_DECL

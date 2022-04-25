@@ -3,6 +3,7 @@
 
 #include "ast.h"
 #include "cg.h"
+#include "elaborator.h"
 #include "errors.h"
 #include "parse.h"
 #include "preproc.h"
@@ -62,9 +63,10 @@ int test_parse(struct TestState* state, struct Parser** parser, struct Preproces
     return 0;
 
 fail:
-    if (parser_has_errors()) parser_print_msgs(stderr);
+    if (parser_has_errors()) parser_print_msgs(stderr), parser_clear_errors();
     if (*parser)
     {
+        parser_destroy(*parser);
         my_free(*parser);
         *parser = NULL;
     }
@@ -90,10 +92,7 @@ int test_parse_fail(struct TestState* state, const char* text)
     REQUIRE(parser_has_errors());
 
 fail:
-    if (parser)
-    {
-        my_free(parser);
-    }
+    if (parser) parser_destroy(parser), my_free(parser);
     preproc_free(pp);
     return 1;
 }
@@ -134,7 +133,7 @@ int parse_main(struct TestState* state)
 
     rc = 0;
 fail:
-    if (parser) my_free(parser);
+    if (parser) parser_destroy(parser), my_free(parser);
     if (pp) preproc_free(pp);
     return rc;
 }
@@ -173,7 +172,7 @@ int parse_typedef(struct TestState* state)
 
     rc = 0;
 fail:
-    if (parser) my_free(parser);
+    if (parser) parser_destroy(parser), my_free(parser);
     if (pp) preproc_free(pp);
     return rc;
 }
@@ -220,7 +219,7 @@ int parse_struct(struct TestState* state)
 
     rc = 0;
 fail:
-    if (parser) my_free(parser);
+    if (parser) parser_destroy(parser), my_free(parser);
     if (pp) preproc_free(pp);
     return rc;
 }
@@ -260,48 +259,58 @@ int parse_initializer(struct TestState* state)
 
     struct Expr** const exprs = (struct Expr**)parser->expr_seqs.data;
     REQUIRE_EQ(4, parser->top->extent);
+    REQUIRE_EXPR(StmtDecls, decl1, exprs[parser->top->offset + 1])
     {
-        struct StmtDecls* decls = (struct StmtDecls*)exprs[parser->top->offset + 1];
-        REQUIRE_EQ(STMT_DECLS, decls->kind);
-        REQUIRE_EQ(1, decls->extent);
-        struct Decl* def = (struct Decl*)exprs[decls->offset];
-        REQUIRE_EQ(AST_DECL, def->kind);
-        REQUIRE_STR_EQ("arr", def->name);
-        REQUIRE(def->init && def->init->kind == AST_INIT);
-        struct AstInit* init = (struct AstInit*)def->init;
-        REQUIRE(init->next);
-        REQUIRE(init->next->next);
-        REQUIRE(init->next->next->next);
-        REQUIRE_NULL(init->next->next->next->next);
+        REQUIRE_EQ(1, decl1->extent);
+        REQUIRE_EXPR(Decl, def, exprs[decl1->offset])
+        {
+            REQUIRE_STR_EQ("arr", def->name);
+            REQUIRE_AST(AstInit, init, def->init)
+            {
+                REQUIRE(init->next);
+                REQUIRE(init->next->next);
+                REQUIRE(init->next->next->next);
+                REQUIRE_NULL(init->next->next->next->next);
+            }
+        }
     }
+    REQUIRE_EXPR(StmtDecls, decl1, exprs[parser->top->offset + 2])
     {
-        struct StmtDecls* decls = (struct StmtDecls*)exprs[parser->top->offset + 2];
-        struct Decl* def = (struct Decl*)exprs[decls->offset];
-        REQUIRE(def->init && def->init->kind == AST_INIT);
-        struct AstInit* init = (struct AstInit*)def->init;
-        REQUIRE(init->next);
-        REQUIRE_NULL(init->next->init);
-        REQUIRE_EQ(1, init->designator_extent);
-        struct Designator* designators = parser->designators.data;
-        REQUIRE_STR_EQ("sz", designators[init->designator_offset].field);
+        REQUIRE_EQ(1, decl1->extent);
+        REQUIRE_EXPR(Decl, def, exprs[decl1->offset])
+        {
+            REQUIRE_AST(AstInit, init, def->init)
+            {
+                REQUIRE(init->next);
+                REQUIRE_NULL(init->next->init);
+                REQUIRE_EQ(1, init->designator_extent);
+                struct Designator* designators = parser->designators.data;
+                REQUIRE_STR_EQ("sz", designators[init->designator_offset].field);
+            }
+        }
     }
+
+    REQUIRE_EXPR(StmtDecls, decl1, exprs[parser->top->offset + 3])
     {
-        struct StmtDecls* decls = (struct StmtDecls*)exprs[parser->top->offset + 3];
-        struct Decl* def = (struct Decl*)exprs[decls->offset];
-        REQUIRE(def->init && def->init->kind == AST_INIT);
-        struct AstInit* init = (struct AstInit*)def->init;
-        REQUIRE(init->next);
-        REQUIRE(init->next->next);
-        REQUIRE_NULL(init->next->next->init);
-        REQUIRE_EQ(1, init->designator_extent);
-        struct Designator* designators = parser->designators.data;
-        REQUIRE_STR_EQ("cap", designators[init->designator_offset].field);
-        REQUIRE_EQ(0, init->next->designator_extent);
+        REQUIRE_EQ(1, decl1->extent);
+        REQUIRE_EXPR(Decl, def, exprs[decl1->offset])
+        {
+            REQUIRE_AST(AstInit, init, def->init)
+            {
+                REQUIRE(init->next);
+                REQUIRE(init->next->next);
+                REQUIRE_NULL(init->next->next->init);
+                REQUIRE_EQ(1, init->designator_extent);
+                struct Designator* designators = parser->designators.data;
+                REQUIRE_STR_EQ("cap", designators[init->designator_offset].field);
+                REQUIRE_EQ(0, init->next->designator_extent);
+            }
+        }
     }
 
     rc = 0;
 fail:
-    if (parser) my_free(parser);
+    if (parser) parser_destroy(parser), my_free(parser);
     if (pp) preproc_free(pp);
     return rc;
 }
@@ -311,6 +320,7 @@ int parse_initializer2(struct TestState* state)
     int rc = 1;
     struct Parser* parser;
     struct Preprocessor* pp;
+    struct Elaborator* elab = NULL;
     // from https://en.cppreference.com/w/c/language/initialization
     SUBTEST(test_parse(state,
                        &parser,
@@ -328,15 +338,38 @@ int parse_initializer2(struct TestState* state)
                        ""
                        ""   // initializes w (an array of two structs) to
                        "\n" // { { {1,0,0}, 0}, { {2,0,0}, 0} }
-                       "    struct {int a[3], b;} w[] = {[0].a = {1}, [1].a[0] = 2};"
+                       "    struct {int a[3], b;}\n"
+                       "w[] = {\n"
+                       "[0].a = {1},\n"
+                       "[1].a[0] = 2};"
                        "}"));
 
-    // struct Expr** const exprs = (struct Expr**)parser->expr_seqs.data;
+    struct Expr** const exprs = (struct Expr**)parser->expr_seqs.data;
     REQUIRE_EQ(2, parser->top->extent);
+    REQUIRE_EXPR(StmtDecls, maindecls, exprs[parser->top->offset + 1])
+    {
+        REQUIRE_EQ(1, maindecls->extent);
+        REQUIRE_EXPR(Decl, decl, exprs[maindecls->offset])
+        {
+            REQUIRE_STR_EQ("main", decl->name);
+            REQUIRE(decl->init);
+        }
+    }
+
+    elab = my_malloc(sizeof(Elaborator));
+    elaborator_init(elab, parser);
+    // TODO: pass elaboration
+    // REQUIREZ(elaborate(elab));
 
     rc = 0;
 fail:
-    if (parser) my_free(parser);
+    if (parser_has_errors()) parser_print_msgs(stderr);
+    if (elab)
+    {
+        elaborator_destroy(elab);
+        my_free(elab);
+    }
+    if (parser) parser_destroy(parser), my_free(parser);
     if (pp) preproc_free(pp);
     return rc;
 }
@@ -345,11 +378,11 @@ int main()
 {
     struct TestState _state = {};
     struct TestState* state = &_state;
-    RUN_TEST(preproc_ternary);
-    RUN_TEST(parse_main);
-    RUN_TEST(parse_typedef);
-    RUN_TEST(parse_struct);
-    RUN_TEST(parse_initializer);
+    // RUN_TEST(preproc_ternary);
+    // RUN_TEST(parse_main);
+    // RUN_TEST(parse_typedef);
+    // RUN_TEST(parse_struct);
+    // RUN_TEST(parse_initializer);
     RUN_TEST(parse_initializer2);
 
     const char* const clicolorforce = getenv("CLICOLOR_FORCE");

@@ -192,6 +192,7 @@ struct Designator
     struct Expr* array_expr;
 };
 
+typedef struct AstInit AstInit;
 struct AstInit
 {
     INHERIT_AST;
@@ -205,6 +206,8 @@ struct AstInit
     uint32_t offset;
     int32_t sizing;
 };
+#define AST_STRUCT_AST_INIT AstInit
+#define AST_KIND_AstInit AST_INIT
 
 struct StmtReturn
 {
@@ -214,6 +217,7 @@ struct StmtReturn
     struct Expr* expr;
 };
 
+typedef struct StmtDecls StmtDecls;
 struct StmtDecls
 {
     INHERIT_AST;
@@ -223,6 +227,9 @@ struct StmtDecls
     size_t offset;
     size_t extent;
 };
+#define AST_STRUCT_STMT_DECLS StmtDecls
+#define AST_KIND_StmtDecls STMT_DECLS
+
 struct StmtIf
 {
     INHERIT_AST;

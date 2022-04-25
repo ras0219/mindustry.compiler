@@ -400,7 +400,13 @@ static void typestr_fmt_i(const struct TypeTable* tt, const struct TypeStr* ts, 
         unsigned int u;
         i -= sizeof(u);
         memcpy(&u, ts->buf + i, sizeof(u));
-        array_appendf(buf, "%s %s", str, tt_get_name(tt, u));
+        struct DeclSpecs* specs = *tt_get_def(tt, u);
+        array_appends(buf, str);
+        array_push_byte(buf, ' ');
+        if (specs->name)
+            array_appends(buf, specs->name);
+        else
+            array_appendf(buf, "<anonymous#%u>", specs->tt_idx);
         goto end;
     end:
         if (depth)
@@ -1379,26 +1385,19 @@ static void elaborate_init_ty_AstInit(struct Elaborator* elab, size_t offset, st
                 parser_tok_error(init->tok, "error: array must have nonzero extent\n");
                 return;
             }
-            if (init->designator_extent)
-            {
-                parser_tok_error(init->tok, "error: designators in array initializers are unimplemented.\n");
-                break;
-            }
-            else
-            {
-                size_t j;
 
-                for (j = 0; init->init && j < extent; init = init->next, ++j)
-                {
-                    elaborate_init_ty(elab, offset + j * elem_size, dty, init->init);
-                    init->sizing = typestr_calc_sizing(elab, &dty);
-                    if (init->sizing == 0) abort();
-                }
-                if (init->init && j == extent)
-                {
-                    parser_tok_error(init->tok, "error: too many initializer expressions. Expected %zu.\n", extent);
-                    return;
-                }
+            size_t j;
+
+            for (j = 0; init->init && j < extent; init = init->next, ++j)
+            {
+                elaborate_init_ty(elab, offset + j * elem_size, dty, init->init);
+                init->sizing = typestr_calc_sizing(elab, &dty);
+                if (init->sizing == 0) abort();
+            }
+            if (init->init && j == extent)
+            {
+                parser_tok_error(init->tok, "error: too many initializer expressions. Expected %zu.\n", extent);
+                return;
             }
             break;
         }
