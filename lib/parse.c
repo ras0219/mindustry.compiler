@@ -1170,13 +1170,14 @@ static const struct Token* parse_initializer_list(Parser* p, const struct Token*
                     PARSER_FAIL("error: expected identifier in designated initializer\n");
                 }
                 d->field = token_str(p, id);
+                ++cur_tok;
                 continue;
             }
             if (cur_tok->type == TOKEN_SYM1('['))
             {
                 struct Designator* d = array_push_zeroes(&p->designators, sizeof(struct Designator));
                 PARSER_DO(parse_expr(p, cur_tok + 1, &d->array_expr, PRECEDENCE_COMMA));
-                PARSER_DO(token_consume_sym(p, cur_tok, ']', "in designated initializer"));
+                PARSER_DO(token_consume_sym(p, cur_tok, ']', " in designated initializer"));
                 continue;
             }
             break;
@@ -1184,14 +1185,13 @@ static const struct Token* parse_initializer_list(Parser* p, const struct Token*
         elem.designator_extent = array_size(&p->designators, sizeof(struct Designator)) - elem.designator_offset;
         if (elem.designator_extent)
         {
-            PARSER_DO(token_consume_sym(p, cur_tok + 1, '=', "in designated initializer"));
+            PARSER_DO(token_consume_sym(p, cur_tok, '=', " in designated initializer"));
         }
         if (cur_tok->type == TOKEN_SYM1('{'))
         {
             struct AstInit* init;
             PARSER_DO(parse_initializer_list(p, cur_tok + 1, &init));
             elem.init = &init->ast;
-            PARSER_DO(token_consume_sym(p, cur_tok, '}', "in initializer list"));
         }
         else
         {
@@ -1212,6 +1212,8 @@ static const struct Token* parse_initializer_list(Parser* p, const struct Token*
         .tok = cur_tok,
     };
     *out_expr = pool_push(&p->ast_pools[AST_INIT], &elem, sizeof(elem));
+
+    PARSER_DO(token_consume_sym(p, cur_tok, '}', " in initializer list"));
 
 fail:
     return cur_tok;
@@ -1265,7 +1267,6 @@ static const struct Token* parse_decls(Parser* p,
                 struct AstInit* init;
                 PARSER_DO(parse_initializer_list(p, cur_tok + 1, &init));
                 pdecl->init = &init->ast;
-                PARSER_DO(token_consume_sym(p, cur_tok, '}', " in initializer list"));
             }
             else
             {

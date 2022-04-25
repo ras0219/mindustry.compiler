@@ -76,6 +76,27 @@ fail:
     return 1;
 }
 
+int test_parse_fail(struct TestState* state, const char* text)
+{
+    parser_clear_errors();
+    Preprocessor* const pp = preproc_alloc("");
+    Parser* parser = NULL;
+    REQUIREZ(preproc_text(pp, text));
+    parser = my_malloc(sizeof(struct Parser));
+    parser_init(parser);
+
+    REQUIRE(parser_parse(parser, preproc_tokens(pp), preproc_stringpool(pp)));
+    parser_debug_check(parser);
+    REQUIRE(parser_has_errors());
+
+fail:
+    if (parser)
+    {
+        my_free(parser);
+    }
+    preproc_free(pp);
+    return 1;
+}
 int parse_main(struct TestState* state)
 {
     int rc = 1;
@@ -331,7 +352,19 @@ int main()
     RUN_TEST(parse_initializer);
     RUN_TEST(parse_initializer2);
 
-    printf("%d tests. %d failed. %d assertions. %d failed.\n",
+    const char* const clicolorforce = getenv("CLICOLOR_FORCE");
+    const char* const clicolor = getenv("CLICOLOR");
+    const char* color = "";
+
+    if (clicolorforce && 0 != strcmp(clicolorforce, "0") || !clicolor || 0 != strcmp(clicolor, "0"))
+    {
+        if (state->testfails + state->assertionfails == 0)
+            color = "\033[32;1m";
+        else
+            color = "\033[31;1m";
+    }
+    printf("%s%d tests. %d failed. %d assertions. %d failed.\033[m\n",
+           color,
            state->tests,
            state->testfails,
            state->assertions,
