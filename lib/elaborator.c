@@ -1363,96 +1363,192 @@ static void elaborate_stmts(struct Elaborator* elab, struct ElaborateDeclCtx* ct
     }
 }
 
-static void elaborate_init_ty(struct Elaborator* elab, size_t offset, struct TypeStr dty, struct Ast* ast);
+static void elaborate_init_ty(struct Elaborator* elab, size_t offset, const TypeStr* dty, struct Ast* ast);
 static void elaborate_init(struct Elaborator* elab, size_t offset, struct Decl* decl, struct Ast* ast)
 {
     struct TypeStr dty;
     typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, &dty, decl);
     typestr_strip_cvr(&dty);
-    elaborate_init_ty(elab, offset, dty, ast);
+    elaborate_init_ty(elab, offset, &dty, ast);
 }
 
-static void elaborate_init_ty_AstInit(struct Elaborator* elab, size_t offset, struct TypeStr dty, struct AstInit* init)
+typedef struct DInitObj
 {
-    switch (dty.buf[(int)dty.buf[0]])
+    size_t offset;
+    uint8_t is_array : 1;
+    uint32_t extent;
+    uint32_t elem_size;
+    struct TypeStr ty;
+    DeclSpecs* specs;
+} DInitObj;
+
+typedef struct DInitIter
+{
+    DInitObj current_obj;
+    uint32_t index;
+    Decl* field;
+} DInitIter;
+
+static void di_init(DInitIter* i) { memset(i, 0, sizeof(DInitIter)); }
+static void di_destroy(DInitIter* i) { }
+static const char* diframe_fill_obj(DInitObj* frame, struct Elaborator* elab, size_t offset, const struct TypeStr* dty)
+{
+    frame->offset = offset;
+    frame->ty = *dty;
+    switch (typestr_byte(&frame->ty))
     {
         case TYPE_BYTE_ARRAY:
         {
-            uint32_t extent = typestr_pop_offset(&dty);
-            size_t elem_size = typestr_get_size(elab, &dty);
-            if (extent == 0)
+            frame->is_array = 1;
+            frame->extent = typestr_pop_offset(&frame->ty);
+            frame->elem_size = typestr_get_size(elab, &frame->ty);
+            if (frame->extent == 0)
             {
-                parser_tok_error(init->tok, "error: array must have nonzero extent\n");
-                return;
+                return "error: array must have nonzero extent\n";
             }
-
-            size_t j;
-
-            for (j = 0; init->init && j < extent; init = init->next, ++j)
-            {
-                elaborate_init_ty(elab, offset + j * elem_size, dty, init->init);
-                init->sizing = typestr_calc_sizing(elab, &dty);
-                if (init->sizing == 0) abort();
-            }
-            if (init->init && j == extent)
-            {
-                parser_tok_error(init->tok, "error: too many initializer expressions. Expected %zu.\n", extent);
-                return;
-            }
-            break;
+            return NULL;
         }
-        case TYPE_BYTE_UNION: parser_tok_error(init->tok, "error: unimplemented union initializer type.\n"); break;
+        case TYPE_BYTE_UNION:
         case TYPE_BYTE_STRUCT:
         {
-            struct DeclSpecs* specs = typestr_get_decl(elab->types, &dty);
-            if (!specs)
+            frame->specs = typestr_get_decl(elab->types, &frame->ty);
+            if (!frame->specs)
             {
-                parser_tok_error(init->tok, "error: incomplete type\n");
-                return;
+                return "error: incomplete type\n";
             }
-            struct Ast** const seqs = elab->p->expr_seqs.data;
-            size_t j = 0;
-            while (init->init && j < specs->suinit->extent)
-            {
-                struct Ast* fields = seqs[specs->suinit->offset + j];
-                if (fields->kind != STMT_DECLS) abort();
-                struct StmtDecls* sdecls = (struct StmtDecls*)fields;
-
-                size_t k = 0;
-                while (init->init && k < sdecls->extent)
-                {
-                    struct Ast* field = seqs[sdecls->offset + k];
-                    if (field->kind != AST_DECL) abort();
-                    struct Decl* fdecl = (struct Decl*)field;
-                    elaborate_init(elab, offset, fdecl, init->init);
-
-                    init = init->next;
-                    ++k;
-                }
-                ++j;
-            }
-            if (init->init && j == specs->suinit->extent)
-            {
-                parser_tok_error(
-                    init->tok, "error: too many initializer expressions. Expected %zu.\n", specs->suinit->extent);
-                return;
-            }
+            return NULL;
         }
-        default: parser_ice_tok(init->tok); break;
+        default: return "error: unimplemented type for initializer list\n";
+    }
+}
+static const char* di_reset(DInitIter* i, struct Elaborator* elab, size_t offset, const struct TypeStr* dty)
+{
+    const char* errmsg = diframe_fill_obj(&i->current_obj, elab, offset, dty);
+    if (i->current_obj.specs) i->field = i->current_obj.specs->first_member;
+    return errmsg;
+}
+#if 0
+/// \param init requires \c init->designator_extent > 0
+static int di_designator(DInitIter* it, AstInit* init, Elaborator* elab)
+{
+    DInitObj* obj = &it->current_obj;
+    const Designator* const designators = ((const Designator*)elab->p->designators.data) + init->designator_offset;
+    array_clear(&it->stack);
+    DInitIterFrame* frame = array_push_zeroes(&it->stack, sizeof(*frame));
+
+    for (size_t i = 0; i < init->designator_extent; ++i)
+    {
+        const Designator* const d = designators + i;
+        if (f->is_array)
+        {
+            if (!d->array_expr)
+                return parser_tok_error(init->tok, "error: illegal field designator in initialization of array.\n");
+
+            int32_t i = eval_constant(elab, d->array_expr);
+            if (i < 0) return parser_tok_error(d->array_expr->tok, "error: array designator must be nonnegative.\n");
+
+            di_push_common_obj(it, elab, );
+        }
+        else
+        {
+            if (!d->field)
+                return parser_tok_error(d->array_expr->tok,
+                                        "error: illegal array designator in initialization of struct.\n");
+        }
+    }
+
+    if (init->designator_extent == 0)
+    {
+        if (!obj->is_array)
+        {
+            frame->field = obj->
+        }
+    }
+
+    return 0;
+}
+#endif
+
+static void di_next(DInitIter* i)
+{
+    if (i->current_obj.is_array)
+        ++i->index;
+    else if (i->current_obj.specs->is_union)
+        i->field = NULL;
+    else
+        i->field = i->field->next_field;
+}
+static size_t di_offset(DInitIter* i)
+{
+    if (i->current_obj.is_array)
+    {
+        return i->current_obj.offset + i->index * i->current_obj.elem_size;
+    }
+    else
+    {
+        return i->current_obj.offset + i->field->frame_offset;
     }
 }
 
-static void elaborate_init_ty(struct Elaborator* elab, size_t offset, struct TypeStr dty, struct Ast* ast)
+static const TypeStr* di_ty(DInitIter* i, struct Elaborator* elab, TypeStr* tybuf)
+{
+    if (i->field)
+    {
+        typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, tybuf, i->field);
+        return tybuf;
+    }
+    return &i->current_obj.ty;
+}
+static int di_end(DInitIter* i)
+{
+    if (i->current_obj.is_array)
+        return i->current_obj.extent == i->index;
+    else
+        return i->field == NULL;
+}
+
+static void elaborate_init_ty_AstInit(struct Elaborator* elab, size_t offset, const TypeStr* dty, struct AstInit* init)
+{
+    const char* errmsg = NULL;
+    struct DInitIter iter;
+    di_init(&iter);
+    if (errmsg = di_reset(&iter, elab, offset, dty))
+    {
+        parser_tok_error(init->tok, errmsg);
+        goto fail;
+    }
+
+    struct TypeStr tybuf;
+    for (; init->init && !di_end(&iter); init = init->next, di_next(&iter))
+    {
+        const TypeStr* ty = di_ty(&iter, elab, &tybuf);
+        elaborate_init_ty(elab, di_offset(&iter), ty, init->init);
+        init->sizing = typestr_calc_sizing(elab, ty);
+        if (init->sizing == 0) abort();
+        init->offset = di_offset(&iter);
+    }
+
+    if (di_end(&iter) && init->init)
+    {
+        parser_tok_error(init->tok, "error: too many initializers\n");
+        goto fail;
+    }
+
+fail:
+    di_destroy(&iter);
+}
+
+static void elaborate_init_ty(struct Elaborator* elab, size_t offset, const TypeStr* dty, struct Ast* ast)
 {
     if (ast->kind == AST_INIT)
     {
         return elaborate_init_ty_AstInit(elab, offset, dty, (struct AstInit*)ast);
     }
-    switch (dty.buf[(int)dty.buf[0]])
+    switch (typestr_byte(dty))
     {
         case TYPE_BYTE_ARRAY: parser_tok_error(ast->tok, "error: unimplemented array initializer type.\n"); break;
-        case TYPE_BYTE_UNION: parser_tok_error(ast->tok, "error: unimplemented union initializer type.\n"); break;
         case TYPE_BYTE_FUNCTION: elaborate_stmt(elab, NULL, ast); break;
+        case TYPE_BYTE_UNION: parser_tok_error(ast->tok, "error: unimplemented union initializer type.\n"); break;
         case TYPE_BYTE_STRUCT:
         default:
         {
@@ -1464,7 +1560,7 @@ static void elaborate_init_ty(struct Elaborator* elab, size_t offset, struct Typ
             // standard expression initialization
             struct TypeStr ts;
             elaborate_expr(elab, NULL, (struct Expr*)ast, &ts);
-            typestr_implicit_conversion(elab->types, &ast->tok->rc, &ts, &dty);
+            typestr_implicit_conversion(elab->types, &ast->tok->rc, &ts, dty);
         }
     }
 }
@@ -1961,8 +2057,16 @@ static int elaborate_declspecs(struct Elaborator* elab, struct DeclSpecs* specs)
                         }
                         // insert padding
                         struct_size = round_to_alignment(struct_size, field->align);
-                        field->frame_offset = struct_size;
-                        struct_size += field->size;
+                        if (specs->is_struct)
+                        {
+                            field->frame_offset = struct_size;
+                            struct_size += field->size;
+                        }
+                        else
+                        {
+                            field->frame_offset = 0;
+                            if (field->size > struct_size) struct_size = field->size;
+                        }
                         if (struct_align < field->align) struct_align = field->align;
                     }
                 }

@@ -1,15 +1,18 @@
 #pragma once
 
+#include "compilermacros.h"
+
 enum
 {
     TYPESTR_BUF_SIZE = 32,
 };
 
-struct TypeStr
+typedef struct TypeStr
 {
     // length counted, first byte is length
     char buf[TYPESTR_BUF_SIZE];
-};
+} TypeStr;
+__forceinline char typestr_byte(const struct TypeStr* ts) { return ts->buf[(int)ts->buf[0]]; }
 
 #if 0
 __forceinline void typestr_add_const(struct TypeStr* ts) { return ts->buf[ts->buf[0]] == 'c'; }

@@ -7,7 +7,7 @@
 /// <summary>
 /// Resizable array
 /// </summary>
-struct Array
+typedef struct Array
 {
     // size in bytes
     size_t sz;
@@ -15,7 +15,7 @@ struct Array
     size_t cap;
     // allocated buffer
     void* data;
-};
+} Array;
 
 void array_init(struct Array* arr);
 __forceinline size_t arrsz_at(const struct Array* arr, size_t i) { return ((size_t*)arr->data)[i]; }

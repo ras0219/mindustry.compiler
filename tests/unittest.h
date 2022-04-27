@@ -75,6 +75,21 @@ void unittest_print_stack(const struct TestState* state);
 
 #define REQUIRE_EQ(expected, actual) REQUIRE_EQ_IMPL(expected, #expected, actual, #actual)
 
+#define REQUIRE_PTR_EQ(expected, actual)                                                                               \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        state->assertions++;                                                                                           \
+        const void* _expr_a = (expected);                                                                              \
+        const void* _expr_b = (actual);                                                                                \
+        if (_expr_a != _expr_b)                                                                                        \
+        {                                                                                                              \
+            unittest_print_stack(state);                                                                               \
+            fprintf(stderr, "%s:%d: error: '%s == %s' was false\n", __FILE__, __LINE__, #expected, #actual);           \
+            state->assertionfails++;                                                                                   \
+            goto fail;                                                                                                 \
+        }                                                                                                              \
+    } while (0)
+
 #define REQUIRE_STR_EQ(expected, actual)                                                                               \
     do                                                                                                                 \
     {                                                                                                                  \

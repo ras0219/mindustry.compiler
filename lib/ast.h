@@ -186,14 +186,13 @@ struct ExprCall
 #define AST_STRUCT_EXPR_CALL ExprCall
 #define AST_KIND_ExprCall EXPR_CALL
 
-struct Designator
+typedef struct Designator
 {
     const char* field;
     struct Expr* array_expr;
-};
+} Designator;
 
-typedef struct AstInit AstInit;
-struct AstInit
+typedef struct AstInit
 {
     INHERIT_AST;
 
@@ -205,7 +204,7 @@ struct AstInit
 
     uint32_t offset;
     int32_t sizing;
-};
+} AstInit;
 #define AST_STRUCT_AST_INIT AstInit
 #define AST_KIND_AstInit AST_INIT
 

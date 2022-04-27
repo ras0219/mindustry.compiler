@@ -10,7 +10,7 @@ struct Attribute
     int is_nonreentrant : 1;
 };
 
-struct DeclSpecs
+typedef struct DeclSpecs
 {
     INHERIT_AST;
 
@@ -48,7 +48,10 @@ struct DeclSpecs
     unsigned int is_static : 1;
     unsigned int is_typedef : 1;
     unsigned int is_stdcall : 1;
-};
+} DeclSpecs;
+
+#define AST_STRUCT_AST_DECLSPEC DeclSpecs
+#define AST_KIND_DeclSpecs AST_DECLSPEC
 
 struct DeclPtr
 {
