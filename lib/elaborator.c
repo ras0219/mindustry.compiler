@@ -1436,6 +1436,64 @@ static int di_fill_frame(DInitFrame* frame, Elaborator* elab, size_t offset, con
         default: return parser_ferror(rc, "error: unimplemented type for initializer list\n");
     }
 }
+static int di_fill_frame_from_designator(DInitFrame* frame,
+                                         Elaborator* elab,
+                                         size_t offset,
+                                         const TypeStr* parent_ty,
+                                         size_t designator_idx,
+                                         const RowCol* rc)
+{
+    const Designator* const designator = (const Designator*)elab->p->designators.data + designator_idx;
+    memset(frame, 0, sizeof(*frame));
+    switch (typestr_byte(parent_ty))
+    {
+        case TYPE_BYTE_ARRAY:
+        {
+            frame->is_array = 1;
+            frame->ty = *parent_ty;
+            frame->extent = typestr_pop_offset(&frame->ty);
+            frame->elem_size = typestr_get_size(elab, &frame->ty);
+            if (frame->extent == 0)
+            {
+                return parser_ferror(rc, "error: array must have nonzero extent\n");
+            }
+            if (!designator->array_expr)
+            {
+                return parser_ferror(rc, "error: invalid member designator for array object\n");
+            }
+            int32_t k = eval_constant(elab, designator->array_expr);
+            if (k >= frame->extent)
+            {
+                return parser_ferror(rc, "error: array designator exceeds bounds: '%d' >= '%zu'\n", k, frame->extent);
+            }
+            frame->index = k;
+            frame->offset = offset + frame->elem_size * k;
+            return 0;
+        }
+        case TYPE_BYTE_UNION: frame->is_union = 1;
+        case TYPE_BYTE_STRUCT:
+        {
+            DeclSpecs* specs = typestr_get_decl(elab->types, parent_ty);
+            if (!specs)
+            {
+                return parser_ferror(rc, "error: incomplete type\n");
+            }
+            if (!designator->field)
+            {
+                return parser_ferror(rc, "error: invalid array designator for struct/union\n");
+            }
+            frame->field = find_field_by_name(specs, designator->field, elab->p->expr_seqs.data);
+            if (!frame->field)
+            {
+                return parser_ferror(rc, "error: field not found in structure: '%s'\n", frame->field);
+            }
+            frame->offset = offset + frame->field->frame_offset;
+            typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, &frame->ty, frame->field);
+            return 0;
+        }
+        default: return parser_ferror(rc, "error: unimplemented type for initializer list\n");
+    }
+}
 
 static int di_enter(DInitIter* i, struct Elaborator* elab, const RowCol* rc)
 {
@@ -1455,48 +1513,6 @@ static int di_reset(DInitIter* i, struct Elaborator* elab, size_t offset, const 
     array_clear(&i->stk);
     return di_enter(i, elab, rc);
 }
-
-#if 0
-/// \param init requires \c init->designator_extent > 0
-static int di_designator(DInitIter* it, AstInit* init, Elaborator* elab)
-{
-    DInitObj* obj = &it->current_obj;
-    const Designator* const designators = ((const Designator*)elab->p->designators.data) + init->designator_offset;
-    array_clear(&it->stack);
-    DInitIterFrame* frame = array_push_zeroes(&it->stack, sizeof(*frame));
-
-    for (size_t i = 0; i < init->designator_extent; ++i)
-    {
-        const Designator* const d = designators + i;
-        if (f->is_array)
-        {
-            if (!d->array_expr)
-                return parser_tok_error(init->tok, "error: illegal field designator in initialization of array.\n");
-
-            int32_t i = eval_constant(elab, d->array_expr);
-            if (i < 0) return parser_tok_error(d->array_expr->tok, "error: array designator must be nonnegative.\n");
-
-            di_push_common_obj(it, elab, );
-        }
-        else
-        {
-            if (!d->field)
-                return parser_tok_error(d->array_expr->tok,
-                                        "error: illegal array designator in initialization of struct.\n");
-        }
-    }
-
-    if (init->designator_extent == 0)
-    {
-        if (!obj->is_array)
-        {
-            frame->field = obj->
-        }
-    }
-
-    return 0;
-}
-#endif
 
 static void di_next(DInitIter* i, Elaborator* elab)
 {
@@ -1524,76 +1540,6 @@ loop:;
         typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, &back->ty, back->field);
     }
 }
-#if 0
-static void di_ty(DInitIter* i, Elaborator* elab, TypeStr* out_buf)
-{
-    DInitObj* back = array_back(&i->stk, sizeof(*back));
-    if (back->field)
-    {
-        typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, out_buf, back->field);
-    }
-    else
-    {
-        *out_buf = back->ty;
-    }
-}
-
-static void di_apply(DInitIter* i, Elaborator* elab, AstInit* init)
-{
-    DInitObj* back = array_back(&i->stk, sizeof(*back));
-    TypeStr tybuf;
-    const TypeStr* ty;
-    if (back->field)
-    {
-        typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, &tybuf, back->field);
-        ty = &tybuf;
-    }
-    else
-    {
-        ty = &back->ty;
-    }
-
-    if (init->init->kind != AST_INIT)
-    {
-        // expr means advance to next scalar (incorrect if expr type is the aggregate)
-        while (typestr_is_aggregate(ty))
-        {
-            back = array_alloc(&i->stk, sizeof(*back));
-            DInitObj* prev = back - 1;
-            const char* errmsg = diframe_fill_obj(back, elab, prev->offset, ty);
-            if (errmsg)
-            {
-                parser_tok_error(init->tok, "%s\n", errmsg);
-                return;
-            }
-            if (back->field)
-            {
-                typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, &tybuf, back->field);
-                ty = &tybuf;
-            }
-            else
-            {
-                ty = &back->ty;
-            }
-        }
-    }
-
-    size_t offset = i->current_obj.offset;
-    if (i->current_obj.is_array)
-    {
-        offset += i->index * i->current_obj.elem_size;
-    }
-    else
-    {
-        offset += i->field->frame_offset;
-    }
-
-    elaborate_init_ty(elab, offset, ty, init->init);
-    init->sizing = typestr_calc_sizing(elab, ty);
-    if (init->sizing == 0) abort();
-    init->offset = offset;
-}
-#endif
 
 static int di_end(DInitIter* i) { return 0 == i->stk.sz; }
 
@@ -1606,6 +1552,24 @@ static void elaborate_init_ty_AstInit(struct Elaborator* elab, size_t offset, co
     for (; init->init; init = init->next, di_next(&iter, elab))
     {
         // <- handle designators here
+        if (init->designator_extent != 0)
+        {
+            array_clear(&iter.stk);
+            if (di_fill_frame_from_designator(array_alloc(&iter.stk, sizeof(DInitFrame)),
+                                              elab,
+                                              iter.offset,
+                                              &iter.cur_ty,
+                                              init->designator_offset,
+                                              &init->tok->rc))
+                goto fail;
+            for (size_t k = 1; k < init->designator_extent; ++k)
+            {
+                DInitFrame* f = array_alloc(&iter.stk, sizeof(DInitFrame));
+                if (di_fill_frame_from_designator(
+                        f, elab, f[-1].offset, &f[-1].ty, init->designator_offset + k, &init->tok->rc))
+                    goto fail;
+            }
+        }
         if (di_end(&iter)) break;
         DInitFrame* back = array_back(&iter.stk, sizeof(*back));
         if (init->init->kind == AST_INIT)

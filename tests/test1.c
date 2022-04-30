@@ -630,7 +630,7 @@ int parse_initializer2b(struct TestState* state)
                     REQUIRE_EQ(-4, b_init->sizing);
                     REQUIRE_EQ(0, b_init->offset);
                 }
-                REQUIRE(a_init->next && a_init->next->init);
+                REQUIRE(a_init->next);
                 REQUIRE_AST(AstInit, b_init, a_init->next->init)
                 {
                     REQUIRE_AST(AstInit, c_init, b_init->init)
@@ -687,41 +687,39 @@ int parse_initializer_designated(struct TestState* state)
     SUBTEST(test_parse(state,
                        &parser,
                        &pp,
-                       "int a[2];" // initializes a to {0, 0}
-                       "int main(void)"
-                       "{"
-                       "    int i;"        // initializes i to an indeterminate value
-                       "    static int j;" // initializes j to 0
-                       "    int k = 1;"    // initializes k to 1
-                       ""
-                       "" // initializes int x[3] to 1,3,5
-                       "" // initializes int* p to &x[0]
-                       "    int x[] = { 1, 3, 5 }, *p = x;"
-                       ""
-                       ""   // initializes w (an array of two structs) to
-                       "\n" // { { {1,0,0}, 0}, { {2,0,0}, 0} }
-                       "    struct {int a[3], b;}\n"
-                       "w[] = {\n"
-                       "[0].a = {1},\n"
-                       "[1].a[0] = 2};"
-                       "}"));
-
-    struct Expr** const exprs = (struct Expr**)parser->expr_seqs.data;
-    REQUIRE_EQ(2, parser->top->extent);
-    REQUIRE_EXPR(StmtDecls, maindecls, exprs[parser->top->offset + 1])
-    {
-        REQUIRE_EQ(1, maindecls->extent);
-        REQUIRE_EXPR(Decl, decl, exprs[maindecls->offset])
-        {
-            REQUIRE_STR_EQ("main", decl->name);
-            REQUIRE(decl->init);
-        }
-    }
+                       "struct {int a[3], b;} w[] = {\n"
+                       "    [0].a = {1},\n"
+                       "    [1].a[1] = 2,\n"
+                       "    [1].b = 7\n"
+                       "};"));
 
     elab = my_malloc(sizeof(Elaborator));
     elaborator_init(elab, parser);
-    // TODO: pass elaboration
-    // REQUIREZ(elaborate(elab));
+    REQUIREZ(elaborate(elab));
+
+    struct Expr** const exprs = (struct Expr**)parser->expr_seqs.data;
+    REQUIRE_EQ(1, parser->top->extent);
+    REQUIRE_EXPR(StmtDecls, decls, exprs[parser->top->offset])
+    {
+        REQUIRE_EQ(1, decls->extent);
+        REQUIRE_EXPR(Decl, w, exprs[decls->offset])
+        {
+            REQUIRE_AST(AstInit, w_init, w->init)
+            {
+                REQUIRE_AST(AstInit, init2, w_init->init)
+                {
+                    REQUIRE_EQ(-4, init2->sizing);
+                    REQUIRE_EQ(0, init2->offset);
+                }
+                REQUIRE(w_init->next);
+                REQUIRE_EQ(-4, w_init->next->sizing);
+                REQUIRE_EQ(20, w_init->next->offset);
+                REQUIRE(w_init->next->next);
+                REQUIRE_EQ(-4, w_init->next->next->sizing);
+                REQUIRE_EQ(28, w_init->next->next->offset);
+            }
+        }
+    }
 
     rc = 0;
 fail:
@@ -750,6 +748,7 @@ int main()
     RUN_TEST(parse_initializer_union);
     RUN_TEST(parse_initializer_array);
     RUN_TEST(parse_initializer2b);
+    RUN_TEST(parse_initializer_designated);
 
     const char* const clicolorforce = getenv("CLICOLOR_FORCE");
     const char* const clicolor = getenv("CLICOLOR");
