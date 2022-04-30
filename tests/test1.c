@@ -602,8 +602,67 @@ int parse_initializer2b(struct TestState* state)
 
     elab = my_malloc(sizeof(Elaborator));
     elaborator_init(elab, parser);
-    // TODO: pass elaboration
     REQUIREZ(elaborate(elab));
+
+    struct Expr** const exprs = (struct Expr**)parser->expr_seqs.data;
+    REQUIRE_EQ(4, parser->top->extent);
+    REQUIRE_EXPR(StmtDecls, decls, exprs[parser->top->offset + 1])
+    {
+        REQUIRE_EQ(1, decls->extent);
+        REQUIRE_EXPR(Decl, a, exprs[decls->offset])
+        {
+            REQUIRE_AST(AstInit, a_init, a->init)
+            {
+                REQUIRE_EQ(-4, a_init->sizing);
+                REQUIRE_EQ(0, a_init->offset);
+            }
+        }
+    }
+    REQUIRE_EXPR(StmtDecls, decls, exprs[parser->top->offset + 2])
+    {
+        REQUIRE_EQ(1, decls->extent);
+        REQUIRE_EXPR(Decl, a, exprs[decls->offset])
+        {
+            REQUIRE_AST(AstInit, a_init, a->init)
+            {
+                REQUIRE_AST(AstInit, b_init, a_init->init)
+                {
+                    REQUIRE_EQ(-4, b_init->sizing);
+                    REQUIRE_EQ(0, b_init->offset);
+                }
+                REQUIRE(a_init->next && a_init->next->init);
+                REQUIRE_AST(AstInit, b_init, a_init->next->init)
+                {
+                    REQUIRE_AST(AstInit, c_init, b_init->init)
+                    {
+                        REQUIRE_EQ(-1, c_init->sizing);
+                        REQUIRE_EQ(4, c_init->offset);
+                        REQUIRE(c_init->next);
+                        REQUIRE_EQ(-1, c_init->next->sizing);
+                        REQUIRE_EQ(5, c_init->next->offset);
+                    }
+                }
+            }
+        }
+    }
+    REQUIRE_EXPR(StmtDecls, decls, exprs[parser->top->offset + 3])
+    {
+        REQUIRE_EQ(1, decls->extent);
+        REQUIRE_EXPR(Decl, a, exprs[decls->offset])
+        {
+            REQUIRE_AST(AstInit, a_init, a->init)
+            {
+                REQUIRE_EQ(-4, a_init->sizing);
+                REQUIRE_EQ(0, a_init->offset);
+                REQUIRE(a_init->next);
+                REQUIRE_EQ(-1, a_init->next->sizing);
+                REQUIRE_EQ(4, a_init->next->offset);
+                REQUIRE(a_init->next->next);
+                REQUIRE_EQ(-1, a_init->next->next->sizing);
+                REQUIRE_EQ(5, a_init->next->next->offset);
+            }
+        }
+    }
 
     rc = 0;
 fail:
@@ -690,7 +749,7 @@ int main()
     RUN_TEST(parse_initializer_struct);
     RUN_TEST(parse_initializer_union);
     RUN_TEST(parse_initializer_array);
-    // RUN_TEST(parse_initializer2b);
+    RUN_TEST(parse_initializer2b);
 
     const char* const clicolorforce = getenv("CLICOLOR_FORCE");
     const char* const clicolor = getenv("CLICOLOR");

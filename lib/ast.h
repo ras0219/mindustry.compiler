@@ -57,12 +57,12 @@ enum
 int ast_kind_is_expr(enum AstKind k);
 const char* ast_kind_to_string(enum AstKind k);
 
-struct Ast
+typedef struct Ast
 {
     enum AstKind kind;
     const struct Token* tok;
     unsigned int elaborated : 1;
-};
+} Ast;
 
 #define INHERIT_AST                                                                                                    \
     union                                                                                                              \

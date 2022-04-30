@@ -447,6 +447,11 @@ static __forceinline int typestr_is_variadic(const struct TypeStr* ts)
 {
     return ts->buf[(int)ts->buf[0]] == TYPE_BYTE_VARIADIC;
 }
+static __forceinline int typestr_is_aggregate(const struct TypeStr* ts)
+{
+    char ch = typestr_byte(ts);
+    return ch == TYPE_BYTE_STRUCT || ch == TYPE_BYTE_ARRAY || ch == TYPE_BYTE_UNION;
+}
 
 enum
 {
@@ -1372,61 +1377,85 @@ static void elaborate_init(struct Elaborator* elab, size_t offset, struct Decl* 
     elaborate_init_ty(elab, offset, &dty, ast);
 }
 
-typedef struct DInitObj
+typedef struct DInitFrame
 {
     size_t offset;
+    Decl* field;
     uint8_t is_array : 1;
+    uint8_t is_union : 1;
     uint32_t extent;
+    uint32_t index;
     uint32_t elem_size;
     struct TypeStr ty;
-    DeclSpecs* specs;
-} DInitObj;
+} DInitFrame;
 
 typedef struct DInitIter
 {
-    DInitObj current_obj;
-    uint32_t index;
-    Decl* field;
+    size_t offset;
+    TypeStr cur_ty;
+    /// Array<DInitFrame>
+    Array stk;
 } DInitIter;
 
 static void di_init(DInitIter* i) { memset(i, 0, sizeof(DInitIter)); }
-static void di_destroy(DInitIter* i) { }
-static const char* diframe_fill_obj(DInitObj* frame, struct Elaborator* elab, size_t offset, const struct TypeStr* dty)
+static void di_destroy(DInitIter* i) { array_destroy(&i->stk); }
+static int di_fill_frame(DInitFrame* frame, Elaborator* elab, size_t offset, const TypeStr* parent_ty, const RowCol* rc)
 {
+    memset(frame, 0, sizeof(*frame));
     frame->offset = offset;
-    frame->ty = *dty;
-    switch (typestr_byte(&frame->ty))
+    switch (typestr_byte(parent_ty))
     {
         case TYPE_BYTE_ARRAY:
         {
             frame->is_array = 1;
+            frame->ty = *parent_ty;
             frame->extent = typestr_pop_offset(&frame->ty);
             frame->elem_size = typestr_get_size(elab, &frame->ty);
             if (frame->extent == 0)
             {
-                return "error: array must have nonzero extent\n";
+                return parser_ferror(rc, "error: array must have nonzero extent\n");
             }
-            return NULL;
+            return 0;
         }
-        case TYPE_BYTE_UNION:
+        case TYPE_BYTE_UNION: frame->is_union = 1;
         case TYPE_BYTE_STRUCT:
         {
-            frame->specs = typestr_get_decl(elab->types, &frame->ty);
-            if (!frame->specs)
+            DeclSpecs* specs = typestr_get_decl(elab->types, parent_ty);
+            if (!specs)
             {
-                return "error: incomplete type\n";
+                return parser_ferror(rc, "error: incomplete type\n");
             }
-            return NULL;
+            frame->field = specs->first_member;
+            if (!frame->field)
+            {
+                return parser_ferror(rc, "error: unimplemented initialization of type with no members\n");
+            }
+            typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, &frame->ty, frame->field);
+            return 0;
         }
-        default: return "error: unimplemented type for initializer list\n";
+        default: return parser_ferror(rc, "error: unimplemented type for initializer list\n");
     }
 }
-static const char* di_reset(DInitIter* i, struct Elaborator* elab, size_t offset, const struct TypeStr* dty)
+
+static int di_enter(DInitIter* i, struct Elaborator* elab, const RowCol* rc)
 {
-    const char* errmsg = diframe_fill_obj(&i->current_obj, elab, offset, dty);
-    if (i->current_obj.specs) i->field = i->current_obj.specs->first_member;
-    return errmsg;
+    if (0 == i->stk.sz)
+    {
+        return di_fill_frame(array_alloc(&i->stk, sizeof(DInitFrame)), elab, i->offset, &i->cur_ty, rc);
+    }
+    DInitFrame* new_frame = array_alloc(&i->stk, sizeof(DInitFrame));
+    DInitFrame* prev_frame = new_frame - 1;
+    return di_fill_frame(new_frame, elab, prev_frame->offset, &prev_frame->ty, rc);
 }
+
+static int di_reset(DInitIter* i, struct Elaborator* elab, size_t offset, const struct TypeStr* dty, const RowCol* rc)
+{
+    i->offset = offset;
+    i->cur_ty = *dty;
+    array_clear(&i->stk);
+    return di_enter(i, elab, rc);
+}
+
 #if 0
 /// \param init requires \c init->designator_extent > 0
 static int di_designator(DInitIter* it, AstInit* init, Elaborator* elab)
@@ -1469,63 +1498,131 @@ static int di_designator(DInitIter* it, AstInit* init, Elaborator* elab)
 }
 #endif
 
-static void di_next(DInitIter* i)
+static void di_next(DInitIter* i, Elaborator* elab)
 {
-    if (i->current_obj.is_array)
-        ++i->index;
-    else if (i->current_obj.specs->is_union)
-        i->field = NULL;
-    else
-        i->field = i->field->next_field;
-}
-static size_t di_offset(DInitIter* i)
-{
-    if (i->current_obj.is_array)
+    goto loop;
+pop:
+    array_pop(&i->stk, sizeof(DInitFrame));
+loop:;
+    if (0 == i->stk.sz) return;
+    DInitFrame* back = array_back(&i->stk, sizeof(DInitFrame));
+    if (back->is_array)
     {
-        return i->current_obj.offset + i->index * i->current_obj.elem_size;
+        ++back->index;
+        if (back->index == back->extent) goto pop;
+        back->offset += back->elem_size;
     }
     else
     {
-        return i->current_obj.offset + i->field->frame_offset;
+        const size_t prev_field_offset = back->field->frame_offset;
+        if (back->is_union)
+            back->field = NULL;
+        else
+            back->field = back->field->next_field;
+        if (back->field == NULL) goto pop;
+        back->offset += back->field->frame_offset - prev_field_offset;
+        typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, &back->ty, back->field);
+    }
+}
+#if 0
+static void di_ty(DInitIter* i, Elaborator* elab, TypeStr* out_buf)
+{
+    DInitObj* back = array_back(&i->stk, sizeof(*back));
+    if (back->field)
+    {
+        typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, out_buf, back->field);
+    }
+    else
+    {
+        *out_buf = back->ty;
     }
 }
 
-static const TypeStr* di_ty(DInitIter* i, struct Elaborator* elab, TypeStr* tybuf)
+static void di_apply(DInitIter* i, Elaborator* elab, AstInit* init)
 {
-    if (i->field)
+    DInitObj* back = array_back(&i->stk, sizeof(*back));
+    TypeStr tybuf;
+    const TypeStr* ty;
+    if (back->field)
     {
-        typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, tybuf, i->field);
-        return tybuf;
+        typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, &tybuf, back->field);
+        ty = &tybuf;
     }
-    return &i->current_obj.ty;
-}
-static int di_end(DInitIter* i)
-{
-    if (i->current_obj.is_array)
-        return i->current_obj.extent == i->index;
     else
-        return i->field == NULL;
+    {
+        ty = &back->ty;
+    }
+
+    if (init->init->kind != AST_INIT)
+    {
+        // expr means advance to next scalar (incorrect if expr type is the aggregate)
+        while (typestr_is_aggregate(ty))
+        {
+            back = array_alloc(&i->stk, sizeof(*back));
+            DInitObj* prev = back - 1;
+            const char* errmsg = diframe_fill_obj(back, elab, prev->offset, ty);
+            if (errmsg)
+            {
+                parser_tok_error(init->tok, "%s\n", errmsg);
+                return;
+            }
+            if (back->field)
+            {
+                typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, &tybuf, back->field);
+                ty = &tybuf;
+            }
+            else
+            {
+                ty = &back->ty;
+            }
+        }
+    }
+
+    size_t offset = i->current_obj.offset;
+    if (i->current_obj.is_array)
+    {
+        offset += i->index * i->current_obj.elem_size;
+    }
+    else
+    {
+        offset += i->field->frame_offset;
+    }
+
+    elaborate_init_ty(elab, offset, ty, init->init);
+    init->sizing = typestr_calc_sizing(elab, ty);
+    if (init->sizing == 0) abort();
+    init->offset = offset;
 }
+#endif
+
+static int di_end(DInitIter* i) { return 0 == i->stk.sz; }
 
 static void elaborate_init_ty_AstInit(struct Elaborator* elab, size_t offset, const TypeStr* dty, struct AstInit* init)
 {
-    const char* errmsg = NULL;
     struct DInitIter iter;
     di_init(&iter);
-    if (errmsg = di_reset(&iter, elab, offset, dty))
-    {
-        parser_tok_error(init->tok, errmsg);
-        goto fail;
-    }
+    if (di_reset(&iter, elab, offset, dty, &init->tok->rc)) goto fail;
 
-    struct TypeStr tybuf;
-    for (; init->init && !di_end(&iter); init = init->next, di_next(&iter))
+    for (; init->init; init = init->next, di_next(&iter, elab))
     {
-        const TypeStr* ty = di_ty(&iter, elab, &tybuf);
-        elaborate_init_ty(elab, di_offset(&iter), ty, init->init);
-        init->sizing = typestr_calc_sizing(elab, ty);
-        if (init->sizing == 0) abort();
-        init->offset = di_offset(&iter);
+        // <- handle designators here
+        if (di_end(&iter)) break;
+        DInitFrame* back = array_back(&iter.stk, sizeof(*back));
+        if (init->init->kind == AST_INIT)
+        {
+            elaborate_init_ty_AstInit(elab, back->offset, &back->ty, (AstInit*)init->init);
+        }
+        else
+        {
+            while (typestr_is_aggregate(&back->ty))
+            {
+                if (di_enter(&iter, elab, &init->tok->rc)) goto fail;
+                back = array_back(&iter.stk, sizeof(*back));
+            }
+            elaborate_init_ty(elab, back->offset, &back->ty, init->init);
+            init->offset = back->offset;
+            init->sizing = typestr_calc_sizing(elab, &back->ty);
+        }
     }
 
     if (di_end(&iter) && init->init)
@@ -1549,7 +1646,7 @@ static void elaborate_init_ty(struct Elaborator* elab, size_t offset, const Type
         case TYPE_BYTE_ARRAY: parser_tok_error(ast->tok, "error: unimplemented array initializer type.\n"); break;
         case TYPE_BYTE_FUNCTION: elaborate_stmt(elab, NULL, ast); break;
         case TYPE_BYTE_UNION: parser_tok_error(ast->tok, "error: unimplemented union initializer type.\n"); break;
-        case TYPE_BYTE_STRUCT:
+        case TYPE_BYTE_STRUCT: parser_tok_error(ast->tok, "error: unimplemented struct initializer type.\n"); break;
         default:
         {
             if (!ast_kind_is_expr(ast->kind))
@@ -1557,9 +1654,10 @@ static void elaborate_init_ty(struct Elaborator* elab, size_t offset, const Type
                 parser_tok_error(ast->tok, "error: expected expression in object initialization\n");
                 break;
             }
+            Expr* expr = (Expr*)ast;
             // standard expression initialization
             struct TypeStr ts;
-            elaborate_expr(elab, NULL, (struct Expr*)ast, &ts);
+            elaborate_expr(elab, NULL, expr, &ts);
             typestr_implicit_conversion(elab->types, &ast->tok->rc, &ts, dty);
         }
     }
