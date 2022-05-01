@@ -2,6 +2,8 @@
 
 #include <string.h>
 
+#include "symbol.h"
+
 void scope_init(struct Scope* s)
 {
     array_init(&s->binds);
@@ -30,13 +32,13 @@ static void scope_pop(struct Scope* s)
     s->binds.sz = sz * sizeof(struct Binding);
 }
 #endif
-size_t scope_insert(struct Scope* s, const char* ident, struct Decl* sym)
+size_t scope_insert(struct Scope* s, Symbol* sym)
 {
     const size_t sz = scope_size(s);
     struct Binding* const e = array_alloc(&s->binds, sizeof(struct Binding));
     e->ident_offset = s->strings.sz;
     e->sym = sym;
-    array_push(&s->strings, ident, strlen(ident) + 1);
+    array_push(&s->strings, sym->name, strlen(sym->name) + 1);
     return sz;
 }
 struct Binding* scope_find(struct Scope* s, const char* id)

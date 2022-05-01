@@ -13,7 +13,7 @@ struct ParamConversion
     int32_t sizing;
 };
 
-struct Elaborator
+typedef struct Elaborator
 {
     struct Parser* p;
 
@@ -22,7 +22,7 @@ struct Elaborator
     struct Array param_conversions;
 
     FILE* fdebug;
-};
+} Elaborator;
 
 struct ArrSpan
 {

@@ -27,6 +27,8 @@ struct CodeGen
     size_t cur_fn_lbl_prefix;
 };
 
+struct TACEntry;
+
 void cg_init(struct CodeGen* cg);
 void cg_destroy(struct CodeGen* cg);
 void cg_declare_extern(struct CodeGen* cg, const char* sym);

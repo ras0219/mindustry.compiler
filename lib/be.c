@@ -346,17 +346,17 @@ static int be_compile_lvalue_ExprLit(struct BackEnd* be, struct ExprLit* e, stru
     return rc;
 }
 
-static int is_decl_array_or_function(struct Decl* decl)
+static int is_sym_array_or_function(Symbol* sym)
 {
 top:
-    switch (decl->type->kind)
+    switch (sym->type->kind)
     {
         case AST_DECLARR: return 1;
         case AST_DECLFN: return 1;
         case AST_DECLSPEC:
-            if (((struct DeclSpecs*)decl)->_typedef)
+            if (((struct DeclSpecs*)sym->type)->_typedef)
             {
-                decl = ((struct DeclSpecs*)decl)->_typedef;
+                sym = ((struct DeclSpecs*)sym->type)->_typedef;
                 goto top;
             }
             return 0;
@@ -364,46 +364,44 @@ top:
     }
 }
 
-static int be_compile_lvalue_ExprSym(struct BackEnd* be, struct ExprSym* e, struct TACAddress* out)
+static int be_compile_lvalue_ExprRef(struct BackEnd* be, struct ExprRef* e, struct TACAddress* out)
 {
-    struct Decl* decl = e->decl;
+    struct Decl* decl = e->sym->def;
     out->is_addr = 1;
     if (decl->specs->parent)
     {
-        if (decl->arg_index > 0)
+        if (decl->sym->arg_index > 0)
         {
             out->kind = TACA_ARG;
-            out->arg_idx = decl->arg_index - 1;
+            out->arg_idx = decl->sym->arg_index - 1;
         }
         else
         {
             out->kind = TACA_FRAME;
-            out->frame_offset = decl->frame_offset;
+            out->frame_offset = decl->sym->frame_offset;
         }
     }
     else
     {
         out->kind = decl->specs->is_static ? TACA_LNAME : TACA_NAME;
-        out->name = decl->name;
+        out->name = decl->sym->name;
     }
     out->sizing = 8;
     return 0;
 }
 
-static int be_compile_ExprSym(struct BackEnd* be, struct ExprSym* esym, struct TACAddress* out)
+static int be_compile_ExprRef(struct BackEnd* be, struct ExprRef* esym, struct TACAddress* out)
 {
     int rc = 0;
-    struct Decl* decl = esym->decl;
-    if (!decl) abort();
-    if (decl->def && decl->def->is_enum_constant)
+    if (esym->sym->is_enum_constant)
     {
         out->kind = TACA_IMM;
-        out->imm = decl->def->enum_value;
+        out->imm = esym->sym->enum_value;
     }
     else
     {
-        UNWRAP(be_compile_lvalue_ExprSym(be, esym, out));
-        if (!is_decl_array_or_function(decl))
+        UNWRAP(be_compile_lvalue_ExprRef(be, esym, out));
+        if (!is_sym_array_or_function(esym->sym))
         {
             UNWRAP(be_dereference(be, out, esym->sizing));
         }
@@ -1044,16 +1042,16 @@ static int be_compile_Decl(struct BackEnd* be, struct Decl* decl)
     if (!decl->type) return 0;
 
     int rc = 0;
-    decl->frame_offset = round_to_alignment(be->frame_size, decl->align);
-    be->frame_size = decl->frame_offset + decl->size;
-    if (decl->size == 0) abort();
+    decl->sym->frame_offset = round_to_alignment(be->frame_size, decl->sym->align);
+    be->frame_size = decl->sym->frame_offset + decl->sym->size;
+    if (decl->sym->size == 0) abort();
     be->max_frame_size = be->max_frame_size < be->frame_size ? be->frame_size : be->max_frame_size;
 
     if (decl->init)
     {
         struct Ast* init = decl->init;
         int start_frame_size = be->frame_size;
-        UNWRAP(be_compile_init(be, init, decl->frame_offset, decl->size));
+        UNWRAP(be_compile_init(be, init, decl->sym->frame_offset, decl->sym->size));
         be->frame_size = start_frame_size;
     }
 fail:
@@ -1072,9 +1070,9 @@ static int be_compile_lvalue_ExprField(struct BackEnd* be, struct ExprField* e, 
         UNWRAP(be_compile_lvalue(be, e->lhs, out));
     }
 
-    if (e->decl->frame_offset != 0)
+    if (e->sym->frame_offset != 0)
     {
-        UNWRAP(be_compile_increment(be, out, e->decl->frame_offset));
+        UNWRAP(be_compile_increment(be, out, e->sym->frame_offset));
     }
 
 fail:
@@ -1085,7 +1083,7 @@ static int be_compile_ExprField(struct BackEnd* be, struct ExprField* e, struct 
 {
     int rc = 0;
     UNWRAP(be_compile_lvalue_ExprField(be, e, out));
-    if (!is_decl_array_or_function(e->decl))
+    if (!is_sym_array_or_function(e->sym))
     {
         UNWRAP(be_dereference(be, out, e->sizing));
     }
@@ -1110,7 +1108,7 @@ static int be_compile_lvalue(struct BackEnd* be, struct Expr* e, struct TACAddre
 
     switch (e->kind)
     {
-        DISPATCH(EXPR_SYM, ExprSym);
+        DISPATCH(EXPR_REF, ExprRef);
         DISPATCH(EXPR_FIELD, ExprField);
         DISPATCH(EXPR_CAST, ExprCast);
         DISPATCH(EXPR_CALL, ExprCall);
@@ -1135,7 +1133,7 @@ static int be_compile_expr(struct BackEnd* be, struct Expr* e, struct TACAddress
 
     switch (e->kind)
     {
-        DISPATCH(EXPR_SYM, ExprSym);
+        DISPATCH(EXPR_REF, ExprRef);
         DISPATCH(EXPR_CALL, ExprCall);
         DISPATCH(EXPR_LIT, ExprLit);
         DISPATCH(EXPR_BINOP, ExprBinOp);
@@ -1230,22 +1228,22 @@ int be_compile(struct BackEnd* be)
         {
             if (ast_seqs[decls->offset + j]->kind != AST_DECL) abort();
             struct Decl* decl = (struct Decl*)ast_seqs[decls->offset + j];
-            struct Decl* def = decl->def ? decl->def : decl;
+            struct Decl* def = decl->sym->def ? decl->sym->def : decl;
             if ((decl->type->kind == AST_DECLFN && !def->init) || def->specs->is_extern)
             {
-                cg_declare_extern(be->cg, decl->name);
+                cg_declare_extern(be->cg, decl->sym->name);
             }
             else if (!decl->specs->is_static && !decl->specs->is_inline)
             {
-                cg_declare_public(be->cg, decl->name);
+                cg_declare_public(be->cg, decl->sym->name);
             }
-            if (!decl->name) abort();
+            if (!decl->sym->name) abort();
             if (decl->type->kind == AST_DECLFN)
             {
                 struct DeclFn* declfn = (struct DeclFn*)decl->type;
                 if (decl->init)
                 {
-                    cg_mark_label(be->cg, decl->name);
+                    cg_mark_label(be->cg, decl->sym->name);
                     be->frame_size = 0;
                     be->max_frame_size = 0;
                     be->cur_decl = decl;
@@ -1302,8 +1300,8 @@ int be_compile(struct BackEnd* be)
             {
                 // global variable
                 struct Array data = {};
-                array_push_zeroes(&data, decl->size);
-                cg_reserve_data(be->cg, decl->name, data.data, data.sz);
+                array_push_zeroes(&data, decl->sym->size);
+                cg_reserve_data(be->cg, decl->sym->name, data.data, data.sz);
             }
         }
     }

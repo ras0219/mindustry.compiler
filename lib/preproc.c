@@ -72,7 +72,7 @@ struct ParsedFile
     char* filename;
 };
 
-struct Preprocessor
+typedef struct Preprocessor
 {
     enum PreprocessorState preproc;
 
@@ -112,7 +112,8 @@ struct Preprocessor
     unsigned int debug_print_tokens : 1;
     unsigned int debug_print_ifs : 1;
     unsigned int debug_print_defines : 1;
-};
+} Preprocessor;
+
 void preproc_free(struct Preprocessor* pp)
 {
     struct ParsedFile* b = pp->filenames.data;

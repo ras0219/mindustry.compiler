@@ -63,8 +63,6 @@ static const struct Token* token_consume_sym(Parser* p, const struct Token* tk, 
     return parser_ferror(&tk->rc, "error: expected '%c'%s\n", sym, in), NULL;
 }
 
-static int symbol_is_equivalent_redecl(struct Decl* orig, struct Decl* redecl) { return 1; }
-
 enum Precedence op_precedence(unsigned int tok_type)
 {
     switch (tok_type)
@@ -136,12 +134,12 @@ static struct ExprBuiltin* parse_alloc_builtin(
     return pool_push(&p->ast_pools[e.kind], &e, sizeof(e));
 }
 
-static struct ExprSym* parse_alloc_expr_sym(Parser* p, const struct Token* tok, struct Decl* decl)
+static struct ExprRef* parse_alloc_expr_ref(Parser* p, const struct Token* tok, Symbol* sym)
 {
-    struct ExprSym* e = (struct ExprSym*)pool_alloc(&p->ast_pools[EXPR_SYM], sizeof(struct ExprSym));
-    e->kind = EXPR_SYM;
+    struct ExprRef* e = (struct ExprRef*)pool_alloc(&p->ast_pools[EXPR_REF], sizeof(struct ExprRef));
+    e->kind = EXPR_REF;
     e->tok = tok;
-    e->decl = decl;
+    e->sym = sym;
     return e;
 }
 static struct ExprLit* parse_alloc_expr_lit(Parser* p, const struct Token* tok)
@@ -285,7 +283,7 @@ top:;
         e->field_tok = cur_tok;
         e->fieldname = token_str(p, cur_tok);
         e->lhs = lhs;
-        e->decl = NULL;
+        e->sym = NULL;
         lhs = &e->expr_base;
         ++cur_tok;
         goto top;
@@ -362,7 +360,7 @@ fail:
     Y(TOKEN_SYM2('-', '-'))                                                                                            \
     Y(TOKEN_SYM2('+', '+'))
 
-static struct ExprSym* sym_from_tok(struct Parser* p, const struct Token* tok)
+static struct ExprRef* ref_from_tok(struct Parser* p, const struct Token* tok)
 {
     const char* lhs_str = token_str(p, tok);
     struct Binding* const lhs_bind = scope_find(&p->scope, lhs_str);
@@ -370,8 +368,7 @@ static struct ExprSym* sym_from_tok(struct Parser* p, const struct Token* tok)
     {
         return parser_ferror(&tok->rc, "error: '%s' undeclared\n", lhs_str), NULL;
     }
-    if (lhs_bind->sym->kind != AST_DECL) abort();
-    return parse_alloc_expr_sym(p, tok, (struct Decl*)lhs_bind->sym);
+    return parse_alloc_expr_ref(p, tok, lhs_bind->sym);
 }
 
 static const struct Token* parse_expr_unary_atom(Parser* p, const struct Token* cur_tok, struct Expr** ppe)
@@ -392,7 +389,7 @@ top:
         case TOKEN_SYM1('('): return parse_paren_unary(p, cur_tok + 1, ppe);
         case LEX_IDENT:
         {
-            struct ExprSym* lhs_expr = sym_from_tok(p, cur_tok++);
+            struct ExprRef* lhs_expr = ref_from_tok(p, cur_tok++);
             if (!lhs_expr) PARSER_DO(NULL);
             return parse_expr_post_unary(p, cur_tok, (struct Expr*)lhs_expr, ppe);
         }
@@ -426,7 +423,7 @@ top:
             PARSER_DO(token_consume_sym(p, cur_tok, '(', " in builtin operator"));
             if (cur_tok->type != LEX_IDENT)
                 PARSER_FAIL("error: expected va_list as first parameter to %s\n", token_str(p, tok));
-            struct ExprSym* lhs = sym_from_tok(p, cur_tok++);
+            struct ExprRef* lhs = ref_from_tok(p, cur_tok++);
             struct Expr* rhs = NULL;
             struct DeclSpecs* specs = NULL;
             struct Decl* decl = NULL;
@@ -436,7 +433,7 @@ top:
                 PARSER_DO(token_consume_sym(p, cur_tok, ',', " in builtin operator"));
                 if (cur_tok->type != LEX_IDENT)
                     PARSER_FAIL("error: expected function argument as second parameter to %s\n", token_str(p, tok));
-                struct ExprSym* rhs_sym = sym_from_tok(p, cur_tok++);
+                struct ExprRef* rhs_sym = ref_from_tok(p, cur_tok++);
                 if (!rhs_sym) PARSER_DO(NULL);
                 rhs = &rhs_sym->expr_base;
             }
@@ -867,7 +864,7 @@ static const struct Token* parse_declarator_fnargs(Parser* p, const struct Token
             struct Decl* arg_decl = parse_alloc_decl(p, arg_specs);
             PARSER_DO(parse_declarator(p, cur_tok, arg_decl));
             array_push_ptr(&args_array, push_stmt_decl(p, arg_specs, arg_decl));
-            arg_decl->arg_index = ++fn->extent;
+            arg_decl->sym->arg_index = ++fn->extent;
 
             if (cur_tok->type == TOKEN_SYM1(','))
             {
@@ -1045,25 +1042,30 @@ static const struct Token* parse_declarator(Parser* p, const struct Token* cur_t
     }
     if (decl->tok)
     {
-        decl->name = token_str(p, decl->tok);
-        struct Binding* prev_sym = scope_find(&p->scope, decl->name);
-        scope_insert(&p->scope, decl->name, decl);
+        const char* name = token_str(p, decl->tok);
+        struct Binding* prev_sym = scope_find(&p->scope, name);
         if (prev_sym)
         {
-            // ensure symbols match
-            if (!symbol_is_equivalent_redecl(prev_sym->sym, decl))
+            decl->sym = prev_sym->sym;
+            decl->prev_decl = decl->sym->last_decl;
+            if (0)
             {
+                // TODO: ensure symbols match
                 PARSER_FAIL_TOK(decl->tok, "error: declaration doesn't match previous\n");
             }
-            if (prev_sym->sym->init)
+            if (decl->init)
             {
-                decl->def = prev_sym->sym;
-            }
-            else
-            {
-                prev_sym->sym->def = decl;
+                if (decl->sym->def) PARSER_FAIL_TOK(decl->tok, "error: multiple definition of symbol\n");
+                decl->sym->def = decl;
             }
         }
+        else
+        {
+            decl->sym = pool_alloc_zeroes(&p->sym_pool, sizeof(Symbol));
+            decl->sym->name = name;
+            scope_insert(&p->scope, decl->sym);
+        }
+        decl->sym->last_decl = decl;
     }
 fail:
     p->parent = prev_parent;
@@ -1079,7 +1081,7 @@ static const struct Token* parse_type(Parser* p,
     PARSER_DO(parse_declspecs(p, cur_tok, pspecs));
     *pdecl = parse_alloc_decl(p, *pspecs);
     PARSER_DO(parse_declarator(p, cur_tok, *pdecl));
-    if ((*pdecl)->name)
+    if ((*pdecl)->sym)
     {
         PARSER_FAIL_TOK((*pdecl)->tok, "error: type expression should not have a declared identifier\n");
     }
@@ -1120,7 +1122,6 @@ static const struct Token* parse_enum_body(struct Parser* p, const struct Token*
         struct Decl decl = {
             .kind = AST_DECL,
             .tok = cur_tok,
-            .name = token_str(p, cur_tok),
             .specs = specs,
             .type = &specs->ast,
         };
@@ -1132,7 +1133,9 @@ static const struct Token* parse_enum_body(struct Parser* p, const struct Token*
             decl.init = &init->ast;
         }
         struct Decl* enumerator = pool_push(&p->ast_pools[AST_DECL], &decl, sizeof(decl));
-        scope_insert(&p->scope, enumerator->name, enumerator);
+        enumerator->sym = pool_alloc_zeroes(&p->sym_pool, sizeof(Symbol));
+        enumerator->sym->name = token_str(p, decl.tok);
+        scope_insert(&p->scope, enumerator->sym);
         array_push_ptr(&decls, enumerator);
         if (cur_tok->type == TOKEN_SYM1(','))
         {
@@ -1233,7 +1236,7 @@ static const struct Token* parse_decls(Parser* p,
         array_push_ptr(pdecls, pdecl);
         if (cur_tok->type == TOKEN_SYM1('{'))
         {
-            if (!pdecl->tok || !pdecl->name)
+            if (!pdecl->sym || !pdecl->sym->name)
             {
                 PARSER_FAIL_TOK(cur_tok, "error: anonymous function declaration not allowed\n");
             }
@@ -1245,7 +1248,7 @@ static const struct Token* parse_decls(Parser* p,
             p->parent = specs->parent;
             // Remove function arguments from the scope
             scope_shrink(&p->scope, scope_sz);
-            scope_insert(&p->scope, pdecl->name, pdecl);
+            scope_insert(&p->scope, pdecl->sym);
             return cur_tok;
         }
 
@@ -1253,7 +1256,7 @@ static const struct Token* parse_decls(Parser* p,
         {
             PARSER_DO_WITH(parse_integral_constant_expr(p, cur_tok + 1), "       in bitfield declaration\n");
         }
-        else if (!pdecl->name)
+        else if (!pdecl->sym->name)
         {
             PARSER_FAIL_TOK(cur_tok, "error: only bitfield members can be anonymous\n");
         }
@@ -1279,15 +1282,15 @@ static const struct Token* parse_decls(Parser* p,
         scope_shrink(&p->scope, scope_sz);
         if (specs->is_typedef)
         {
-            if (!pdecl->name)
+            if (!pdecl->sym->name)
             {
                 PARSER_FAIL_TOK(cur_tok, "error: anonymous typedef not allowed\n");
             }
-            scope_insert(&p->type_scope, pdecl->name, pdecl);
+            scope_insert(&p->type_scope, pdecl->sym);
         }
         else
         {
-            if (pdecl->name) scope_insert(&p->scope, pdecl->name, pdecl);
+            if (pdecl->sym->name) scope_insert(&p->scope, pdecl->sym);
         }
 
         if (cur_tok->type == TOKEN_SYM1(','))
@@ -1629,6 +1632,7 @@ void parser_destroy(struct Parser* p)
     {
         pool_destroy(&p->ast_pools[i]);
     }
+    pool_destroy(&p->sym_pool);
     array_destroy(&p->expr_seqs);
     array_destroy(&p->designators);
 }

@@ -8,7 +8,7 @@ int ast_kind_is_expr(enum AstKind k)
 {
     switch (k)
     {
-        case EXPR_SYM:
+        case EXPR_REF:
         case EXPR_FIELD:
         case EXPR_LIT:
         case EXPR_CAST:

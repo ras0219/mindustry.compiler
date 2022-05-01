@@ -3,12 +3,9 @@
 #include "ast.h"
 #include "typestr.h"
 
-struct Attribute
+typedef struct Attribute
 {
-    const char* symname;
-    const char* asmstr;
-    int is_nonreentrant : 1;
-};
+} Attribute;
 
 typedef struct DeclSpecs
 {
@@ -18,18 +15,16 @@ typedef struct DeclSpecs
     /* stored +1 so 0 means uninitialized */
     uint32_t tt_idx;
 
-    /* encompassing function or struct */
-    struct Ast* parent;
-
-    struct Decl* _typedef;
+    /// encompassing function or struct
+    Ast* parent;
+    struct Attribute attr;
+    struct Symbol* _typedef;
     struct StmtBlock* suinit;
     struct Decl* first_member;
     struct StmtDecls* enum_init;
     struct DeclSpecs* def;
     size_t size;
     size_t align;
-
-    struct Attribute attr;
 
     unsigned int is_struct : 1;
     unsigned int is_enum : 1;
@@ -58,7 +53,6 @@ struct DeclPtr
     INHERIT_AST;
 
     struct Ast* type;
-    struct Attribute attr;
     int is_const : 1;
     int is_volatile : 1;
     int is_restrict : 1;
@@ -74,47 +68,57 @@ struct DeclFn
     size_t extent;
 };
 
-struct DeclArr
+typedef struct DeclArr
 {
     INHERIT_AST;
 
     struct Ast* type;
     struct Expr* arity;
+    // elaboration
     unsigned int integer_arity;
-};
+} DeclArr;
 
-struct Decl
+#define AST_STRUCT_AST_DECLARR DeclArr
+#define AST_KIND_DeclArr AST_DECLARR
+
+typedef struct Decl
 {
     INHERIT_AST;
 
-    const char* name;
-    struct Attribute attr;
-    struct DeclSpecs* specs;
-    struct Ast* type;
+    Attribute attr;
+    DeclSpecs* specs;
+    Ast* type;
+    Ast* init;
 
-    struct Decl* def;
-    struct Ast* init;
+    struct Decl* prev_decl;
+    struct Symbol* sym;
+} Decl;
+
+#define AST_STRUCT_AST_DECL Decl
+#define AST_KIND_Decl AST_DECL
+
+typedef struct Symbol
+{
+    const char* name;
+    Ast* type;
+    Decl* last_decl;
+    Decl* def;
 
     // 0 means not an argument, 1 means first argument, etc
     unsigned int arg_index;
-    union
-    {
-        unsigned int arity;
-        int32_t fn_ret_sizing;
-    };
 
     // elaboration information
-    int elab_index;
+
+    /// If type is an array of unknown size, we store the calculated size here
+    unsigned int integer_arity;
+    int32_t fn_ret_sizing;
     size_t size;
     size_t align;
-    struct Decl* next_field;
+    Decl* next_field;
 
     unsigned int is_enum_constant : 1;
     int enum_value;
 
     // backend information
     size_t frame_offset;
-};
-
-#define AST_STRUCT_AST_DECL Decl
-#define AST_KIND_Decl AST_DECL
+} Symbol;

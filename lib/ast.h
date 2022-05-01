@@ -7,7 +7,7 @@
 #include "freevar.h"
 
 #define X_AST_POOL_KIND(Y)                                                                                             \
-    Y(EXPR_SYM)                                                                                                        \
+    Y(EXPR_REF)                                                                                                        \
     Y(EXPR_FIELD)                                                                                                      \
     Y(EXPR_LIT)                                                                                                        \
     Y(EXPR_CAST)                                                                                                       \
@@ -76,12 +76,12 @@ typedef struct Ast
         };                                                                                                             \
     }
 
-struct Expr
+typedef struct Expr
 {
     INHERIT_AST;
 
     int32_t sizing;
-};
+} Expr;
 
 #define INHERIT_EXPR                                                                                                   \
     union                                                                                                              \
@@ -127,14 +127,14 @@ struct ExprBuiltin
 #define AST_STRUCT_EXPR_BUILTIN ExprBuiltin
 #define AST_KIND_ExprBuiltin EXPR_BUILTIN
 
-struct ExprSym
+struct ExprRef
 {
     INHERIT_EXPR;
 
-    struct Decl* decl;
+    struct Symbol* sym;
 };
-#define AST_STRUCT_EXPR_SYM ExprSym
-#define AST_KIND_ExprSym EXPR_SYM
+#define AST_STRUCT_EXPR_REF ExprRef
+#define AST_KIND_ExprRef EXPR_REF
 
 struct ExprField
 {
@@ -145,7 +145,7 @@ struct ExprField
     const char* fieldname;
     struct Expr* lhs;
     /* filled by elaboration */
-    struct Decl* decl;
+    struct Symbol* sym;
 };
 #define AST_STRUCT_EXPR_FIELD ExprField
 #define AST_KIND_ExprField EXPR_FIELD

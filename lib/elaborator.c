@@ -87,14 +87,14 @@ static int32_t eval_constant(struct Elaborator* elab, struct Expr* e)
             parser_tok_error(e->tok, "error: expected integer constant literal\n");
             return 0;
         }
-        case EXPR_SYM:
+        case EXPR_REF:
         {
-            struct ExprSym* sym = (void*)e;
-            if (sym->decl->is_enum_constant)
+            struct ExprRef* ref = (void*)e;
+            if (ref->sym->is_enum_constant)
             {
-                return sym->decl->enum_value;
+                return ref->sym->enum_value;
             }
-            parser_tok_error(sym->tok, "error: expected integer constant expression\n");
+            parser_tok_error(ref->tok, "error: expected integer constant expression\n");
             return 0;
         }
         case EXPR_BINOP:
@@ -255,7 +255,7 @@ top:
             struct DeclSpecs* d = (void*)e;
             if (d->_typedef)
             {
-                e = &d->_typedef->ast;
+                e = (Ast*)d->_typedef->last_decl;
                 goto top;
             }
             if (d->def)
@@ -711,7 +711,7 @@ static void typestr_append_decltype_DeclSpecs(const struct Ast* const* expr_seqs
 {
     if (d->_typedef)
     {
-        return typestr_append_decltype(expr_seqs, tt, s, &d->_typedef->ast);
+        return typestr_append_decltype(expr_seqs, tt, s, &d->_typedef->last_decl->ast);
     }
     else if (d->tt_idx)
     {
@@ -783,7 +783,7 @@ top:
     if (!e) abort();
     switch (e->kind)
     {
-        case EXPR_SYM: e = &((struct ExprSym*)e)->decl->ast; goto top;
+        case EXPR_REF: e = &((struct ExprRef*)e)->sym->last_decl->ast; goto top;
         case AST_DECL: e = ((struct Decl*)e)->type; goto top;
         case AST_DECLSPEC: return typestr_append_decltype_DeclSpecs(expr_seqs, tt, s, (struct DeclSpecs*)e);
         case AST_DECLPTR:
@@ -955,8 +955,8 @@ static struct Decl* find_field_by_name(struct DeclSpecs* def, const char* fieldn
     struct Decl* field = def->first_member;
     while (field)
     {
-        if (strcmp(field->name, fieldname) == 0) return field;
-        field = field->next_field;
+        if (strcmp(field->sym->name, fieldname) == 0) return field;
+        field = field->sym->next_field;
     }
     return NULL;
 }
@@ -1487,7 +1487,7 @@ static int di_fill_frame_from_designator(DInitFrame* frame,
             {
                 return parser_ferror(rc, "error: field not found in structure: '%s'\n", frame->field);
             }
-            frame->offset = offset + frame->field->frame_offset;
+            frame->offset = offset + frame->field->sym->frame_offset;
             typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, &frame->ty, frame->field);
             return 0;
         }
@@ -1530,13 +1530,13 @@ loop:;
     }
     else
     {
-        const size_t prev_field_offset = back->field->frame_offset;
+        const size_t prev_field_offset = back->field->sym->frame_offset;
         if (back->is_union)
             back->field = NULL;
         else
-            back->field = back->field->next_field;
+            back->field = back->field->sym->next_field;
         if (back->field == NULL) goto pop;
-        back->offset += back->field->frame_offset - prev_field_offset;
+        back->offset += back->field->sym->frame_offset - prev_field_offset;
         typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, &back->ty, back->field);
     }
 }
@@ -1761,10 +1761,10 @@ static void elaborate_expr(struct Elaborator* elab,
             break;
         }
 
-        case EXPR_SYM:
+        case EXPR_REF:
         {
-            struct ExprSym* esym = top;
-            typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, rty, esym->decl);
+            struct ExprRef* esym = top;
+            typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, rty, esym->sym->last_decl);
             typestr_decay(rty);
             break;
         }
@@ -1866,7 +1866,7 @@ static void elaborate_expr(struct Elaborator* elab,
                     find_field_by_name(specs, e->fieldname, (struct Decl* const*)elab->p->expr_seqs.data);
                 if (field)
                 {
-                    e->decl = field;
+                    e->sym = field->sym;
                     typestr_from_decltype(elab->p->expr_seqs.data, elab->types, rty, field->type);
                     typestr_add_cvr(rty, cvr_mask);
                 }
@@ -1979,17 +1979,17 @@ static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
     elaborate_decltype(elab, decl->type, decl->init);
     if (!decl->specs->is_typedef)
     {
-        decl->size = get_decl_size(elab, decl->type);
-        decl->align = get_decl_align(elab, decl->type);
+        decl->sym->size = get_decl_size(elab, decl->type);
+        decl->sym->align = get_decl_align(elab, decl->type);
 
-        if (decl->size == 0)
+        if (decl->sym->size == 0)
         {
             /* type may be incomplete */
             if (decl->specs->is_extern)
             {
                 /* it's extern -- OK */
             }
-            else if (decl->arg_index > 0 && !((struct Decl*)decl->specs->parent)->init)
+            else if (decl->sym->arg_index > 0 && !((struct Decl*)decl->specs->parent)->init)
             {
                 /* arg of function prototype -- OK */
             }
@@ -2020,7 +2020,7 @@ static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
                         typestr_calc_sizing(elab, (struct TypeStr*)elab->types->fn_args.data + begin + i);
                 }
                 typestr_pop_offset(&ts);
-                decl->fn_ret_sizing = typestr_calc_sizing(elab, &ts);
+                decl->sym->fn_ret_sizing = typestr_calc_sizing(elab, &ts);
             }
 
             elaborate_init(elab, 0, decl, decl->init);
@@ -2068,13 +2068,13 @@ static int elaborate_declspecs(struct Elaborator* elab, struct DeclSpecs* specs)
                         {
                             UNWRAP(parser_tok_error(edecl->init->tok, "error: expected constant integer expression\n"));
                         }
-                        edecl->enum_value = enum_value = eval_constant(elab, (struct Expr*)edecl->init);
+                        edecl->sym->enum_value = enum_value = eval_constant(elab, (struct Expr*)edecl->init);
                     }
                     else
                     {
-                        edecl->enum_value = enum_value++;
+                        edecl->sym->enum_value = enum_value++;
                     }
-                    edecl->is_enum_constant = 1;
+                    edecl->sym->is_enum_constant = 1;
                 }
             }
         }
@@ -2098,9 +2098,9 @@ static int elaborate_declspecs(struct Elaborator* elab, struct DeclSpecs* specs)
                 {
                     // nested anonymous struct/union
                     *p_next_decl = decls->specs->first_member;
-                    while ((*p_next_decl)->next_field)
+                    while ((*p_next_decl)->sym->next_field)
                     {
-                        p_next_decl = &(*p_next_decl)->next_field;
+                        p_next_decl = &(*p_next_decl)->sym->next_field;
                     }
                 }
                 for (size_t j = 0; j < decls->extent; ++j)
@@ -2109,27 +2109,27 @@ static int elaborate_declspecs(struct Elaborator* elab, struct DeclSpecs* specs)
                     struct Decl* field = (struct Decl*)seqs[decls->offset + j];
                     UNWRAP(elaborate_decl(elab, field));
                     *p_next_decl = field;
-                    p_next_decl = &field->next_field;
-                    if (field->type || !field->name)
+                    p_next_decl = &field->sym->next_field;
+                    if (field->type || !field->sym->name)
                     {
-                        if (field->init && field->name)
+                        if (field->init && field->sym->name)
                         {
                             return parser_tok_error(field->tok,
                                                     "error: structure and union fields cannot have initializers\n");
                         }
                         // insert padding
-                        struct_size = round_to_alignment(struct_size, field->align);
+                        struct_size = round_to_alignment(struct_size, field->sym->align);
                         if (specs->is_struct)
                         {
-                            field->frame_offset = struct_size;
-                            struct_size += field->size;
+                            field->sym->frame_offset = struct_size;
+                            struct_size += field->sym->size;
                         }
                         else
                         {
-                            field->frame_offset = 0;
-                            if (field->size > struct_size) struct_size = field->size;
+                            field->sym->frame_offset = 0;
+                            if (field->sym->size > struct_size) struct_size = field->sym->size;
                         }
-                        if (struct_align < field->align) struct_align = field->align;
+                        if (struct_align < field->sym->align) struct_align = field->sym->align;
                     }
                 }
             }

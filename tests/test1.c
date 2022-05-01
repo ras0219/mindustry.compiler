@@ -81,7 +81,7 @@ fail:
 int test_parse_fail(struct TestState* state, const char* text)
 {
     parser_clear_errors();
-    Preprocessor* const pp = preproc_alloc("");
+    struct Preprocessor* const pp = preproc_alloc("");
     Parser* parser = NULL;
     REQUIREZ(preproc_text(pp, text));
     parser = my_malloc(sizeof(struct Parser));
@@ -100,7 +100,7 @@ fail:
 int test_elaborate_fail(struct TestState* state, const char* text)
 {
     parser_clear_errors();
-    Preprocessor* const pp = preproc_alloc("");
+    struct Preprocessor* const pp = preproc_alloc("");
     Parser* parser = NULL;
     Elaborator* elab = NULL;
     REQUIREZ(preproc_text(pp, text));
@@ -136,7 +136,7 @@ int parse_main(struct TestState* state)
     REQUIRE_EQ(1, decls->extent);
     struct Decl* main = (struct Decl*)((struct Expr**)parser->expr_seqs.data)[decls->offset];
     REQUIRE_EQ(AST_DECL, main->kind);
-    REQUIRE_STR_EQ("main", main->name);
+    REQUIRE_STR_EQ("main", main->sym->name);
     struct DeclFn* mainfn = (struct DeclFn*)main->type;
     REQUIRE_EQ(AST_DECLFN, mainfn->kind);
     struct DeclSpecs* mainrty = (struct DeclSpecs*)mainfn->type;
@@ -178,7 +178,7 @@ int parse_typedef(struct TestState* state)
     REQUIRE_EQ(1, decls->extent);
     struct Decl* def = (struct Decl*)((struct Expr**)parser->expr_seqs.data)[decls->offset];
     REQUIRE_EQ(AST_DECL, def->kind);
-    REQUIRE_STR_EQ("size_t", def->name);
+    REQUIRE_STR_EQ("size_t", def->sym->name);
     REQUIRE(def->type);
     struct DeclSpecs* defspecs = (struct DeclSpecs*)def->type;
     REQUIRE_EQ(AST_DECLSPEC, defspecs->kind);
@@ -237,7 +237,7 @@ int parse_struct(struct TestState* state)
     REQUIRE(mem1->extent == 1);
     REQUIRE(exprs[mem1->offset] && exprs[mem1->offset]->kind == AST_DECL);
     struct Decl* mem1def = (struct Decl*)exprs[mem1->offset];
-    REQUIRE_STR_EQ("sz", mem1def->name);
+    REQUIRE_STR_EQ("sz", mem1def->sym->name);
     REQUIRE(mem1def->type && mem1def->type->kind == AST_DECLSPEC);
     struct DeclSpecs* mem1specs = (struct DeclSpecs*)mem1def->type;
     REQUIRE_STR_EQ("size_t", mem1specs->name);
@@ -290,7 +290,7 @@ int parse_initializer(struct TestState* state)
         REQUIRE_EQ(1, decl1->extent);
         REQUIRE_EXPR(Decl, def, exprs[decl1->offset])
         {
-            REQUIRE_STR_EQ("arr", def->name);
+            REQUIRE_STR_EQ("arr", def->sym->name);
             REQUIRE_AST(AstInit, init, def->init)
             {
                 REQUIRE(init->next);
@@ -378,22 +378,22 @@ int parse_nested_struct(struct TestState* state)
             REQUIRE_EXPR(Decl, addr_t_decl, exprs[addr_t_decls->offset])
             {
                 REQUIRE_PTR_EQ(addr_t_decl, decls->specs->first_member);
-                REQUIRE_EQ(4, addr_t_decl->align);
-                REQUIRE_EQ(4, addr_t_decl->size);
+                REQUIRE_EQ(4, addr_t_decl->sym->align);
+                REQUIRE_EQ(4, addr_t_decl->sym->size);
             }
         }
-        REQUIRE(decls->specs->first_member->next_field);
+        REQUIRE(decls->specs->first_member->sym->next_field);
         REQUIRE_EXPR(StmtDecls, in_u_decls, exprs[decls->specs->suinit->offset + 1])
         {
             REQUIRE_EQ(1, in_u_decls->extent);
             REQUIRE_EXPR(Decl, in_u_decl, exprs[in_u_decls->offset])
             {
-                REQUIRE_PTR_EQ(in_u_decl, decls->specs->first_member->next_field);
-                REQUIRE_EQ(2, in_u_decl->align);
-                REQUIRE_EQ(4, in_u_decl->size);
+                REQUIRE_PTR_EQ(in_u_decl, decls->specs->first_member->sym->next_field);
+                REQUIRE_EQ(2, in_u_decl->sym->align);
+                REQUIRE_EQ(4, in_u_decl->sym->size);
             }
         }
-        REQUIRE_NULL(decls->specs->first_member->next_field->next_field);
+        REQUIRE_NULL(decls->specs->first_member->sym->next_field->sym->next_field);
 
         REQUIRE_EQ(4, decls->specs->align);
         REQUIRE_EQ(8, decls->specs->size);
