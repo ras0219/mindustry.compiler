@@ -63,10 +63,10 @@ static __forceinline size_t tt_find_insert_null(struct TypeTable* tt, const char
     return offset;
 }
 
-static __forceinline const char* tt_get_name(const struct TypeTable* tt, size_t i)
-{
-    return ((const char**)tt->typenames.arr.data)[i];
-}
+// static __forceinline const char* tt_get_name(const struct TypeTable* tt, size_t i)
+// {
+//     return ((const char**)tt->typenames.arr.data)[i];
+// }
 
 static int32_t eval_constant(struct Elaborator* elab, struct Expr* e)
 {
@@ -197,118 +197,62 @@ static int get_primitive_declspec_size(struct DeclSpecs* d)
     }
 }
 
-static int get_decl_align(struct Elaborator* elab, struct Ast* e)
-{
-top:
-    switch (e->kind)
-    {
-        case AST_DECL: e = ((struct Decl*)e)->type; goto top;
-        case AST_DECLPTR: return 8;
-        case AST_DECLFN: return 1;
-        case AST_DECLARR: e = ((struct DeclArr*)e)->type; goto top;
-        case AST_DECLSPEC: return ((struct DeclSpecs*)e)->align;
-        // {
-        //     struct DeclSpecs* d = ;
-        //     if (d->type)
-        //     {
-        //         e = &d->type->ast;
-        //         goto top;
-        //     }
-        //     else if (d->name)
-        //     {
-        //         uint32_t offset = tt_find_insert_null(elab->types, d->name);
-        //         struct TypeDef* const inner_decl = *tt_get_def(elab->types, offset);
-        //         if (!inner_decl)
-        //         {
-        //             parser_tok_error(d->tok, "error: '%s' was incomplete while getting alignment\n", d->name);
-        //             return 1;
-        //         }
-        //         return inner_decl->align;
-        //     }
-        //     else if (d->tok->type == LEX_UUVALIST)
-        //     {
-        //         return 8;
-        //     }
-
-        //     return get_primitive_declspec_size(d);
-        // }
-        default: parser_tok_error(e->tok, "error: cannot calculate align of typeexpr\n"); return 1;
-    }
-}
-
-static int get_decl_size(struct Elaborator* elab, struct Ast* e)
-{
-top:
-    switch (e->kind)
-    {
-        case AST_DECL: e = ((struct Decl*)e)->type; goto top;
-        case AST_DECLPTR: return 8;
-        case AST_DECLFN: return 1;
-        case AST_DECLARR:
-        {
-            struct DeclArr* d = (struct DeclArr*)e;
-            int base = get_decl_size(elab, d->type);
-            return d->integer_arity * base;
-        }
-        case AST_DECLSPEC:
-        {
-            struct DeclSpecs* d = (void*)e;
-            if (d->_typedef)
-            {
-                e = (Ast*)d->_typedef->last_decl;
-                goto top;
-            }
-            if (d->def)
-            {
-                return d->def->size;
-            }
-            return d->size;
-        }
-        default: parser_tok_error(e->tok, "error: cannot calculate size of decl\n"); return 1;
-    }
-}
-
-#define X_TYPE_BYTE_INT(Y)                                                                                             \
-    Y(TYPE_BYTE_CHAR, 'C')                                                                                             \
-    Y(TYPE_BYTE_SCHAR, 'h')                                                                                            \
-    Y(TYPE_BYTE_UCHAR, 'H')                                                                                            \
-    Y(TYPE_BYTE_INT, 'i')                                                                                              \
-    Y(TYPE_BYTE_SHORT, 's')                                                                                            \
-    Y(TYPE_BYTE_LONG, 'l')                                                                                             \
-    Y(TYPE_BYTE_LLONG, 'y')                                                                                            \
-    Y(TYPE_BYTE_UINT, 'I')                                                                                             \
-    Y(TYPE_BYTE_USHORT, 'S')                                                                                           \
-    Y(TYPE_BYTE_ULONG, 'L')                                                                                            \
-    Y(TYPE_BYTE_ULLONG, 'Y')
-
-#define X_TYPE_BYTE_ARITH(Y)                                                                                           \
-    X_TYPE_BYTE_INT(Y)                                                                                                 \
-    Y(TYPE_BYTE_FLOAT, 'F')                                                                                            \
-    Y(TYPE_BYTE_DOUBLE, 'D')                                                                                           \
-    Y(TYPE_BYTE_LDOUBLE, 'E')
-
-#define X_TYPE_BYTE(Y)                                                                                                 \
-    Y(TYPE_BYTE_VOID, 'V')                                                                                             \
-    Y(TYPE_BYTE_UUVALIST, '_')                                                                                         \
-    Y(TYPE_BYTE_VARIADIC, '.')                                                                                         \
-    X_TYPE_BYTE_ARITH(Y)                                                                                               \
-    Y(TYPE_BYTE_STRUCT, '$')                                                                                           \
-    Y(TYPE_BYTE_UNION, 'u')                                                                                            \
-    Y(TYPE_BYTE_ENUM, 'e')                                                                                             \
-    Y(TYPE_BYTE_POINTER, 'p')                                                                                          \
-    Y(TYPE_BYTE_ARRAY, '[')                                                                                            \
-    Y(TYPE_BYTE_FUNCTION, '(')
-
-#define Y_COMMA(E, CH) E = CH,
 enum
 {
-    X_TYPE_BYTE(Y_COMMA)
+    TYPE_FLAGS_VOID = 1,
+    TYPE_FLAGS_CHAR = 1 << 1,
+    TYPE_FLAGS_INT = 1 << 2,
+    TYPE_FLAGS_POINTER = 1 << 3,
+    TYPE_FLAGS_STRUCT = 1 << 4,
+    TYPE_FLAGS_UNION = 1 << 5,
+    TYPE_FLAGS_FUNCTION = 1 << 6,
+    TYPE_FLAGS_VAR = 1 << 7,
+    TYPE_FLAGS_FLOAT = 1 << 8,
+    TYPE_FLAGS_ARRAY = 1 << 9,
+    TYPE_FLAGS_SIGNED = 1 << 10,
+
+    TYPE_MASK_HAS_FIELDS = TYPE_FLAGS_UNION | TYPE_FLAGS_STRUCT,
+    TYPE_MASK_ARITH = TYPE_FLAGS_FLOAT | TYPE_FLAGS_INT,
+    TYPE_MASK_SCALAR = TYPE_FLAGS_POINTER | TYPE_MASK_ARITH,
+    TYPE_MASK_OBJECT = TYPE_FLAGS_VOID | TYPE_FLAGS_INT | TYPE_FLAGS_POINTER | TYPE_FLAGS_STRUCT | TYPE_FLAGS_UNION,
 };
-#undef Y_COMMA
+
+unsigned int typestr_mask(const struct TypeStr* ts)
+{
+    switch (typestr_byte(ts))
+    {
+        case '\0': return 0;
+        case TYPE_BYTE_VARIADIC: return TYPE_FLAGS_VAR;
+        case TYPE_BYTE_VOID: return TYPE_FLAGS_VOID;
+        case TYPE_BYTE_CHAR:
+        case TYPE_BYTE_SCHAR: return TYPE_FLAGS_CHAR | TYPE_FLAGS_INT | TYPE_FLAGS_SIGNED;
+        case TYPE_BYTE_UCHAR: return TYPE_FLAGS_CHAR | TYPE_FLAGS_INT;
+        case TYPE_BYTE_ENUM:
+        case TYPE_BYTE_INT:
+        case TYPE_BYTE_SHORT:
+        case TYPE_BYTE_LONG:
+        case TYPE_BYTE_LLONG: return TYPE_FLAGS_INT | TYPE_FLAGS_SIGNED;
+        case TYPE_BYTE_UINT:
+        case TYPE_BYTE_USHORT:
+        case TYPE_BYTE_ULONG:
+        case TYPE_BYTE_ULLONG: return TYPE_FLAGS_INT;
+        case TYPE_BYTE_FLOAT:
+        case TYPE_BYTE_DOUBLE:
+        case TYPE_BYTE_LDOUBLE: return TYPE_FLAGS_FLOAT;
+        case TYPE_BYTE_POINTER: return TYPE_FLAGS_POINTER;
+        case TYPE_BYTE_UNK_ARRAY:
+        case TYPE_BYTE_ARRAY: return TYPE_FLAGS_ARRAY;
+        case TYPE_BYTE_STRUCT: return TYPE_FLAGS_STRUCT;
+        case TYPE_BYTE_UNION: return TYPE_FLAGS_UNION;
+        case TYPE_BYTE_FUNCTION: return TYPE_FLAGS_FUNCTION;
+        case TYPE_BYTE_UUVALIST: return TYPE_FLAGS_POINTER;
+        default: abort();
+    }
+}
 
 static const struct TypeStr s_type_void = {.buf = {1, TYPE_BYTE_VOID}};
 static const struct TypeStr s_type_literal_int = {.buf = {1, TYPE_BYTE_INT}};
-static const struct TypeStr s_type_literal_char = {.buf = {2, TYPE_BYTE_CHAR, 'c'}};
+static const struct TypeStr s_type_mutable_char = {.buf = {1, TYPE_BYTE_CHAR}};
 // static const struct TypeStr s_type_void = {.buf = {1, TYPE_BYTE_VOID}};
 
 __forceinline static uint32_t typestr_get_offset_i(const struct TypeStr* ts, int i)
@@ -356,7 +300,7 @@ static void typestr_fmt_i(const struct TypeTable* tt, const struct TypeStr* ts, 
             case 'c': str = "const "; goto append_continue;
             case 'v': str = "volatile "; goto append_continue;
             case 'r': str = "restrict "; goto append_continue;
-            case ']': str = "array of "; goto append_continue;
+            case TYPE_BYTE_UNK_ARRAY: str = "array of "; goto append_continue;
             case TYPE_BYTE_ARRAY:
             {
                 uint32_t u;
@@ -439,13 +383,10 @@ static __forceinline int typestr_is_pointer(const struct TypeStr* ts)
 const struct TypeStr s_void = {
     .buf = {1, TYPE_BYTE_VOID},
 };
-static __forceinline int typestr_is_fn(const struct TypeStr* ts)
-{
-    return ts->buf[(int)ts->buf[0]] == TYPE_BYTE_FUNCTION;
-}
+static __forceinline int typestr_is_fn(const struct TypeStr* ts) { return typestr_byte(ts) == TYPE_BYTE_FUNCTION; }
 static __forceinline int typestr_is_variadic(const struct TypeStr* ts)
 {
-    return ts->buf[(int)ts->buf[0]] == TYPE_BYTE_VARIADIC;
+    return typestr_byte(ts) == TYPE_BYTE_VARIADIC;
 }
 static __forceinline int typestr_is_aggregate(const struct TypeStr* ts)
 {
@@ -462,10 +403,22 @@ enum
 static unsigned int typestr_strip_cvr(struct TypeStr* ts)
 {
     unsigned int m = 0;
-    if (ts->buf[(int)ts->buf[0]] == 'r') ts->buf[(int)ts->buf[0]--] = '\0', m |= TYPESTR_CVR_R;
-    if (ts->buf[(int)ts->buf[0]] == 'v') ts->buf[(int)ts->buf[0]--] = '\0', m |= TYPESTR_CVR_V;
-    if (ts->buf[(int)ts->buf[0]] == 'c') ts->buf[(int)ts->buf[0]--] = '\0', m |= TYPESTR_CVR_C;
+    if (ts->buf[(int)ts->buf[0]] == 'r') ts->buf[0]--, m |= TYPESTR_CVR_R;
+    if (ts->buf[(int)ts->buf[0]] == 'v') ts->buf[0]--, m |= TYPESTR_CVR_V;
+    if (ts->buf[(int)ts->buf[0]] == 'c') ts->buf[0]--, m |= TYPESTR_CVR_C;
     return m;
+}
+static void typestr_remove_array(struct TypeStr* ts)
+{
+    typestr_strip_cvr(ts);
+    if (ts->buf[(int)ts->buf[0]] == TYPE_BYTE_ARRAY)
+    {
+        ts->buf[0] -= sizeof(uint32_t) + 1;
+    }
+    else
+    {
+        --ts->buf[0];
+    }
 }
 static void typestr_dereference(struct TypeStr* ts)
 {
@@ -477,61 +430,6 @@ static void typestr_dereference(struct TypeStr* ts)
     else
     {
         *ts = s_type_unknown;
-    }
-}
-enum
-{
-    TYPE_FLAGS_VOID = 1,
-    TYPE_FLAGS_CHAR = 1 << 1,
-    TYPE_FLAGS_INT = 1 << 2,
-    TYPE_FLAGS_POINTER = 1 << 3,
-    TYPE_FLAGS_STRUCT = 1 << 4,
-    TYPE_FLAGS_UNION = 1 << 5,
-    TYPE_FLAGS_FUNCTION = 1 << 6,
-    TYPE_FLAGS_VAR = 1 << 7,
-    TYPE_FLAGS_FLOAT = 1 << 8,
-    TYPE_FLAGS_ARRAY = 1 << 9,
-    TYPE_FLAGS_SIGNED = 1 << 10,
-
-    TYPE_MASK_HAS_FIELDS = TYPE_FLAGS_UNION | TYPE_FLAGS_STRUCT,
-    TYPE_MASK_ARITH = TYPE_FLAGS_FLOAT | TYPE_FLAGS_INT,
-    TYPE_MASK_SCALAR = TYPE_FLAGS_POINTER | TYPE_MASK_ARITH,
-    TYPE_MASK_OBJECT = TYPE_FLAGS_VOID | TYPE_FLAGS_INT | TYPE_FLAGS_POINTER | TYPE_FLAGS_STRUCT | TYPE_FLAGS_UNION,
-};
-
-unsigned int typestr_mask(const struct TypeStr* ts)
-{
-    switch (ts->buf[(int)ts->buf[0]])
-    {
-        case 'c':
-        case 'v':
-        case 'r':
-        case '\0': return 0;
-        case TYPE_BYTE_VARIADIC: return TYPE_FLAGS_VAR;
-        case TYPE_BYTE_VOID: return TYPE_FLAGS_VOID;
-        case TYPE_BYTE_CHAR:
-        case TYPE_BYTE_SCHAR: return TYPE_FLAGS_CHAR | TYPE_FLAGS_INT | TYPE_FLAGS_SIGNED;
-        case TYPE_BYTE_UCHAR: return TYPE_FLAGS_CHAR | TYPE_FLAGS_INT;
-        case TYPE_BYTE_ENUM:
-        case TYPE_BYTE_INT:
-        case TYPE_BYTE_SHORT:
-        case TYPE_BYTE_LONG:
-        case TYPE_BYTE_LLONG: return TYPE_FLAGS_INT | TYPE_FLAGS_SIGNED;
-        case TYPE_BYTE_UINT:
-        case TYPE_BYTE_USHORT:
-        case TYPE_BYTE_ULONG:
-        case TYPE_BYTE_ULLONG: return TYPE_FLAGS_INT;
-        case TYPE_BYTE_FLOAT:
-        case TYPE_BYTE_DOUBLE:
-        case TYPE_BYTE_LDOUBLE: return TYPE_FLAGS_FLOAT;
-        case TYPE_BYTE_POINTER: return TYPE_FLAGS_POINTER;
-        case ']':
-        case TYPE_BYTE_ARRAY: return TYPE_FLAGS_ARRAY;
-        case TYPE_BYTE_STRUCT: return TYPE_FLAGS_STRUCT;
-        case TYPE_BYTE_UNION: return TYPE_FLAGS_UNION;
-        case TYPE_BYTE_FUNCTION: return TYPE_FLAGS_FUNCTION;
-        case TYPE_BYTE_UUVALIST: return TYPE_FLAGS_POINTER;
-        default: abort();
     }
 }
 
@@ -595,13 +493,8 @@ static void typestr_decay(struct TypeStr* t)
     char ch = t->buf[(int)t->buf[0]];
     switch (ch)
     {
-        case ']': t->buf[(int)t->buf[0]] = TYPE_BYTE_POINTER; return;
-        case TYPE_BYTE_ARRAY:
-        {
-            t->buf[0] -= 4;
-            t->buf[(int)t->buf[0]] = TYPE_BYTE_POINTER;
-            return;
-        }
+        case TYPE_BYTE_ARRAY: t->buf[0] -= 4; // passthrough
+        case TYPE_BYTE_UNK_ARRAY: t->buf[(int)t->buf[0]] = TYPE_BYTE_POINTER; return;
         case TYPE_BYTE_FUNCTION:
         {
             t->buf[0]++;
@@ -917,6 +810,61 @@ static size_t typestr_get_size_i(struct Elaborator* elab, const struct TypeStr* 
 static size_t typestr_get_size(struct Elaborator* elab, const struct TypeStr* ts)
 {
     return typestr_get_size_i(elab, ts, ts->buf[0]);
+}
+
+static size_t typestr_get_align_i(struct Elaborator* elab, const struct TypeStr* ts, int i)
+{
+    if (ts->buf[i] == 'r') --i;
+    if (ts->buf[i] == 'v') --i;
+    if (ts->buf[i] == 'c') --i;
+    switch (ts->buf[i])
+    {
+        case TYPE_BYTE_STRUCT:
+        case TYPE_BYTE_UNION:
+        {
+            struct DeclSpecs* specs = *tt_get_def(elab->types, typestr_get_offset_i(ts, i));
+            if (!specs)
+            {
+                typestr_error1(NULL, elab->types, "error: unable to get align of incomplete type: %.*s\n", ts);
+                return 1;
+            }
+            return specs->align;
+        }
+        case TYPE_BYTE_ENUM: return 4;
+        case TYPE_BYTE_POINTER: return 8;
+        case TYPE_BYTE_UUVALIST: return 8;
+        case TYPE_BYTE_ULLONG:
+        case TYPE_BYTE_ULONG:
+        case TYPE_BYTE_LLONG:
+        case TYPE_BYTE_LONG: return 8;
+        case TYPE_BYTE_UINT:
+        case TYPE_BYTE_INT: return 4;
+        case TYPE_BYTE_USHORT:
+        case TYPE_BYTE_SHORT: return 2;
+        case TYPE_BYTE_VOID:
+        case TYPE_BYTE_UCHAR:
+        case TYPE_BYTE_SCHAR:
+        case TYPE_BYTE_CHAR: return 1;
+        case TYPE_BYTE_FUNCTION: return 1;
+        case TYPE_BYTE_UNK_ARRAY:
+        {
+            return typestr_get_align_i(elab, ts, i - 1);
+        }
+        case TYPE_BYTE_ARRAY:
+        {
+            return typestr_get_align_i(elab, ts, i - sizeof(uint32_t) - 1);
+        }
+        default:
+        {
+            typestr_error1(NULL, elab->types, "error: unable to get align of type: %.*s\n", ts);
+            return 1;
+        }
+    }
+}
+
+static size_t typestr_get_align(struct Elaborator* elab, const struct TypeStr* ts)
+{
+    return typestr_get_align_i(elab, ts, ts->buf[0]);
 }
 
 static size_t typestr_get_elem_size(struct Elaborator* elab, const struct TypeStr* ts)
@@ -1382,6 +1330,7 @@ typedef struct DInitFrame
     size_t offset;
     Decl* field;
     uint8_t is_array : 1;
+    uint8_t is_unk : 1;
     uint8_t is_union : 1;
     uint32_t extent;
     uint32_t index;
@@ -1403,13 +1352,24 @@ static int di_fill_frame(DInitFrame* frame, Elaborator* elab, size_t offset, con
 {
     memset(frame, 0, sizeof(*frame));
     frame->offset = offset;
-    switch (typestr_byte(parent_ty))
+    char b = typestr_byte(parent_ty);
+    switch (b)
     {
+        case TYPE_BYTE_UNK_ARRAY:
         case TYPE_BYTE_ARRAY:
         {
             frame->is_array = 1;
             frame->ty = *parent_ty;
-            frame->extent = typestr_pop_offset(&frame->ty);
+            typestr_strip_cvr(&frame->ty);
+            if (b == TYPE_BYTE_UNK_ARRAY)
+            {
+                --frame->ty.buf[0];
+                frame->extent = UINT32_MAX;
+            }
+            else
+            {
+                frame->extent = typestr_pop_offset(&frame->ty);
+            }
             frame->elem_size = typestr_get_size(elab, &frame->ty);
             if (frame->extent == 0)
             {
@@ -1445,13 +1405,24 @@ static int di_fill_frame_from_designator(DInitFrame* frame,
 {
     const Designator* const designator = (const Designator*)elab->p->designators.data + designator_idx;
     memset(frame, 0, sizeof(*frame));
-    switch (typestr_byte(parent_ty))
+    char b = typestr_byte(parent_ty);
+    switch (b)
     {
+        case TYPE_BYTE_UNK_ARRAY:
         case TYPE_BYTE_ARRAY:
         {
             frame->is_array = 1;
             frame->ty = *parent_ty;
-            frame->extent = typestr_pop_offset(&frame->ty);
+            typestr_strip_cvr(&frame->ty);
+            if (b == TYPE_BYTE_UNK_ARRAY)
+            {
+                --frame->ty.buf[0];
+                frame->extent = UINT32_MAX;
+            }
+            else
+            {
+                frame->extent = typestr_pop_offset(&frame->ty);
+            }
             frame->elem_size = typestr_get_size(elab, &frame->ty);
             if (frame->extent == 0)
             {
@@ -1551,7 +1522,6 @@ static void elaborate_init_ty_AstInit(struct Elaborator* elab, size_t offset, co
 
     for (; init->init; init = init->next, di_next(&iter, elab))
     {
-        // <- handle designators here
         if (init->designator_extent != 0)
         {
             array_clear(&iter.stk);
@@ -1605,12 +1575,32 @@ static void elaborate_init_ty(struct Elaborator* elab, size_t offset, const Type
     {
         return elaborate_init_ty_AstInit(elab, offset, dty, (struct AstInit*)ast);
     }
-    switch (typestr_byte(dty))
+    const char tyb = typestr_byte(dty);
+    switch (tyb)
     {
-        case TYPE_BYTE_ARRAY: parser_tok_error(ast->tok, "error: unimplemented array initializer type.\n"); break;
         case TYPE_BYTE_FUNCTION: elaborate_stmt(elab, NULL, ast); break;
         case TYPE_BYTE_UNION: parser_tok_error(ast->tok, "error: unimplemented union initializer type.\n"); break;
         case TYPE_BYTE_STRUCT: parser_tok_error(ast->tok, "error: unimplemented struct initializer type.\n"); break;
+        case TYPE_BYTE_ARRAY:
+        case TYPE_BYTE_UNK_ARRAY:
+        {
+            TypeStr ts = *dty;
+            typestr_remove_array(&ts);
+            typestr_strip_cvr(&ts);
+            if (!typestr_match(&ts, &s_type_mutable_char))
+            {
+                parser_tok_error(ast->tok, "error: array initializer must be an initializer list\n");
+                break;
+            }
+            if (ast->kind != EXPR_LIT || ast->tok->type != LEX_STRING)
+            {
+                parser_tok_error(ast->tok,
+                                 "error: array initializer must be an initializer list or a string literal\n");
+                break;
+            }
+            elaborate_expr(elab, NULL, (Expr*)ast, &ts);
+            break;
+        }
         default:
         {
             if (!ast_kind_is_expr(ast->kind))
@@ -1749,8 +1739,7 @@ static void elaborate_expr(struct Elaborator* elab,
                 *rty = s_type_literal_int;
             else if (expr->tok->type == LEX_STRING)
             {
-                *rty = s_type_literal_char;
-                // TODO: calculate string lengths
+                *rty = s_type_mutable_char;
                 typestr_add_array(rty, strlen(expr->text) + 1);
             }
             else
@@ -1914,41 +1903,15 @@ static __forceinline size_t round_to_alignment(size_t size, size_t align)
     return n - (n % align);
 }
 
-static void elaborate_decltype(struct Elaborator* elab, struct Ast* ast, struct Ast* init)
+static void elaborate_decltype(struct Elaborator* elab, struct Ast* ast)
 {
     switch (ast->kind)
     {
         case AST_DECLARR:
         {
             struct DeclArr* arr = (void*)ast;
-            elaborate_decltype(elab, arr->type, NULL);
-            if (arr->arity == NULL)
-            {
-                if (init)
-                {
-                    // arr->integer_arity = block->extent;
-                    if (init->kind == AST_INIT)
-                    {
-                        struct AstInit* i = (void*)init;
-                        size_t n = 0;
-                        while (i->init)
-                            ++n, i = i->next;
-                        arr->integer_arity = n;
-                    }
-                    else if (init->kind == EXPR_LIT)
-                    {
-                        struct ExprLit* l = (void*)init;
-                        arr->integer_arity = strlen(l->text) + 1;
-                    }
-                    else
-                    {
-                        parser_tok_error(
-                            init->tok,
-                            "error: array initializer must be either a string literal or an initializer list\n");
-                    }
-                }
-            }
-            else
+            elaborate_decltype(elab, arr->type);
+            if (arr->arity != NULL)
             {
                 arr->integer_arity = eval_constant(elab, arr->arity);
             }
@@ -1957,14 +1920,14 @@ static void elaborate_decltype(struct Elaborator* elab, struct Ast* ast, struct 
         case AST_DECLFN:
         {
             struct DeclFn* fn = (void*)ast;
-            elaborate_decltype(elab, fn->type, NULL);
+            elaborate_decltype(elab, fn->type);
             elaborate_stmts(elab, NULL, fn->offset, fn->extent);
             break;
         }
         case AST_DECLPTR:
         {
             struct DeclPtr* ptr = (void*)ast;
-            elaborate_decltype(elab, ptr->type, NULL);
+            elaborate_decltype(elab, ptr->type);
             break;
         }
         case AST_DECLSPEC: /* already elaborated */ break;
@@ -1976,40 +1939,26 @@ static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
 {
     int rc = 0;
     decl->elaborated = 1;
-    elaborate_decltype(elab, decl->type, decl->init);
-    if (!decl->specs->is_typedef)
+    elaborate_decltype(elab, decl->type);
+    Symbol* const sym = decl->sym;
+    if (!decl->prev_decl)
     {
-        decl->sym->size = get_decl_size(elab, decl->type);
-        decl->sym->align = get_decl_align(elab, decl->type);
+        typestr_from_decltype(elab->p->expr_seqs.data, elab->types, &sym->type, decl->type);
+    }
+    if (sym->def == decl)
+    {
+        // Refresh symbol's type with concrete definition information
+        typestr_from_decltype(elab->p->expr_seqs.data, elab->types, &sym->type, decl->type);
 
-        if (decl->sym->size == 0)
+        if (!decl->specs->is_typedef)
         {
-            /* type may be incomplete */
-            if (decl->specs->is_extern)
+            const char tyb = typestr_byte(&sym->type);
+            if (tyb == TYPE_BYTE_FUNCTION)
             {
-                /* it's extern -- OK */
-            }
-            else if (decl->sym->arg_index > 0 && !((struct Decl*)decl->specs->parent)->init)
-            {
-                /* arg of function prototype -- OK */
-            }
-            else
-            {
-                parser_tok_error(decl->tok, "error: definition of object with incomplete size\n");
-                return 0;
-            }
-        }
-
-        if (decl->init)
-        {
-            struct TypeStr ts = {0};
-            typestr_append_decltype(elab->p->expr_seqs.data, elab->types, &ts, decl->type);
-
-            if (typestr_is_fn(&ts))
-            {
+                if (!decl->init) abort();
                 if (decl->type->kind != AST_DECLFN) abort();
                 struct DeclFn* fn = (void*)decl->type;
-                uint32_t f_offset = typestr_get_offset(&ts);
+                uint32_t f_offset = typestr_get_offset(&sym->type);
                 size_t begin = f_offset ? arrsz_at(&elab->types->fn_args_ends, f_offset - 1) : 0;
                 size_t end = arrsz_at(&elab->types->fn_args_ends, f_offset);
                 struct ParamConversion* paramcvs = elab->param_conversions.data;
@@ -2019,11 +1968,68 @@ static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
                     paramcvs[fn->offset + i].sizing =
                         typestr_calc_sizing(elab, (struct TypeStr*)elab->types->fn_args.data + begin + i);
                 }
+                TypeStr ts = sym->type;
                 typestr_pop_offset(&ts);
-                decl->sym->fn_ret_sizing = typestr_calc_sizing(elab, &ts);
+                sym->fn_ret_sizing = typestr_calc_sizing(elab, &ts);
+            }
+            if (decl->init)
+            {
+                elaborate_init(elab, 0, decl, decl->init);
+            }
+            if (tyb == TYPE_BYTE_UNK_ARRAY)
+            {
+                const size_t elem_size = typestr_get_size_i(elab, &sym->type, sym->type.buf[0] - 1);
+                if (!decl->init)
+                {
+                    UNWRAP(parser_tok_error(
+                        decl->tok, "error: definition of object with unknown array bounds must have an initializer\n"));
+                }
+                else if (decl->init->kind == AST_INIT)
+                {
+                    uint32_t max_assign = 0;
+                    for (AstInit* i = (AstInit*)decl->init; i->init; i = i->next)
+                    {
+                        uint32_t new_max = i->offset / elem_size;
+                        if (new_max > max_assign) max_assign = new_max;
+                    }
+                    if (max_assign == UINT32_MAX) abort();
+                    --sym->type.buf[0];
+                    typestr_append_offset(&sym->type, max_assign + 1, TYPE_BYTE_ARRAY);
+                }
+                else if (decl->init->kind == EXPR_LIT)
+                {
+                    struct ExprLit* l = (void*)decl->init;
+                    --sym->type.buf[0];
+                    typestr_append_offset(&sym->type, strlen(l->text) + 1, TYPE_BYTE_ARRAY);
+                }
+                else
+                {
+                    UNWRAP(parser_tok_error(
+                        decl->init->tok,
+                        "error: array initializer must be either a string literal or an initializer list\n"));
+                }
             }
 
-            elaborate_init(elab, 0, decl, decl->init);
+            sym->size = typestr_get_size(elab, &sym->type);
+            sym->align = typestr_get_align(elab, &sym->type);
+
+            if (sym->size == 0)
+            {
+                /* type may be incomplete */
+                if (decl->specs->is_extern)
+                {
+                    /* it's extern -- OK */
+                }
+                else if (sym->arg_index > 0 && !((struct Decl*)decl->specs->parent)->init)
+                {
+                    /* arg of function prototype -- OK */
+                }
+                else
+                {
+                    parser_tok_error(decl->tok, "error: definition of object with incomplete size\n");
+                    return 0;
+                }
+            }
         }
     }
     UNWRAP(parser_has_errors());
@@ -2048,6 +2054,18 @@ static int elaborate_declspecs(struct Elaborator* elab, struct DeclSpecs* specs)
         else
         {
             specs->tt_idx = tt_insert_null(elab->types) + 1;
+        }
+
+        struct DeclSpecs** ttdef = tt_get_def(elab->types, specs->tt_idx - 1);
+        if (specs->enum_init || specs->suinit)
+        {
+            if (*ttdef)
+            {
+                parser_tok_error(specs->tok, "error: multiple definitions of type.\n");
+                parser_tok_error((*ttdef)->tok, "info: previous definition\n");
+                UNWRAP(1);
+            }
+            *ttdef = specs;
         }
         if (specs->is_enum)
         {
@@ -2138,19 +2156,6 @@ static int elaborate_declspecs(struct Elaborator* elab, struct DeclSpecs* specs)
             struct_size = round_to_alignment(struct_size, struct_align);
             specs->align = struct_align;
             specs->size = struct_size;
-        }
-
-        struct DeclSpecs** ttdef = tt_get_def(elab->types, specs->tt_idx - 1);
-
-        if (specs->enum_init || specs->suinit)
-        {
-            if (*ttdef)
-            {
-                parser_tok_error(specs->tok, "error: multiple definitions of type.\n");
-                parser_tok_error((*ttdef)->tok, "info: previous definition\n");
-                UNWRAP(1);
-            }
-            *ttdef = specs;
         }
 
         specs->def = *ttdef;

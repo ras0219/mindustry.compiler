@@ -100,7 +100,6 @@ typedef struct Decl
 typedef struct Symbol
 {
     const char* name;
-    Ast* type;
     Decl* last_decl;
     Decl* def;
 
@@ -108,9 +107,8 @@ typedef struct Symbol
     unsigned int arg_index;
 
     // elaboration information
+    TypeStr type;
 
-    /// If type is an array of unknown size, we store the calculated size here
-    unsigned int integer_arity;
     int32_t fn_ret_sizing;
     size_t size;
     size_t align;

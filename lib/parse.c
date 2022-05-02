@@ -1053,11 +1053,6 @@ static const struct Token* parse_declarator(Parser* p, const struct Token* cur_t
                 // TODO: ensure symbols match
                 PARSER_FAIL_TOK(decl->tok, "error: declaration doesn't match previous\n");
             }
-            if (decl->init)
-            {
-                if (decl->sym->def) PARSER_FAIL_TOK(decl->tok, "error: multiple definition of symbol\n");
-                decl->sym->def = decl;
-            }
         }
         else
         {
@@ -1240,6 +1235,10 @@ static const struct Token* parse_decls(Parser* p,
             {
                 PARSER_FAIL_TOK(cur_tok, "error: anonymous function declaration not allowed\n");
             }
+            if (pdecl->sym->def)
+            {
+                PARSER_FAIL_TOK(pdecl->tok, "error: multiple definition of symbol\n");
+            }
             p->parent = &pdecl->ast;
             struct StmtBlock* init;
             PARSER_DO(parse_stmt_block(p, cur_tok + 1, &init));
@@ -1250,6 +1249,12 @@ static const struct Token* parse_decls(Parser* p,
             scope_shrink(&p->scope, scope_sz);
             scope_insert(&p->scope, pdecl->sym);
             return cur_tok;
+        }
+
+        if (!specs->is_extern)
+        {
+            if (pdecl->sym->def) PARSER_FAIL_TOK(pdecl->tok, "error: multiple definition of symbol\n");
+            pdecl->sym->def = pdecl;
         }
 
         if (cur_tok->type == TOKEN_SYM1(':'))

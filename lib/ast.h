@@ -94,13 +94,14 @@ typedef struct Expr
         };                                                                                                             \
     }
 
-struct ExprLit
+typedef struct ExprLit
 {
     INHERIT_EXPR;
 
     const char* text;
     uint64_t numeric;
-};
+} ExprLit;
+
 #define AST_STRUCT_EXPR_LIT ExprLit
 #define AST_KIND_ExprLit EXPR_LIT
 

@@ -348,18 +348,11 @@ static int be_compile_lvalue_ExprLit(struct BackEnd* be, struct ExprLit* e, stru
 
 static int is_sym_array_or_function(Symbol* sym)
 {
-top:
-    switch (sym->type->kind)
+    switch (typestr_byte(&sym->type))
     {
-        case AST_DECLARR: return 1;
-        case AST_DECLFN: return 1;
-        case AST_DECLSPEC:
-            if (((struct DeclSpecs*)sym->type)->_typedef)
-            {
-                sym = ((struct DeclSpecs*)sym->type)->_typedef;
-                goto top;
-            }
-            return 0;
+        case TYPE_BYTE_FUNCTION:
+        case TYPE_BYTE_UNK_ARRAY:
+        case TYPE_BYTE_ARRAY: return 1;
         default: return 0;
     }
 }

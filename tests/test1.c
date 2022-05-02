@@ -718,7 +718,51 @@ int parse_initializer_designated(struct TestState* state)
                 REQUIRE_EQ(-4, w_init->next->next->sizing);
                 REQUIRE_EQ(28, w_init->next->next->offset);
             }
+            REQUIRE_EQ(32, w->sym->size);
         }
+    }
+
+    rc = 0;
+fail:
+    if (parser_has_errors()) parser_print_msgs(stderr);
+    if (elab)
+    {
+        elaborator_destroy(elab);
+        my_free(elab);
+    }
+    if (parser) parser_destroy(parser), my_free(parser);
+    if (pp) preproc_free(pp);
+    return rc;
+}
+
+int parse_unk_array(struct TestState* state)
+{
+    int rc = 1;
+    struct Parser* parser;
+    struct Preprocessor* pp;
+    struct Elaborator* elab = NULL;
+    // from https://en.cppreference.com/w/c/language/initialization
+    SUBTEST(test_parse(state,
+                       &parser,
+                       &pp,
+                       "char txt6[] = \"hello\";\n"
+                       "struct Point { int x, y; } points5[] = {[3] = 1,2,3};\n"));
+
+    elab = my_malloc(sizeof(Elaborator));
+    elaborator_init(elab, parser);
+    REQUIREZ(elaborate(elab));
+
+    struct Expr** const exprs = (struct Expr**)parser->expr_seqs.data;
+    REQUIRE_EQ(2, parser->top->extent);
+    REQUIRE_EXPR(StmtDecls, decls, exprs[parser->top->offset])
+    {
+        REQUIRE_EQ(1, decls->extent);
+        REQUIRE_EXPR(Decl, w, exprs[decls->offset]) { REQUIRE_EQ(6, w->sym->size); }
+    }
+    REQUIRE_EXPR(StmtDecls, decls, exprs[parser->top->offset + 1])
+    {
+        REQUIRE_EQ(1, decls->extent);
+        REQUIRE_EXPR(Decl, w, exprs[decls->offset]) { REQUIRE_EQ(5 * 8, w->sym->size); }
     }
 
     rc = 0;
@@ -749,6 +793,7 @@ int main()
     RUN_TEST(parse_initializer_array);
     RUN_TEST(parse_initializer2b);
     RUN_TEST(parse_initializer_designated);
+    RUN_TEST(parse_unk_array);
 
     const char* const clicolorforce = getenv("CLICOLOR_FORCE");
     const char* const clicolor = getenv("CLICOLOR");
