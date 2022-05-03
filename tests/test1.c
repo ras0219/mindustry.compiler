@@ -121,6 +121,37 @@ fail:
     preproc_free(pp);
     return 1;
 }
+typedef struct StandardTest
+{
+    struct Parser* parser;
+    struct Preprocessor* pp;
+    struct Elaborator* elab;
+} StandardTest;
+
+static int stdtest_run(struct TestState* state, struct StandardTest* test, const char* text)
+{
+    test->elab = NULL;
+    SUBTEST(test_parse(state, &test->parser, &test->pp, text));
+    test->elab = my_malloc(sizeof(Elaborator));
+    elaborator_init(test->elab, test->parser);
+    REQUIREZ(elaborate(test->elab));
+
+    return 0;
+fail:
+    return 1;
+}
+
+static void stdtest_destroy(struct StandardTest* test)
+{
+    if (parser_has_errors()) parser_print_msgs(stderr);
+    if (test->elab)
+    {
+        elaborator_destroy(test->elab);
+        my_free(test->elab);
+    }
+    if (test->parser) parser_destroy(test->parser), my_free(test->parser);
+    if (test->pp) preproc_free(test->pp);
+}
 
 int parse_main(struct TestState* state)
 {
@@ -738,20 +769,14 @@ fail:
 int parse_unk_array(struct TestState* state)
 {
     int rc = 1;
-    struct Parser* parser;
-    struct Preprocessor* pp;
-    struct Elaborator* elab = NULL;
+    struct StandardTest test;
+    SUBTEST(stdtest_run(state,
+                        &test,
+                        "char txt6[] = \"hello\";\n"
+                        "struct Point { int x, y; } points5[] = {[3] = 1,2,3};\n"));
+    Parser* const parser = test.parser;
+
     // from https://en.cppreference.com/w/c/language/initialization
-    SUBTEST(test_parse(state,
-                       &parser,
-                       &pp,
-                       "char txt6[] = \"hello\";\n"
-                       "struct Point { int x, y; } points5[] = {[3] = 1,2,3};\n"));
-
-    elab = my_malloc(sizeof(Elaborator));
-    elaborator_init(elab, parser);
-    REQUIREZ(elaborate(elab));
-
     struct Expr** const exprs = (struct Expr**)parser->expr_seqs.data;
     REQUIRE_EQ(2, parser->top->extent);
     REQUIRE_EXPR(StmtDecls, decls, exprs[parser->top->offset])
@@ -767,14 +792,25 @@ int parse_unk_array(struct TestState* state)
 
     rc = 0;
 fail:
-    if (parser_has_errors()) parser_print_msgs(stderr);
-    if (elab)
-    {
-        elaborator_destroy(elab);
-        my_free(elab);
-    }
-    if (parser) parser_destroy(parser), my_free(parser);
-    if (pp) preproc_free(pp);
+    stdtest_destroy(&test);
+    return rc;
+}
+
+int parse_anon_decls(struct TestState* state)
+{
+    int rc = 1;
+    StandardTest test;
+    SUBTEST(stdtest_run(state,
+                        &test,
+                        "struct __darwin_pthread_handler_rec {\n"
+                        "void (*__routine)(void*);\n"
+                        "};\n"
+                        "struct anon_pad {\n"
+                        "int x : 1, : 2, y : 3;\n"
+                        "};"));
+    rc = 0;
+fail:
+    stdtest_destroy(&test);
     return rc;
 }
 
@@ -794,6 +830,7 @@ int main()
     RUN_TEST(parse_initializer2b);
     RUN_TEST(parse_initializer_designated);
     RUN_TEST(parse_unk_array);
+    RUN_TEST(parse_anon_decls);
 
     const char* const clicolorforce = getenv("CLICOLOR_FORCE");
     const char* const clicolor = getenv("CLICOLOR");

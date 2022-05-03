@@ -864,7 +864,10 @@ static const struct Token* parse_declarator_fnargs(Parser* p, const struct Token
             struct Decl* arg_decl = parse_alloc_decl(p, arg_specs);
             PARSER_DO(parse_declarator(p, cur_tok, arg_decl));
             array_push_ptr(&args_array, push_stmt_decl(p, arg_specs, arg_decl));
-            arg_decl->sym->arg_index = ++fn->extent;
+            if (arg_decl->sym)
+            {
+                arg_decl->sym->arg_index = ++fn->extent;
+            }
 
             if (cur_tok->type == TOKEN_SYM1(','))
             {
@@ -1060,6 +1063,11 @@ static const struct Token* parse_declarator(Parser* p, const struct Token* cur_t
             decl->sym->name = name;
             scope_insert(&p->scope, decl->sym);
         }
+        decl->sym->last_decl = decl;
+    }
+    else
+    {
+        decl->sym = pool_alloc_zeroes(&p->sym_pool, sizeof(Symbol));
         decl->sym->last_decl = decl;
     }
 fail:
@@ -1287,10 +1295,6 @@ static const struct Token* parse_decls(Parser* p,
         scope_shrink(&p->scope, scope_sz);
         if (specs->is_typedef)
         {
-            if (!pdecl->sym->name)
-            {
-                PARSER_FAIL_TOK(cur_tok, "error: anonymous typedef not allowed\n");
-            }
             scope_insert(&p->type_scope, pdecl->sym);
         }
         else

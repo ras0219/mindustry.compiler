@@ -57,6 +57,7 @@
     Y(LEX_UUVA_START, "__builtin_va_start")                                                                            \
     Y(LEX_UUVA_END, "__builtin_va_end")                                                                                \
     Y(LEX_UUVA_ARG, "__builtin_va_arg")                                                                                \
+    Y(LEX_UUVA_COPY, "__builtin_va_copy")                                                                              \
     Y(LEX_UURESTRICT, "__restrict")                                                                                    \
     Y(LEX_RESTRICT, "restrict")                                                                                        \
     Y(LEX_UUFORCEINLINE, "__forceinline")                                                                              \
