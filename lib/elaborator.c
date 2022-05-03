@@ -2067,6 +2067,8 @@ static int elaborate_declspecs(struct Elaborator* elab, struct DeclSpecs* specs)
             }
             *ttdef = specs;
         }
+        specs->def = *ttdef;
+
         if (specs->is_enum)
         {
             specs->size = 4;
@@ -2158,7 +2160,6 @@ static int elaborate_declspecs(struct Elaborator* elab, struct DeclSpecs* specs)
             specs->size = struct_size;
         }
 
-        specs->def = *ttdef;
         if (specs->def)
         {
             specs->size = specs->def->size;

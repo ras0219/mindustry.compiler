@@ -65,9 +65,19 @@ int fe_preproc(struct FrontEnd* fe, const char* filename)
 
 int fe_lex_file_opened(struct FrontEnd* fe, const char* filename, FILE* f) { return preproc_file(fe->pp, f, filename); }
 
-int usage()
+int usage(const char* self)
 {
-    fprintf(stderr, "Usage: mindustry.compiler [-D <macro>] [] [-N env.txt] [-o <output>] [-I <path>] [-c] <file.c>\n");
+    fprintf(stderr,
+            "Usage: %s [options] <file.c>\n"
+            "Options:\n"
+            "  -c                                Compile only.\n"
+            "  -D <macro>, -D <macro>=<value>    Define <macro> with optional <value>.\n"
+            "  -E                                Preprocess only.\n"
+            "  -I <dir>                          Add directory to the include search path.\n"
+            "  -o <path>                         Specify output path.\n"
+            "  --debug-be                        Emit backend tracing information\n"
+            "",
+            self);
     return 1;
 }
 
@@ -111,12 +121,12 @@ static int parse_arguments(int argc, const char* const* argv, struct Arguments* 
                 if (i == argc)
                 {
                     fprintf(stderr, "error: expected filename after %s\n", argv[i - 1]);
-                    return usage();
+                    goto usage;
                 }
                 if (out->output)
                 {
                     fprintf(stderr, "error: output already specified\n");
-                    return usage();
+                    goto usage;
                 }
                 out->output = argv[i];
             }
@@ -126,7 +136,7 @@ static int parse_arguments(int argc, const char* const* argv, struct Arguments* 
                 if (i == argc)
                 {
                     fprintf(stderr, "error: expected path after %s\n", argv[i - 1]);
-                    return usage();
+                    goto usage;
                 }
                 if (out->inc.sz)
                 {
@@ -140,12 +150,12 @@ static int parse_arguments(int argc, const char* const* argv, struct Arguments* 
                 if (i == argc)
                 {
                     fprintf(stderr, "error: expected filename after %s\n", argv[i - 1]);
-                    return usage();
+                    goto usage;
                 }
                 if (out->env_file)
                 {
                     fprintf(stderr, "error: env file already specified\n");
-                    return usage();
+                    goto usage;
                 }
                 out->env_file = argv[i];
             }
@@ -155,7 +165,7 @@ static int parse_arguments(int argc, const char* const* argv, struct Arguments* 
                 if (i == argc)
                 {
                     fprintf(stderr, "error: expected macro name after %s\n", argv[i - 1]);
-                    return usage();
+                    goto usage;
                 }
                 array_appends(&out->macro_name, argv[i]);
                 array_push_byte(&out->macro_name, 0);
@@ -163,7 +173,7 @@ static int parse_arguments(int argc, const char* const* argv, struct Arguments* 
             else
             {
                 fprintf(stderr, "error: unrecognized flag %s\n", argv[i]);
-                return usage();
+                goto usage;
             }
         }
         else
@@ -171,7 +181,7 @@ static int parse_arguments(int argc, const char* const* argv, struct Arguments* 
             if (out->input)
             {
                 fprintf(stderr, "error: input already specified\n");
-                return usage();
+                goto usage;
             }
             out->input = argv[i];
         }
@@ -213,10 +223,13 @@ static int parse_arguments(int argc, const char* const* argv, struct Arguments* 
     if (!out->input)
     {
         fprintf(stderr, "error: no input file\n");
-        return usage();
+        goto usage;
     }
 
     return 0;
+
+usage:
+    return usage(argv[0]);
 }
 
 int main(int argc, const char* const* argv)

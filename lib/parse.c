@@ -417,6 +417,7 @@ top:
         }
         case LEX_UUVA_START:
         case LEX_UUVA_ARG:
+        case LEX_UUVA_COPY:
         case LEX_UUVA_END:
         {
             const struct Token* tok = cur_tok++;
@@ -441,6 +442,13 @@ top:
             {
                 PARSER_DO(token_consume_sym(p, cur_tok, ',', " in builtin operator"));
                 PARSER_DO(parse_type(p, cur_tok, &specs, &decl));
+            }
+            else if (tok->type == LEX_UUVA_COPY)
+            {
+                PARSER_DO(token_consume_sym(p, cur_tok, ',', " in builtin operator"));
+                if (cur_tok->type != LEX_IDENT)
+                    PARSER_FAIL("error: expected va_list as first parameter to %s\n", token_str(p, tok));
+                rhs = &ref_from_tok(p, cur_tok++)->expr_base;
             }
             *ppe = &parse_alloc_builtin(p, tok, &lhs->expr_base, rhs, specs, decl)->expr_base;
             return token_consume_sym(p, cur_tok, ')', " in builtin operator");
@@ -1084,7 +1092,7 @@ static const struct Token* parse_type(Parser* p,
     PARSER_DO(parse_declspecs(p, cur_tok, pspecs));
     *pdecl = parse_alloc_decl(p, *pspecs);
     PARSER_DO(parse_declarator(p, cur_tok, *pdecl));
-    if ((*pdecl)->sym)
+    if ((*pdecl)->sym->name)
     {
         PARSER_FAIL_TOK((*pdecl)->tok, "error: type expression should not have a declared identifier\n");
     }
@@ -1239,13 +1247,14 @@ static const struct Token* parse_decls(Parser* p,
         array_push_ptr(pdecls, pdecl);
         if (cur_tok->type == TOKEN_SYM1('{'))
         {
-            if (!pdecl->sym || !pdecl->sym->name)
+            if (!pdecl->sym->name)
             {
                 PARSER_FAIL_TOK(cur_tok, "error: anonymous function declaration not allowed\n");
             }
             if (pdecl->sym->def)
             {
-                PARSER_FAIL_TOK(pdecl->tok, "error: multiple definition of symbol\n");
+                parser_tok_error(pdecl->sym->def->tok, "info: previous definition\n");
+                PARSER_FAIL_TOK(pdecl->tok, "error: multiple definition of symbol '%s'\n", pdecl->sym->name);
             }
             p->parent = &pdecl->ast;
             struct StmtBlock* init;
@@ -1259,9 +1268,13 @@ static const struct Token* parse_decls(Parser* p,
             return cur_tok;
         }
 
-        if (!specs->is_extern)
+        if (!specs->is_extern && pdecl->type->kind != AST_DECLFN)
         {
-            if (pdecl->sym->def) PARSER_FAIL_TOK(pdecl->tok, "error: multiple definition of symbol\n");
+            if (pdecl->sym->def)
+            {
+                parser_tok_error(pdecl->sym->def->tok, "info: previous definition\n");
+                PARSER_FAIL_TOK(pdecl->tok, "error: multiple definition of symbol\n");
+            }
             pdecl->sym->def = pdecl;
         }
 
@@ -1604,6 +1617,7 @@ static const struct Token* parse_stmt(Parser* p, const struct Token* cur_tok, st
         case LEX_UUVA_START:
         case LEX_UUVA_ARG:
         case LEX_UUVA_END:
+        case LEX_UUVA_COPY:
         case TOKEN_SYM1('('):
 #define Y_CASE(V, ...) case V:
             X_PREFIX_UNARY_TOKS(Y_CASE)

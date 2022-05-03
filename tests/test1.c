@@ -814,6 +814,42 @@ fail:
     return rc;
 }
 
+int parse_decls_and_defs(struct TestState* state)
+{
+    int rc = 1;
+    StandardTest test;
+    SUBTEST(stdtest_run(state,
+                        &test,
+                        "extern int i;\n"
+                        "int i;\n"
+                        "void foo();\n"
+                        "void foo() {}\n"));
+    rc = 0;
+fail:
+    stdtest_destroy(&test);
+    return rc;
+}
+
+int parse_uuva_list(struct TestState* state)
+{
+    int rc = 1;
+    StandardTest test;
+    SUBTEST(stdtest_run(state,
+                        &test,
+                        "void array_appendf(struct Array* arr, const char* fmt, ...)\n"
+                        "{\n"
+                        "__builtin_va_list argp;\n"
+                        "__builtin_va_start(argp, fmt);\n"
+                        "__builtin_va_list args2;\n"
+                        "__builtin_va_copy(args2, argp);\n"
+                        "__builtin_va_end(argp);\n"
+                        "}\n"));
+    rc = 0;
+fail:
+    stdtest_destroy(&test);
+    return rc;
+}
+
 int main()
 {
     struct TestState _state = {};
@@ -831,6 +867,8 @@ int main()
     RUN_TEST(parse_initializer_designated);
     RUN_TEST(parse_unk_array);
     RUN_TEST(parse_anon_decls);
+    RUN_TEST(parse_decls_and_defs);
+    RUN_TEST(parse_uuva_list);
 
     const char* const clicolorforce = getenv("CLICOLOR_FORCE");
     const char* const clicolor = getenv("CLICOLOR");
