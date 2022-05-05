@@ -1259,10 +1259,20 @@ static int insert_definition(Parser* p, Decl* decl)
 
     if (decl->sym->def)
     {
-        parser_tok_error(decl->sym->def->tok, "info: previous definition\n");
-        return parser_tok_error(decl->tok, "error: multiple definition of symbol\n");
+        if (decl->specs->is_typedef)
+        {
+            // Todo: ensure matching typedefs
+        }
+        else
+        {
+            parser_tok_error(decl->sym->def->tok, "info: previous definition\n");
+            return parser_tok_error(decl->tok, "error: multiple definition of symbol\n");
+        }
     }
-    decl->sym->def = decl;
+    else
+    {
+        decl->sym->def = decl;
+    }
     return 0;
 }
 

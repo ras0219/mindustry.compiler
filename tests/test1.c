@@ -200,9 +200,9 @@ int parse_typedef(struct TestState* state)
     int rc = 1;
     struct Parser* parser;
     struct Preprocessor* pp;
-    SUBTEST(test_parse(state, &parser, &pp, "typedef unsigned long size_t;"));
+    SUBTEST(test_parse(state, &parser, &pp, "typedef unsigned long size_t;\ntypedef unsigned long size_t;"));
 
-    REQUIRE_EQ(1, parser->top->extent);
+    REQUIRE_EQ(2, parser->top->extent);
     struct Expr** const exprs = parser->expr_seqs.data;
     struct StmtDecls* decls = (struct StmtDecls*)exprs[parser->top->offset];
     REQUIRE_EQ(STMT_DECLS, decls->kind);
