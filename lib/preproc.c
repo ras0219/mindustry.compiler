@@ -170,7 +170,7 @@ static size_t sstk_push(struct StringStk* ss, const char* str, size_t len)
 {
     size_t const ret = array_size(&ss->lengths, sizeof(size_t));
     array_push(&ss->data, str, len);
-    array_push_size_t(&ss->lengths, ss->data.sz);
+    arrsz_push(&ss->lengths, ss->data.sz);
     return ret;
 }
 __forceinline static size_t sstk_size(struct StringStk* ss) { return array_size(&ss->lengths, sizeof(size_t)); }
@@ -1211,14 +1211,14 @@ static int pp_handle_tok(struct Preprocessor* pp)
             if (!pp->exp.paren_count)
             {
                 // complete macro fn call
-                array_push_size_t(&pp->macro_arg_offsets, array_size(&pp->toks, sizeof(struct Token)));
+                arrsz_push(&pp->macro_arg_offsets, array_size(&pp->toks, sizeof(struct Token)));
                 UNWRAP(pp_complete_fn_macro(pp));
             }
         }
         else if (tok->type == TOKEN_SYM1(',') && pp->exp.paren_count == 1)
         {
             // next macro fn arg
-            array_push_size_t(&pp->macro_arg_offsets, array_size(&pp->toks, sizeof(struct Token)));
+            arrsz_push(&pp->macro_arg_offsets, array_size(&pp->toks, sizeof(struct Token)));
         }
         return 0;
     }
@@ -1228,7 +1228,7 @@ static int pp_handle_tok(struct Preprocessor* pp)
         if (tok->type == TOKEN_SYM1('('))
         {
             pp->exp.macro_arg_offsets_start = array_size(&pp->macro_arg_offsets, sizeof(size_t));
-            array_push_size_t(&pp->macro_arg_offsets, array_size(&pp->toks, sizeof(struct Token)));
+            arrsz_push(&pp->macro_arg_offsets, array_size(&pp->toks, sizeof(struct Token)));
             pp->exp.paren_count = 1;
             return 0;
         }
@@ -1505,9 +1505,9 @@ static int preproc_file_impl(struct Preprocessor* pp, FILE* f, const char* filen
         struct SubLexer sublex;
         sublex.self = pp;
         init_lexer(&sublex.lexer, file->filename, &pp_sublex_on_token);
-        array_push_ptr(&pp->files_open, file->filename);
+        arrptr_push(&pp->files_open, file->filename);
         rc = lex_file(f, &sublex.lexer);
-        array_pop_ptr(&pp->files_open);
+        arrptr_pop(&pp->files_open);
     }
     UNWRAP(rc);
     if (pp->toks.sz == 0 ||
@@ -1548,10 +1548,10 @@ static int preproc_text_impl(struct Preprocessor* pp, const char* text, const ch
         struct SubLexer sublex;
         sublex.self = pp;
         init_lexer(&sublex.lexer, file->filename, &pp_sublex_on_token);
-        array_push_ptr(&pp->files_open, file->filename);
+        arrptr_push(&pp->files_open, file->filename);
 
         rc = lex_text(&sublex.lexer, text);
-        array_pop_ptr(&pp->files_open);
+        arrptr_pop(&pp->files_open);
     }
     UNWRAP(rc);
     if (pp->toks.sz == 0 ||

@@ -46,7 +46,7 @@ static __forceinline size_t tt_insert_null(struct TypeTable* tt)
 {
     const size_t n = array_size(&tt->typenames.arr, sizeof(const char*));
     autoheap_alloc(&tt->typenames, 0);
-    array_push_ptr(&tt->decls, NULL);
+    arrptr_push(&tt->decls, NULL);
     return n;
 }
 
@@ -58,7 +58,7 @@ static __forceinline size_t tt_find_insert_null(struct TypeTable* tt, const char
     {
         size_t len = strlen(str);
         memcpy(autoheap_alloc(&tt->typenames, len + 1), str, len + 1);
-        array_push_ptr(&tt->decls, NULL);
+        arrptr_push(&tt->decls, NULL);
     }
     return offset;
 }
@@ -730,7 +730,7 @@ top:
             if (i == fn_args_ends_sz)
             {
                 array_push(&tt->fn_args, args.data, args.sz);
-                array_push_size_t(&tt->fn_args_ends, array_size(&tt->fn_args, sizeof(struct TypeStr)));
+                arrsz_push(&tt->fn_args_ends, array_size(&tt->fn_args, sizeof(struct TypeStr)));
             }
             typestr_append_offset(s, i, TYPE_BYTE_FUNCTION);
             return;
@@ -1232,8 +1232,14 @@ static void elaborate_builtin(struct Elaborator* elab,
             elaborate_declspecs(elab, e->specs);
             elaborate_decl(elab, e->type);
             typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, rty, e->type);
+            *rty = s_type_void;
             break;
         case LEX_UUVA_END: *rty = s_type_void; break;
+        case LEX_UUVA_COPY:
+            elaborate_expr(elab, ctx, e->expr2, rty);
+            elaborate_expr(elab, ctx, e->expr1, rty);
+            *rty = s_type_void;
+            break;
         default:
             parser_tok_error(e->tok, "error: unimplemented builtin\n");
             *rty = s_type_unknown;
@@ -1941,6 +1947,11 @@ static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
     decl->elaborated = 1;
     elaborate_decltype(elab, decl->type);
     Symbol* const sym = decl->sym;
+    if (!sym)
+    {
+        rc = parser_has_errors();
+        goto fail;
+    }
     if (!decl->prev_decl)
     {
         typestr_from_decltype(elab->p->expr_seqs.data, elab->types, &sym->type, decl->type);

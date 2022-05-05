@@ -2,36 +2,31 @@
 
 #include <string.h>
 
+#include "stdlib.h"
 #include "symbol.h"
 
 void scope_init(struct Scope* s)
 {
     array_init(&s->binds);
     array_init(&s->strings);
+    array_init(&s->subscopes);
 }
 void scope_destroy(struct Scope* s)
 {
     array_destroy(&s->binds);
     array_destroy(&s->strings);
+    array_destroy(&s->subscopes);
 }
-size_t scope_size(struct Scope* s) { return s->binds.sz / sizeof(struct Binding); }
-struct Binding* scope_data(struct Scope* s) { return s->binds.data; }
-void scope_shrink(struct Scope* s, size_t sz)
+static size_t scope_size(struct Scope* s) { return array_size(&s->binds, sizeof(Binding)); }
+static struct Binding* scope_data(struct Scope* s) { return s->binds.data; }
+void scope_push_subscope(Scope* s) { arrsz_push(&s->subscopes, scope_size(s)); }
+void scope_pop_subscope(Scope* s)
 {
-    if (sz < scope_size(s))
-    {
-        s->strings.sz = scope_data(s)[sz].ident_offset;
-        s->binds.sz = sz * sizeof(struct Binding);
-    }
+    if (!s->subscopes.sz) abort();
+    size_t i = arrsz_pop(&s->subscopes);
+    s->strings.sz = scope_data(s)[i].ident_offset;
+    array_shrink(&s->binds, i, sizeof(Binding));
 }
-#if 0
-static void scope_pop(struct Scope* s)
-{
-    const size_t sz = scope_size(s) - 1;
-    s->strings.sz = scope_data(s)[sz].ident_offset;
-    s->binds.sz = sz * sizeof(struct Binding);
-}
-#endif
 size_t scope_insert(struct Scope* s, Symbol* sym)
 {
     const size_t sz = scope_size(s);
@@ -46,6 +41,22 @@ struct Binding* scope_find(struct Scope* s, const char* id)
     struct Binding* const begin = scope_data(s);
     const size_t sz = scope_size(s);
     for (size_t i = 0; i < sz; ++i)
+    {
+        struct Binding* const e = begin + sz - i - 1;
+        const char* const e_id = (char*)s->strings.data + e->ident_offset;
+        if (strcmp(e_id, id) == 0)
+        {
+            return e;
+        }
+    }
+    return NULL;
+}
+struct Binding* scope_find_subscope(struct Scope* s, const char* id)
+{
+    if (!s->subscopes.sz) return scope_find(s, id);
+    struct Binding* const begin = scope_data(s);
+    const size_t sz = scope_size(s);
+    for (size_t i = arrsz_back(&s->subscopes); i < sz; ++i)
     {
         struct Binding* const e = begin + sz - i - 1;
         const char* const e_id = (char*)s->strings.data + e->ident_offset;

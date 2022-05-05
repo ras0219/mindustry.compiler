@@ -243,12 +243,12 @@ int parse_struct(struct TestState* state)
                        &parser,
                        &pp,
                        "typedef unsigned long size_t;\n"
-                       "struct Array"
-                       "{"
-                       "  size_t sz;"
-                       "  size_t cap;"
-                       "  void* data;"
-                       "};"));
+                       "struct Array\n"
+                       "{\n"
+                       "  size_t sz;\n"
+                       "  size_t cap;\n"
+                       "  void* data;\n"
+                       "};\n"));
 
     struct Expr** const exprs = parser->expr_seqs.data;
     REQUIRE_EQ(2, parser->top->extent);
@@ -850,6 +850,23 @@ fail:
     return rc;
 }
 
+int parse_shadow(struct TestState* state)
+{
+    int rc = 1;
+    StandardTest test;
+    SUBTEST(stdtest_run(state,
+                        &test,
+                        "int i;\n"
+                        "int main() {\n"
+                        "int i;\n"
+                        "{ int i; }\n"
+                        "}\n"));
+    rc = 0;
+fail:
+    stdtest_destroy(&test);
+    return rc;
+}
+
 int main()
 {
     struct TestState _state = {};
@@ -869,6 +886,7 @@ int main()
     RUN_TEST(parse_anon_decls);
     RUN_TEST(parse_decls_and_defs);
     RUN_TEST(parse_uuva_list);
+    RUN_TEST(parse_shadow);
 
     const char* const clicolorforce = getenv("CLICOLOR_FORCE");
     const char* const clicolor = getenv("CLICOLOR");

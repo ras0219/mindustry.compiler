@@ -55,7 +55,7 @@ void sm_insert(struct StringMap* map, const char* ntbs_key, size_t value)
     size_t len = strlen(ntbs_key);
     char* new_key = autoheap_alloc(&map->keys, len + 1);
     memcpy(new_key, ntbs_key, len + 1);
-    array_push_size_t(&map->values, value);
+    arrsz_push(&map->values, value);
 }
 void sm_remove(struct StringMap* map, const char* ntbs_key)
 {

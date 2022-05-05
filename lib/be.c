@@ -299,7 +299,7 @@ static int be_compile_ExprLit(struct BackEnd* be, struct ExprLit* e, struct TACA
         if (i == n)
         {
             // not found, append and emit new constant
-            array_push_ptr(&be->aszConstants, (void*)s);
+            arrptr_push(&be->aszConstants, (void*)s);
             cg_string_constant(be->cg, i, s);
         }
 
@@ -331,7 +331,7 @@ static int be_compile_lvalue_ExprLit(struct BackEnd* be, struct ExprLit* e, stru
         if (i == n)
         {
             // not found, append and emit new constant
-            array_push_ptr(&be->aszConstants, (void*)s);
+            arrptr_push(&be->aszConstants, (void*)s);
             cg_string_constant(be->cg, i, s);
         }
 

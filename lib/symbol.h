@@ -58,7 +58,7 @@ struct DeclPtr
     int is_restrict : 1;
 };
 
-struct DeclFn
+typedef struct DeclFn
 {
     INHERIT_AST;
 
@@ -66,7 +66,7 @@ struct DeclFn
     unsigned is_varargs : 1;
     size_t offset;
     size_t extent;
-};
+} DeclFn;
 
 typedef struct DeclArr
 {

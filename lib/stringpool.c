@@ -22,7 +22,7 @@ void sp_init(struct StringPool* sp)
 {
     for (size_t i = 0; i < 128; ++i)
     {
-        array_push_size_t(&sp->ends, 2 + i * 2);
+        arrsz_push(&sp->ends, 2 + i * 2);
         array_push_byte(&sp->data, i);
         array_push_byte(&sp->data, 0);
     }
@@ -50,6 +50,6 @@ size_t sp_insert(struct StringPool* sp, const char* s, size_t len)
 
     void* idx = array_push(&sp->data, s, len);
     size_t r = idx - sp->data.data;
-    array_push_size_t(&sp->ends, sp->data.sz);
+    arrsz_push(&sp->ends, sp->data.sz);
     return r;
 }

@@ -52,6 +52,18 @@
         }                                                                                                              \
     } while (0)
 
+#define PARSER_CHECK_NOT(X)                                                                                            \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        if (X)                                                                                                         \
+        {                                                                                                              \
+            cur_tok = NULL;                                                                                            \
+            goto fail;                                                                                                 \
+        }                                                                                                              \
+    } while (0)
+
+#define PARSER_CHECK(X) PARSER_CHECK_NOT(!(X))
+
 const char* token_str(Parser* p, const struct Token* tk) { return p->tk_strdata + tk->sp_offset; }
 static int token_is_sym(Parser* p, const struct Token* tk, char sym) { return tk->type == TOKEN_SYM1(sym); }
 static const struct Token* token_consume_sym(Parser* p, const struct Token* tk, char sym, const char* in)
@@ -364,10 +376,11 @@ static struct ExprRef* ref_from_tok(struct Parser* p, const struct Token* tok)
 {
     const char* lhs_str = token_str(p, tok);
     struct Binding* const lhs_bind = scope_find(&p->scope, lhs_str);
-    if (!lhs_bind || !lhs_bind->sym)
+    if (!lhs_bind)
     {
         return parser_ferror(&tok->rc, "error: '%s' undeclared\n", lhs_str), NULL;
     }
+    if (!lhs_bind->sym) abort();
     return parse_alloc_expr_ref(p, tok, lhs_bind->sym);
 }
 
@@ -390,7 +403,7 @@ top:
         case LEX_IDENT:
         {
             struct ExprRef* lhs_expr = ref_from_tok(p, cur_tok++);
-            if (!lhs_expr) PARSER_DO(NULL);
+            PARSER_CHECK(lhs_expr);
             return parse_expr_post_unary(p, cur_tok, (struct Expr*)lhs_expr, ppe);
         }
         case LEX_NUMBER:
@@ -428,14 +441,14 @@ top:
             struct Expr* rhs = NULL;
             struct DeclSpecs* specs = NULL;
             struct Decl* decl = NULL;
-            if (!lhs) PARSER_DO(NULL);
+            PARSER_CHECK(lhs);
             if (tok->type == LEX_UUVA_START)
             {
                 PARSER_DO(token_consume_sym(p, cur_tok, ',', " in builtin operator"));
                 if (cur_tok->type != LEX_IDENT)
                     PARSER_FAIL("error: expected function argument as second parameter to %s\n", token_str(p, tok));
                 struct ExprRef* rhs_sym = ref_from_tok(p, cur_tok++);
-                if (!rhs_sym) PARSER_DO(NULL);
+                PARSER_CHECK(rhs_sym);
                 rhs = &rhs_sym->expr_base;
             }
             else if (tok->type == LEX_UUVA_ARG)
@@ -840,10 +853,11 @@ static struct StmtDecls* push_stmt_decl(struct Parser* p, struct DeclSpecs* spec
     return pool_push(&p->ast_pools[STMT_DECLS], &ret, sizeof(ret));
 }
 
-static const struct Token* parse_declarator_fnargs(Parser* p, const struct Token* cur_tok, struct DeclFn** out_declfn)
+/// \param fn uninitialized out param
+static const struct Token* parse_declarator_fnargs(Parser* p, const struct Token* cur_tok, struct DeclFn* fn)
 {
     struct Array args_array = {};
-    struct DeclFn* fn = *out_declfn = pool_alloc_zeroes(&p->ast_pools[AST_DECLFN], sizeof(struct DeclFn));
+    memset(fn, 0, sizeof(DeclFn));
     fn->kind = AST_DECLFN;
     fn->tok = cur_tok;
     ++cur_tok;
@@ -871,11 +885,7 @@ static const struct Token* parse_declarator_fnargs(Parser* p, const struct Token
             PARSER_DO(parse_declspecs(p, cur_tok, &arg_specs));
             struct Decl* arg_decl = parse_alloc_decl(p, arg_specs);
             PARSER_DO(parse_declarator(p, cur_tok, arg_decl));
-            array_push_ptr(&args_array, push_stmt_decl(p, arg_specs, arg_decl));
-            if (arg_decl->sym)
-            {
-                arg_decl->sym->arg_index = ++fn->extent;
-            }
+            arrptr_push(&args_array, push_stmt_decl(p, arg_specs, arg_decl));
 
             if (cur_tok->type == TOKEN_SYM1(','))
             {
@@ -890,6 +900,7 @@ static const struct Token* parse_declarator_fnargs(Parser* p, const struct Token
             PARSER_FAIL("error: expected ',' and further parameter declarations or ')'\n");
         }
         fn->offset = array_size(&p->expr_seqs, sizeof(struct Expr*));
+        fn->extent = array_size(&args_array, sizeof(StmtDecls*));
         parse_push_expr_seq_arr(p, &args_array);
     }
 
@@ -918,6 +929,7 @@ static const struct Token* parse_declarator_arr(Parser* p, const struct Token* c
 fail:
     return cur_tok;
 }
+
 static const struct Token* parse_declarator1(Parser* p,
                                              const struct Token* cur_tok,
                                              const struct Token** out_id,
@@ -990,8 +1002,8 @@ static const struct Token* parse_declarator1(Parser* p,
     {
         if (cur_tok->type == TOKEN_SYM1('('))
         {
-            struct DeclFn* declfn = NULL;
-            PARSER_DO(parse_declarator_fnargs(p, cur_tok, &declfn));
+            struct DeclFn* declfn = pool_alloc(&p->ast_pools[AST_DECLFN], sizeof(struct DeclFn));
+            PARSER_DO(parse_declarator_fnargs(p, cur_tok, declfn));
             *out_type = &declfn->ast;
             out_type = &declfn->type;
             continue;
@@ -1051,33 +1063,6 @@ static const struct Token* parse_declarator(Parser* p, const struct Token* cur_t
         }
         break;
     }
-    if (decl->tok)
-    {
-        const char* name = token_str(p, decl->tok);
-        struct Binding* prev_sym = scope_find(&p->scope, name);
-        if (prev_sym)
-        {
-            decl->sym = prev_sym->sym;
-            decl->prev_decl = decl->sym->last_decl;
-            if (0)
-            {
-                // TODO: ensure symbols match
-                PARSER_FAIL_TOK(decl->tok, "error: declaration doesn't match previous\n");
-            }
-        }
-        else
-        {
-            decl->sym = pool_alloc_zeroes(&p->sym_pool, sizeof(Symbol));
-            decl->sym->name = name;
-            scope_insert(&p->scope, decl->sym);
-        }
-        decl->sym->last_decl = decl;
-    }
-    else
-    {
-        decl->sym = pool_alloc_zeroes(&p->sym_pool, sizeof(Symbol));
-        decl->sym->last_decl = decl;
-    }
 fail:
     p->parent = prev_parent;
     return cur_tok;
@@ -1088,17 +1073,17 @@ static const struct Token* parse_type(Parser* p,
                                       struct DeclSpecs** pspecs,
                                       struct Decl** pdecl)
 {
-    const size_t scope_sz = scope_size(&p->scope);
+    scope_push_subscope(&p->scope);
     PARSER_DO(parse_declspecs(p, cur_tok, pspecs));
     *pdecl = parse_alloc_decl(p, *pspecs);
     PARSER_DO(parse_declarator(p, cur_tok, *pdecl));
-    if ((*pdecl)->sym->name)
+    if ((*pdecl)->tok)
     {
         PARSER_FAIL_TOK((*pdecl)->tok, "error: type expression should not have a declared identifier\n");
     }
 
 fail:
-    scope_shrink(&p->scope, scope_sz);
+    scope_pop_subscope(&p->scope);
     return cur_tok;
 }
 
@@ -1147,7 +1132,7 @@ static const struct Token* parse_enum_body(struct Parser* p, const struct Token*
         enumerator->sym = pool_alloc_zeroes(&p->sym_pool, sizeof(Symbol));
         enumerator->sym->name = token_str(p, decl.tok);
         scope_insert(&p->scope, enumerator->sym);
-        array_push_ptr(&decls, enumerator);
+        arrptr_push(&decls, enumerator);
         if (cur_tok->type == TOKEN_SYM1(','))
         {
             ++cur_tok;
@@ -1233,6 +1218,81 @@ fail:
     return cur_tok;
 }
 
+/// \param in_subscope search and insert only into the topmost scope
+/// \returns nonzero on failures
+static int insert_declaration(Parser* p, Decl* decl, int in_subscope)
+{
+    if (decl->tok)
+    {
+        const char* name = token_str(p, decl->tok);
+        struct Binding* prev_sym = in_subscope ? scope_find_subscope(&p->scope, name) : scope_find(&p->scope, name);
+        if (prev_sym)
+        {
+            decl->sym = prev_sym->sym;
+            decl->prev_decl = decl->sym->last_decl;
+            if (0)
+            {
+                // TODO: ensure symbols match
+                return parser_tok_error(decl->tok, "error: declaration doesn't match previous\n");
+            }
+        }
+        else
+        {
+            decl->sym = pool_alloc_zeroes(&p->sym_pool, sizeof(Symbol));
+            decl->sym->name = name;
+            scope_insert(&p->scope, decl->sym);
+        }
+        decl->sym->last_decl = decl;
+    }
+    else
+    {
+        decl->sym = pool_alloc_zeroes(&p->sym_pool, sizeof(Symbol));
+        decl->sym->last_decl = decl;
+    }
+    return 0;
+}
+
+/// \returns nonzero on failures
+static int insert_definition(Parser* p, Decl* decl)
+{
+    if (insert_declaration(p, decl, 1)) return 1;
+
+    if (decl->sym->def)
+    {
+        parser_tok_error(decl->sym->def->tok, "info: previous definition\n");
+        return parser_tok_error(decl->tok, "error: multiple definition of symbol\n");
+    }
+    decl->sym->def = decl;
+    return 0;
+}
+
+/// \returns nonzero on failures
+static int insert_typedef(Parser* p, Decl* decl)
+{
+    if (!decl->tok) abort();
+
+    const char* name = token_str(p, decl->tok);
+    struct Binding* prev_sym = scope_find(&p->type_scope, name);
+    if (prev_sym)
+    {
+        decl->sym = prev_sym->sym;
+        decl->prev_decl = decl->sym->last_decl;
+        if (0)
+        {
+            // TODO: ensure symbols match
+            return parser_tok_error(decl->tok, "error: declaration doesn't match previous\n");
+        }
+    }
+    else
+    {
+        decl->sym = pool_alloc_zeroes(&p->sym_pool, sizeof(Symbol));
+        decl->sym->name = name;
+        scope_insert(&p->type_scope, decl->sym);
+    }
+    decl->sym->last_decl = decl;
+    return 0;
+}
+
 static const struct Token* parse_decls(Parser* p,
                                        const struct Token* cur_tok,
                                        struct DeclSpecs* specs,
@@ -1240,21 +1300,23 @@ static const struct Token* parse_decls(Parser* p,
 {
     while (1)
     {
-        const size_t scope_sz = scope_size(&p->scope);
         struct Decl* pdecl = parse_alloc_decl(p, specs);
         const struct Token* const declarator_tok = cur_tok;
         PARSER_DO(parse_declarator(p, cur_tok, pdecl));
-        array_push_ptr(pdecls, pdecl);
+        arrptr_push(pdecls, pdecl);
         if (cur_tok->type == TOKEN_SYM1('{'))
         {
-            if (!pdecl->sym->name)
+            if (!pdecl->tok) PARSER_FAIL_TOK(cur_tok, "error: anonymous function declaration not allowed\n");
+            PARSER_CHECK_NOT(insert_definition(p, pdecl));
+            scope_push_subscope(&p->scope);
+            if (pdecl->type->kind != AST_DECLFN)
+                PARSER_FAIL_TOK(cur_tok, "error: only function types can be defined with a code block\n");
+            DeclFn* fn = (DeclFn*)pdecl->type;
+            void** decls = p->expr_seqs.data;
+            for (size_t i = 0; i < fn->extent; ++i)
             {
-                PARSER_FAIL_TOK(cur_tok, "error: anonymous function declaration not allowed\n");
-            }
-            if (pdecl->sym->def)
-            {
-                parser_tok_error(pdecl->sym->def->tok, "info: previous definition\n");
-                PARSER_FAIL_TOK(pdecl->tok, "error: multiple definition of symbol '%s'\n", pdecl->sym->name);
+                StmtDecls* argdecl = decls[fn->offset + i];
+                PARSER_CHECK_NOT(insert_definition(p, decls[argdecl->offset]));
             }
             p->parent = &pdecl->ast;
             struct StmtBlock* init;
@@ -1263,19 +1325,22 @@ static const struct Token* parse_decls(Parser* p,
             PARSER_DO(token_consume_sym(p, cur_tok, '}', " in function definition"));
             p->parent = specs->parent;
             // Remove function arguments from the scope
-            scope_shrink(&p->scope, scope_sz);
-            scope_insert(&p->scope, pdecl->sym);
-            return cur_tok;
+            scope_pop_subscope(&p->scope);
+            break;
+        }
+
+        if (specs->is_typedef)
+        {
+            PARSER_CHECK_NOT(insert_typedef(p, pdecl));
         }
 
         if (!specs->is_extern && pdecl->type->kind != AST_DECLFN)
         {
-            if (pdecl->sym->def)
-            {
-                parser_tok_error(pdecl->sym->def->tok, "info: previous definition\n");
-                PARSER_FAIL_TOK(pdecl->tok, "error: multiple definition of symbol\n");
-            }
-            pdecl->sym->def = pdecl;
+            PARSER_CHECK_NOT(insert_definition(p, pdecl));
+        }
+        else
+        {
+            PARSER_CHECK_NOT(insert_declaration(p, pdecl, 0));
         }
 
         if (cur_tok->type == TOKEN_SYM1(':'))
@@ -1304,31 +1369,24 @@ static const struct Token* parse_decls(Parser* p,
                 pdecl->init = &init->ast;
             }
         }
-        // Pop scope changes
-        scope_shrink(&p->scope, scope_sz);
-        if (specs->is_typedef)
-        {
-            scope_insert(&p->type_scope, pdecl->sym);
-        }
-        else
-        {
-            if (pdecl->sym->name) scope_insert(&p->scope, pdecl->sym);
-        }
 
         if (cur_tok->type == TOKEN_SYM1(','))
         {
             ++cur_tok;
-            continue;
         }
         else if (cur_tok->type == TOKEN_SYM1(';'))
         {
-            return cur_tok + 1;
+            ++cur_tok;
+            break;
         }
-        parser_tok_error(
-            specs->tok, "error: unterminated declaration of %zu item(s)\n", array_size(pdecls, sizeof(struct Decl*)));
-        parser_tok_error(declarator_tok, "    after this declarator\n");
-        parser_tok_error(cur_tok, "    expected ',' or ';' here\n");
-        return NULL;
+        else
+        {
+            parser_tok_error(specs->tok,
+                             "error: unterminated declaration of %zu item(s)\n",
+                             array_size(pdecls, sizeof(struct Decl*)));
+            parser_tok_error(declarator_tok, "    after this declarator\n");
+            PARSER_FAIL("    expected ',' or ';' here\n");
+        }
     }
 fail:
     return cur_tok;
@@ -1354,9 +1412,9 @@ static const struct Token* parse_stmt_decl(Parser* p, const struct Token* cur_to
         {
             if (specs->is_struct || specs->is_union)
             {
-                const size_t scope_sz = scope_size(&p->scope);
+                scope_push_subscope(&p->scope);
                 PARSER_DO(parse_stmt_block(p, cur_tok + 1, &specs->suinit));
-                scope_shrink(&p->scope, scope_sz);
+                scope_pop_subscope(&p->scope);
             }
             else if (specs->is_enum)
             {
@@ -1446,15 +1504,16 @@ static const struct Token* parse_stmt(Parser* p, const struct Token* cur_tok, st
             struct StmtIf ret = {
                 .kind = STMT_IF,
             };
-            const size_t scope_sz = scope_size(&p->scope);
+            scope_push_subscope(&p->scope);
             PARSER_DO(parse_conditional(p, cur_tok + 1, &ret.cond));
             PARSER_DO(parse_stmt(p, cur_tok, &ret.if_body));
-            scope_shrink(&p->scope, scope_sz);
+            scope_pop_subscope(&p->scope);
 
             if (cur_tok->type == LEX_ELSE)
             {
+                scope_push_subscope(&p->scope);
                 PARSER_DO(parse_stmt(p, cur_tok + 1, &ret.else_body));
-                scope_shrink(&p->scope, scope_sz);
+                scope_pop_subscope(&p->scope);
             }
             else
             {
@@ -1493,9 +1552,9 @@ static const struct Token* parse_stmt(Parser* p, const struct Token* cur_tok, st
             };
             PARSER_DO(parse_conditional(p, cur_tok, &ret.expr));
             PARSER_DO(token_consume_sym(p, cur_tok, '{', "in switch statement"));
-            const size_t scope_sz = scope_size(&p->scope);
+            scope_push_subscope(&p->scope);
             PARSER_DO(parse_stmts(p, cur_tok, &ret.offset, &ret.extent));
-            scope_shrink(&p->scope, scope_sz);
+            scope_pop_subscope(&p->scope);
             PARSER_DO(token_consume_sym(p, cur_tok, '}', "in switch statement"));
             *p_expr = pool_push(&p->ast_pools[STMT_SWITCH], &ret, sizeof(ret));
             return cur_tok;
@@ -1523,21 +1582,21 @@ static const struct Token* parse_stmt(Parser* p, const struct Token* cur_tok, st
             struct StmtLoop ret = {
                 .kind = STMT_LOOP,
             };
-            size_t scope_sz = scope_size(&p->scope);
-            if (!(cur_tok = token_consume_sym(p, cur_tok + 1, '(', " in for statement"))) return NULL;
-            if (!(cur_tok = parse_stmt(p, cur_tok, &ret.init))) return NULL;
+            scope_push_subscope(&p->scope);
+            PARSER_DO(token_consume_sym(p, cur_tok + 1, '(', " in for statement"));
+            PARSER_DO(parse_stmt(p, cur_tok, &ret.init));
             if (!token_is_sym(p, cur_tok, ';'))
             {
-                if (!(cur_tok = parse_expr(p, cur_tok, &ret.cond, PRECEDENCE_COMMA))) return NULL;
+                PARSER_DO(parse_expr(p, cur_tok, &ret.cond, PRECEDENCE_COMMA));
             }
-            if (!(cur_tok = token_consume_sym(p, cur_tok, ';', " in for statement"))) return NULL;
+            PARSER_DO(token_consume_sym(p, cur_tok, ';', " in for statement"));
             if (!token_is_sym(p, cur_tok, ')'))
             {
-                if (!(cur_tok = parse_expr(p, cur_tok, &ret.advance, PRECEDENCE_COMMA))) return NULL;
+                PARSER_DO(parse_expr(p, cur_tok, &ret.advance, PRECEDENCE_COMMA));
             }
             if (!(cur_tok = token_consume_sym(p, cur_tok, ')', " in for statement"))) return NULL;
             if (!(cur_tok = parse_stmt(p, cur_tok, &ret.body))) return NULL;
-            scope_shrink(&p->scope, scope_sz);
+            scope_pop_subscope(&p->scope);
             *p_expr = pool_push(&p->ast_pools[STMT_LOOP], &ret, sizeof(ret));
             return cur_tok;
         }
@@ -1546,10 +1605,10 @@ static const struct Token* parse_stmt(Parser* p, const struct Token* cur_tok, st
             struct StmtLoop ret = {
                 .kind = STMT_LOOP,
             };
+            scope_push_subscope(&p->scope);
             if (!(cur_tok = parse_conditional(p, cur_tok + 1, &ret.cond))) return NULL;
-            size_t scope_sz = scope_size(&p->scope);
             if (!(cur_tok = parse_stmt(p, cur_tok, &ret.body))) return NULL;
-            scope_shrink(&p->scope, scope_sz);
+            scope_pop_subscope(&p->scope);
             *p_expr = pool_push(&p->ast_pools[STMT_LOOP], &ret, sizeof(ret));
             return cur_tok;
         }
@@ -1559,9 +1618,9 @@ static const struct Token* parse_stmt(Parser* p, const struct Token* cur_tok, st
                 .kind = STMT_LOOP,
                 .is_do_while = 1,
             };
-            size_t scope_sz = scope_size(&p->scope);
+            scope_push_subscope(&p->scope);
             if (!(cur_tok = parse_stmt(p, cur_tok + 1, &ret.body))) return NULL;
-            scope_shrink(&p->scope, scope_sz);
+            scope_pop_subscope(&p->scope);
             if (cur_tok->type != LEX_WHILE)
             {
                 return parser_ferror(&cur_tok->rc, "error: expected 'while'\n"), NULL;
@@ -1630,11 +1689,11 @@ static const struct Token* parse_stmt(Parser* p, const struct Token* cur_tok, st
             }
         case TOKEN_SYM1('{'):
         {
-            size_t scope_sz = scope_size(&p->scope);
+            scope_push_subscope(&p->scope);
             struct StmtBlock* block;
             PARSER_DO(parse_stmt_block(p, cur_tok + 1, &block));
             *p_expr = &block->ast;
-            scope_shrink(&p->scope, scope_sz);
+            scope_pop_subscope(&p->scope);
             return token_consume_sym(p, cur_tok, '}', " in block");
         }
         default: return parser_ferror(&cur_tok->rc, "error: expected statement\n"), NULL;
@@ -1675,12 +1734,13 @@ int parser_parse(struct Parser* p, const struct Token* cur_tok, const char* tk_s
     int rc = 0;
     p->tk_strdata = tk_strs;
 
+    scope_push_subscope(&p->scope);
     PARSER_DO(parse_stmt_block(p, cur_tok, &p->top));
     if (cur_tok->type != LEX_EOF)
     {
         PARSER_FAIL("error: expected EOF");
     }
-    scope_shrink(&p->scope, 0);
+    scope_pop_subscope(&p->scope);
 
 fail:
     return rc;
