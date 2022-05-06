@@ -1303,6 +1303,32 @@ static int insert_typedef(Parser* p, Decl* decl)
     return 0;
 }
 
+static const struct Token* parse_fnbody(Parser* p, const struct Token* cur_tok, Decl* pdecl)
+{
+    Ast* const prev_parent = p->parent;
+    scope_push_subscope(&p->scope);
+    if (pdecl->type->kind != AST_DECLFN)
+        PARSER_FAIL_TOK(cur_tok, "error: only function types can be defined with a code block\n");
+    DeclFn* fn = (DeclFn*)pdecl->type;
+    void** decls = p->expr_seqs.data;
+    for (size_t i = 0; i < fn->extent; ++i)
+    {
+        StmtDecls* argdecl = decls[fn->offset + i];
+        PARSER_CHECK_NOT(insert_definition(p, decls[argdecl->offset]));
+    }
+    p->parent = &pdecl->ast;
+    struct StmtBlock* init;
+    PARSER_DO(parse_stmt_block(p, cur_tok + 1, &init));
+    pdecl->init = &init->ast;
+    PARSER_DO(token_consume_sym(p, cur_tok, '}', " in function definition"));
+fail:
+    // Remove function arguments from the scope
+    scope_pop_subscope(&p->scope);
+    p->parent = prev_parent;
+
+    return cur_tok;
+}
+
 static const struct Token* parse_decls(Parser* p,
                                        const struct Token* cur_tok,
                                        struct DeclSpecs* specs,
@@ -1318,24 +1344,7 @@ static const struct Token* parse_decls(Parser* p,
         {
             if (!pdecl->tok) PARSER_FAIL_TOK(cur_tok, "error: anonymous function declaration not allowed\n");
             PARSER_CHECK_NOT(insert_definition(p, pdecl));
-            scope_push_subscope(&p->scope);
-            if (pdecl->type->kind != AST_DECLFN)
-                PARSER_FAIL_TOK(cur_tok, "error: only function types can be defined with a code block\n");
-            DeclFn* fn = (DeclFn*)pdecl->type;
-            void** decls = p->expr_seqs.data;
-            for (size_t i = 0; i < fn->extent; ++i)
-            {
-                StmtDecls* argdecl = decls[fn->offset + i];
-                PARSER_CHECK_NOT(insert_definition(p, decls[argdecl->offset]));
-            }
-            p->parent = &pdecl->ast;
-            struct StmtBlock* init;
-            PARSER_DO(parse_stmt_block(p, cur_tok + 1, &init));
-            pdecl->init = &init->ast;
-            PARSER_DO(token_consume_sym(p, cur_tok, '}', " in function definition"));
-            p->parent = specs->parent;
-            // Remove function arguments from the scope
-            scope_pop_subscope(&p->scope);
+            PARSER_DO(parse_fnbody(p, cur_tok, pdecl));
             break;
         }
 
@@ -1750,9 +1759,9 @@ int parser_parse(struct Parser* p, const struct Token* cur_tok, const char* tk_s
     {
         PARSER_FAIL("error: expected EOF");
     }
-    scope_pop_subscope(&p->scope);
 
 fail:
+    scope_pop_subscope(&p->scope);
     return rc;
 }
 
