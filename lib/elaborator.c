@@ -864,7 +864,8 @@ static int32_t typestr_calc_sizing(struct Elaborator* elab, const struct TypeStr
 
 static struct Decl* find_field_by_name(struct DeclSpecs* def, const char* fieldname, struct Decl* const* const decls)
 {
-    if (!def || !def->suinit || !def->first_member) abort();
+    if (!def || !def->suinit) abort();
+    if (!def->first_member) return NULL;
     struct Decl* field = def->first_member;
     while (field)
     {

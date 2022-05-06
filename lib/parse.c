@@ -1156,6 +1156,7 @@ static const struct Token* parse_enum_body(struct Parser* p, const struct Token*
         struct Decl* enumerator = pool_push(&p->ast_pools[AST_DECL], &decl, sizeof(decl));
         enumerator->sym = pool_alloc_zeroes(&p->sym_pool, sizeof(Symbol));
         enumerator->sym->name = token_str(p, decl.tok);
+        enumerator->sym->last_decl = enumerator;
         scope_insert(&p->scope, enumerator->sym, enumerator->sym->name);
         arrptr_push(&decls, enumerator);
         if (cur_tok->type == TOKEN_SYM1(','))
