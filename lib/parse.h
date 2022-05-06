@@ -17,11 +17,14 @@ typedef struct Parser
 
     struct Scope scope;
     struct Scope type_scope;
+    struct Scope typedef_scope;
 
     // exprs
     struct Pool ast_pools[AST_KIND_END_POOLS + 1];
     /// Pool<Symbol>
     struct Pool sym_pool;
+    /// Pool<TypeSymbol>
+    struct Pool typesym_pool;
     /// Array<Expr*>
     struct Array expr_seqs;
     /// Array<Designator> from AstInit::designator_offset

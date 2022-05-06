@@ -19,54 +19,17 @@
 
 static const struct TypeStr s_type_unknown = {};
 
-struct TypeTable
+typedef struct TypeTable
 {
-    struct AutoHeap typenames;
-    struct Array decls;
+    struct Array typesyms;
     struct Array fn_args_ends;
     struct Array fn_args;
-};
+} TypeTable;
 
-static __forceinline struct DeclSpecs** tt_get_def(const struct TypeTable* tt, size_t i)
+__forceinline static TypeSymbol* tt_get(const TypeTable* tt, uint32_t i)
 {
-    return ((struct DeclSpecs**)tt->decls.data) + i;
+    return ((TypeSymbol**)tt->typesyms.data)[i];
 }
-
-static size_t findstr(const char* str, const char* const* heap, size_t heap_size)
-{
-    size_t i = 0;
-    for (; i < heap_size; ++i)
-    {
-        if (heap[i] && strcmp(str, heap[i]) == 0) break;
-    }
-    return i;
-}
-
-static __forceinline size_t tt_insert_null(struct TypeTable* tt)
-{
-    const size_t n = array_size(&tt->typenames.arr, sizeof(const char*));
-    autoheap_alloc(&tt->typenames, 0);
-    arrptr_push(&tt->decls, NULL);
-    return n;
-}
-
-static __forceinline size_t tt_find_insert_null(struct TypeTable* tt, const char* str)
-{
-    const size_t n = array_size(&tt->typenames.arr, sizeof(const char*));
-    size_t offset = findstr(str, (const char* const*)tt->typenames.arr.data, n);
-    if (offset == n)
-    {
-        size_t len = strlen(str);
-        memcpy(autoheap_alloc(&tt->typenames, len + 1), str, len + 1);
-        arrptr_push(&tt->decls, NULL);
-    }
-    return offset;
-}
-
-// static __forceinline const char* tt_get_name(const struct TypeTable* tt, size_t i)
-// {
-//     return ((const char**)tt->typenames.arr.data)[i];
-// }
 
 static int32_t eval_constant(struct Elaborator* elab, struct Expr* e)
 {
@@ -175,6 +138,7 @@ static int32_t eval_constant(struct Elaborator* elab, struct Expr* e)
     }
 }
 
+#if 0
 static int get_primitive_declspec_size(struct DeclSpecs* d)
 {
     if (d->is_short) return 2;
@@ -196,6 +160,7 @@ static int get_primitive_declspec_size(struct DeclSpecs* d)
         default: parser_tok_error(d->tok, "error: unable to determine size of declspec\n"); return 1;
     }
 }
+#endif
 
 enum
 {
@@ -344,13 +309,13 @@ static void typestr_fmt_i(const struct TypeTable* tt, const struct TypeStr* ts, 
         unsigned int u;
         i -= sizeof(u);
         memcpy(&u, ts->buf + i, sizeof(u));
-        struct DeclSpecs* specs = *tt_get_def(tt, u);
+        TypeSymbol* sym = tt_get(tt, u);
         array_appends(buf, str);
         array_push_byte(buf, ' ');
-        if (specs->name)
-            array_appends(buf, specs->name);
+        if (sym->name)
+            array_appends(buf, sym->name);
         else
-            array_appendf(buf, "<anonymous#%u>", specs->tt_idx);
+            array_appendf(buf, "<anonymous#%u>", u);
         goto end;
     end:
         if (depth)
@@ -475,12 +440,12 @@ __forceinline static uint32_t typestr_pop_offset(struct TypeStr* ts)
     return r;
 }
 
-struct DeclSpecs* typestr_get_decl(struct TypeTable* tt, const struct TypeStr* ts)
+TypeSymbol* typestr_get_decl(struct TypeTable* tt, const struct TypeStr* ts)
 {
     char ch = ts->buf[(int)ts->buf[0]];
     if (ch == TYPE_BYTE_STRUCT || ch == TYPE_BYTE_UNION)
     {
-        return *tt_get_def(tt, typestr_get_offset(ts));
+        return tt_get(tt, typestr_get_offset(ts));
     }
     return NULL;
 }
@@ -606,7 +571,7 @@ static void typestr_append_decltype_DeclSpecs(const struct Ast* const* expr_seqs
     {
         return typestr_append_decltype(expr_seqs, tt, s, &d->_typedef->last_decl->ast);
     }
-    else if (d->tt_idx)
+    else if (d->sym)
     {
         char ch;
         if (d->is_struct)
@@ -623,7 +588,7 @@ static void typestr_append_decltype_DeclSpecs(const struct Ast* const* expr_seqs
         }
         else
             abort();
-        typestr_append_offset(s, d->tt_idx - 1, ch);
+        typestr_append_offset(s, d->sym->idx, ch);
     }
     else if (d->tok->type == LEX_UUVALIST)
     {
@@ -768,13 +733,13 @@ static size_t typestr_get_size_i(struct Elaborator* elab, const struct TypeStr* 
         case TYPE_BYTE_STRUCT:
         case TYPE_BYTE_UNION:
         {
-            struct DeclSpecs* specs = *tt_get_def(elab->types, typestr_get_offset_i(ts, i));
-            if (!specs)
+            TypeSymbol* sym = tt_get(elab->types, typestr_get_offset_i(ts, i));
+            if (!sym->size)
             {
                 typestr_error1(NULL, elab->types, "error: unable to get size of incomplete type: %.*s\n", ts);
                 return 1;
             }
-            return specs->size;
+            return sym->size;
         }
         case TYPE_BYTE_ENUM: return 4;
         case TYPE_BYTE_POINTER: return 8;
@@ -822,13 +787,13 @@ static size_t typestr_get_align_i(struct Elaborator* elab, const struct TypeStr*
         case TYPE_BYTE_STRUCT:
         case TYPE_BYTE_UNION:
         {
-            struct DeclSpecs* specs = *tt_get_def(elab->types, typestr_get_offset_i(ts, i));
-            if (!specs)
+            TypeSymbol* sym = tt_get(elab->types, typestr_get_offset_i(ts, i));
+            if (!sym->align)
             {
                 typestr_error1(NULL, elab->types, "error: unable to get align of incomplete type: %.*s\n", ts);
                 return 1;
             }
-            return specs->align;
+            return sym->align;
         }
         case TYPE_BYTE_ENUM: return 4;
         case TYPE_BYTE_POINTER: return 8;
@@ -1386,12 +1351,12 @@ static int di_fill_frame(DInitFrame* frame, Elaborator* elab, size_t offset, con
         case TYPE_BYTE_UNION: frame->is_union = 1;
         case TYPE_BYTE_STRUCT:
         {
-            DeclSpecs* specs = typestr_get_decl(elab->types, parent_ty);
-            if (!specs)
+            TypeSymbol* sym = typestr_get_decl(elab->types, parent_ty);
+            if (!sym || !sym->def)
             {
                 return parser_ferror(rc, "error: incomplete type\n");
             }
-            frame->field = specs->first_member;
+            frame->field = sym->def->first_member;
             if (!frame->field)
             {
                 return parser_ferror(rc, "error: unimplemented initialization of type with no members\n");
@@ -1450,8 +1415,8 @@ static int di_fill_frame_from_designator(DInitFrame* frame,
         case TYPE_BYTE_UNION: frame->is_union = 1;
         case TYPE_BYTE_STRUCT:
         {
-            DeclSpecs* specs = typestr_get_decl(elab->types, parent_ty);
-            if (!specs)
+            TypeSymbol* sym = typestr_get_decl(elab->types, parent_ty);
+            if (!sym || !sym->def)
             {
                 return parser_ferror(rc, "error: incomplete type\n");
             }
@@ -1459,7 +1424,7 @@ static int di_fill_frame_from_designator(DInitFrame* frame,
             {
                 return parser_ferror(rc, "error: invalid array designator for struct/union\n");
             }
-            frame->field = find_field_by_name(specs, designator->field, elab->p->expr_seqs.data);
+            frame->field = find_field_by_name(sym->def, designator->field, elab->p->expr_seqs.data);
             if (!frame->field)
             {
                 return parser_ferror(rc, "error: field not found in structure: '%s'\n", frame->field);
@@ -1853,43 +1818,47 @@ static void elaborate_expr(struct Elaborator* elab,
             const struct TypeStr orig_lhs = *rty;
             if (e->is_arrow) typestr_dereference(rty);
             unsigned int cvr_mask = typestr_strip_cvr(rty);
-            struct DeclSpecs* specs = typestr_get_decl(elab->types, rty);
-            if (specs)
+            TypeSymbol* sym = typestr_get_decl(elab->types, rty);
+            if (sym)
             {
-                // find field in decl
-                struct Decl* field =
-                    find_field_by_name(specs, e->fieldname, (struct Decl* const*)elab->p->expr_seqs.data);
-                if (field)
+                if (sym->def)
                 {
-                    e->sym = field->sym;
-                    typestr_from_decltype(elab->p->expr_seqs.data, elab->types, rty, field->type);
-                    typestr_add_cvr(rty, cvr_mask);
+                    // find field in decl
+                    struct Decl* field =
+                        find_field_by_name(sym->def, e->fieldname, (struct Decl* const*)elab->p->expr_seqs.data);
+                    if (field)
+                    {
+                        e->sym = field->sym;
+                        typestr_from_decltype(elab->p->expr_seqs.data, elab->types, rty, field->type);
+                        typestr_add_cvr(rty, cvr_mask);
+                    }
+                    else
+                    {
+                        struct Array buf = {0};
+                        typestr_fmt(elab->types, rty, &buf);
+                        array_push_byte(&buf, 0);
+                        parser_tok_error(
+                            e->tok, "error: could not find member '%s' in type '%s'\n", e->fieldname, buf.data);
+                        array_destroy(&buf);
+                        *rty = s_type_unknown;
+                    }
                 }
                 else
                 {
-                    parser_tok_error(
-                        e->tok, "error: could not find member '%s' in type '%s'\n", e->fieldname, specs->name);
+                    typestr_error1(
+                        &e->tok->rc, elab->types, "error: first argument was of incomplete type %.*s\n", rty);
                     *rty = s_type_unknown;
                 }
             }
             else
             {
-                unsigned int lhs_mask = typestr_mask(rty);
-                if (lhs_mask & TYPE_MASK_HAS_FIELDS)
-                {
-                    typestr_error1(
-                        &e->tok->rc, elab->types, "error: first argument was of incomplete type %.*s\n", rty);
-                }
+                const char* err_fmt;
+                if (e->is_arrow)
+                    err_fmt = "error: expected first argument to be pointer to struct or union type, but got "
+                              "'%.*s'\n";
                 else
-                {
-                    const char* err_fmt;
-                    if (e->is_arrow)
-                        err_fmt = "error: expected first argument to be pointer to struct or union type, but got "
-                                  "'%.*s'\n";
-                    else
-                        err_fmt = "error: expected first argument to be of struct or union type, but got '%.*s'\n";
-                    typestr_error1(&e->tok->rc, elab->types, err_fmt, &orig_lhs);
-                }
+                    err_fmt = "error: expected first argument to be of struct or union type, but got '%.*s'\n";
+                typestr_error1(&e->tok->rc, elab->types, err_fmt, &orig_lhs);
                 *rty = s_type_unknown;
             }
             break;
@@ -2058,55 +2027,49 @@ static int elaborate_declspecs(struct Elaborator* elab, struct DeclSpecs* specs)
     }
     else if (specs->is_enum || specs->is_union || specs->is_struct)
     {
-        if (specs->name)
+        if (!specs->prev_decl)
         {
-            specs->tt_idx = tt_find_insert_null(elab->types, specs->name) + 1;
-        }
-        else
-        {
-            specs->tt_idx = tt_insert_null(elab->types) + 1;
+            specs->sym->idx = array_size(&elab->types->typesyms, sizeof(void*));
+            arrptr_push(&elab->types->typesyms, specs->sym);
+            if (specs->is_enum)
+            {
+                specs->sym->size = 4;
+                specs->sym->align = 4;
+            }
         }
 
-        struct DeclSpecs** ttdef = tt_get_def(elab->types, specs->tt_idx - 1);
         if (specs->enum_init || specs->suinit)
         {
-            if (*ttdef)
+            if (specs->sym->def)
             {
                 parser_tok_error(specs->tok, "error: multiple definitions of type.\n");
-                parser_tok_error((*ttdef)->tok, "info: previous definition\n");
-                UNWRAP(1);
+                UNWRAP(parser_tok_error(specs->sym->def->tok, "info: previous definition\n"));
             }
-            *ttdef = specs;
+            specs->sym->def = specs;
         }
-        specs->def = *ttdef;
 
-        if (specs->is_enum)
+        if (specs->enum_init)
         {
-            specs->size = 4;
-            specs->align = 4;
-            if (specs->enum_init)
+            struct StmtDecls* block = specs->enum_init;
+            struct Expr** const seqs = elab->p->expr_seqs.data;
+            int enum_value = 0;
+            for (size_t i = 0; i < block->extent; ++i)
             {
-                struct StmtDecls* block = specs->enum_init;
-                struct Expr** const seqs = elab->p->expr_seqs.data;
-                int enum_value = 0;
-                for (size_t i = 0; i < block->extent; ++i)
+                if (seqs[i + block->offset]->kind != AST_DECL) abort();
+                struct Decl* edecl = (struct Decl*)seqs[i + block->offset];
+                if (edecl->init)
                 {
-                    if (seqs[i + block->offset]->kind != AST_DECL) abort();
-                    struct Decl* edecl = (struct Decl*)seqs[i + block->offset];
-                    if (edecl->init)
+                    if (!ast_kind_is_expr(edecl->init->kind))
                     {
-                        if (!ast_kind_is_expr(edecl->init->kind))
-                        {
-                            UNWRAP(parser_tok_error(edecl->init->tok, "error: expected constant integer expression\n"));
-                        }
-                        edecl->sym->enum_value = enum_value = eval_constant(elab, (struct Expr*)edecl->init);
+                        UNWRAP(parser_tok_error(edecl->init->tok, "error: expected constant integer expression\n"));
                     }
-                    else
-                    {
-                        edecl->sym->enum_value = enum_value++;
-                    }
-                    edecl->sym->is_enum_constant = 1;
+                    edecl->sym->enum_value = enum_value = eval_constant(elab, (struct Expr*)edecl->init);
                 }
+                else
+                {
+                    edecl->sym->enum_value = enum_value++;
+                }
+                edecl->sym->is_enum_constant = 1;
             }
         }
         else if (specs->suinit)
@@ -2167,20 +2130,9 @@ static int elaborate_declspecs(struct Elaborator* elab, struct DeclSpecs* specs)
 
             if (struct_size == 0) struct_size = 1;
             struct_size = round_to_alignment(struct_size, struct_align);
-            specs->align = struct_align;
-            specs->size = struct_size;
+            specs->sym->align = struct_align;
+            specs->sym->size = struct_size;
         }
-
-        if (specs->def)
-        {
-            specs->size = specs->def->size;
-            specs->align = specs->def->align;
-        }
-    }
-    else
-    {
-        specs->size = get_primitive_declspec_size(specs);
-        specs->align = specs->size;
     }
 
 fail:
@@ -2205,11 +2157,7 @@ int elaborate(struct Elaborator* elab)
     return parser_has_errors();
 }
 
-static void tt_destroy(struct TypeTable* tt)
-{
-    autoheap_destroy(&tt->typenames);
-    array_destroy(&tt->decls);
-}
+static void tt_destroy(struct TypeTable* tt) { array_destroy(&tt->typesyms); }
 void elaborator_destroy(struct Elaborator* elab)
 {
     tt_destroy(elab->types);

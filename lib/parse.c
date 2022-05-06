@@ -332,7 +332,7 @@ static int parse_is_token_a_type(Parser* p, const struct Token* tok)
         case LEX_STRUCT:
         case LEX_UNION:
         case LEX_ENUM: return 1;
-        case LEX_IDENT: return NULL != scope_find(&p->type_scope, token_str(p, tok));
+        case LEX_IDENT: return NULL != scope_find(&p->typedef_scope, token_str(p, tok));
         default: return tok_type_is_fundamental(tok->type);
     }
 }
@@ -687,7 +687,7 @@ static const struct Token* parse_declspecs(Parser* p, const struct Token* cur_to
             if (specs.tok) break;
             specs.tok = cur_tok;
             specs.name = token_str(p, cur_tok);
-            struct Binding* const cur_bind = scope_find(&p->type_scope, specs.name);
+            struct Binding* const cur_bind = scope_find(&p->typedef_scope, specs.name);
             if (!cur_bind)
             {
                 PARSER_FAIL("error: expected type but found identifier: %s\n", specs.name);
@@ -831,6 +831,31 @@ static const struct Token* parse_declspecs(Parser* p, const struct Token* cur_to
     } while (1);
 
     *pspecs = pool_push(&p->ast_pools[AST_DECLSPEC], &specs, sizeof(specs));
+
+    struct DeclSpecs* s = *pspecs;
+    if (s->is_enum || s->is_union || s->is_struct)
+    {
+        if (s->name)
+        {
+            struct Binding* const cur_bind = scope_find(&p->type_scope, s->name);
+            if (!cur_bind)
+            {
+                s->sym = pool_alloc_zeroes(&p->typesym_pool, sizeof(TypeSymbol));
+                s->sym->name = s->name;
+                scope_insert(&p->type_scope, s->sym, s->name);
+            }
+            else
+            {
+                s->sym = cur_bind->sym;
+                s->prev_decl = s->sym->last_decl;
+            }
+        }
+        else
+        {
+            s->sym = pool_alloc_zeroes(&p->typesym_pool, sizeof(TypeSymbol));
+        }
+        s->sym->last_decl = *pspecs;
+    }
 
 fail:
     return cur_tok;
@@ -1131,7 +1156,7 @@ static const struct Token* parse_enum_body(struct Parser* p, const struct Token*
         struct Decl* enumerator = pool_push(&p->ast_pools[AST_DECL], &decl, sizeof(decl));
         enumerator->sym = pool_alloc_zeroes(&p->sym_pool, sizeof(Symbol));
         enumerator->sym->name = token_str(p, decl.tok);
-        scope_insert(&p->scope, enumerator->sym);
+        scope_insert(&p->scope, enumerator->sym, enumerator->sym->name);
         arrptr_push(&decls, enumerator);
         if (cur_tok->type == TOKEN_SYM1(','))
         {
@@ -1240,7 +1265,7 @@ static int insert_declaration(Parser* p, Decl* decl, int in_subscope)
         {
             decl->sym = pool_alloc_zeroes(&p->sym_pool, sizeof(Symbol));
             decl->sym->name = name;
-            scope_insert(&p->scope, decl->sym);
+            scope_insert(&p->scope, decl->sym, decl->sym->name);
         }
         decl->sym->last_decl = decl;
     }
@@ -1282,7 +1307,7 @@ static int insert_typedef(Parser* p, Decl* decl)
     if (!decl->tok) abort();
 
     const char* name = token_str(p, decl->tok);
-    struct Binding* prev_sym = scope_find(&p->type_scope, name);
+    struct Binding* prev_sym = scope_find(&p->typedef_scope, name);
     if (prev_sym)
     {
         decl->sym = prev_sym->sym;
@@ -1297,7 +1322,7 @@ static int insert_typedef(Parser* p, Decl* decl)
     {
         decl->sym = pool_alloc_zeroes(&p->sym_pool, sizeof(Symbol));
         decl->sym->name = name;
-        scope_insert(&p->type_scope, decl->sym);
+        scope_insert(&p->typedef_scope, decl->sym, decl->sym->name);
     }
     decl->sym->last_decl = decl;
     return 0;
@@ -1682,7 +1707,7 @@ static const struct Token* parse_stmt(Parser* p, const struct Token* cur_tok, st
                 return cur_tok;
             }
 
-            struct Binding* const cur_bind = scope_find(&p->type_scope, token_str(p, cur_tok));
+            struct Binding* const cur_bind = scope_find(&p->typedef_scope, token_str(p, cur_tok));
             if (cur_bind)
             {
                 // this is a declaration
@@ -1727,6 +1752,7 @@ void parser_destroy(struct Parser* p)
 {
     autoheap_destroy(&p->strings_to_free);
     scope_destroy(&p->scope);
+    scope_destroy(&p->typedef_scope);
     scope_destroy(&p->type_scope);
 
     for (size_t i = 0; i < AST_KIND_END_POOLS + 1; ++i)
@@ -1734,6 +1760,7 @@ void parser_destroy(struct Parser* p)
         pool_destroy(&p->ast_pools[i]);
     }
     pool_destroy(&p->sym_pool);
+    pool_destroy(&p->typesym_pool);
     array_destroy(&p->expr_seqs);
     array_destroy(&p->designators);
 }

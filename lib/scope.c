@@ -24,16 +24,17 @@ void scope_pop_subscope(Scope* s)
 {
     if (!s->subscopes.sz) abort();
     size_t i = arrsz_pop(&s->subscopes);
+    if (i == scope_size(s)) return;
     s->strings.sz = scope_data(s)[i].ident_offset;
     array_shrink(&s->binds, i, sizeof(Binding));
 }
-size_t scope_insert(struct Scope* s, Symbol* sym)
+size_t scope_insert(struct Scope* s, void* sym, const char* name)
 {
     const size_t sz = scope_size(s);
     struct Binding* const e = array_alloc(&s->binds, sizeof(struct Binding));
     e->ident_offset = s->strings.sz;
     e->sym = sym;
-    array_push(&s->strings, sym->name, strlen(sym->name) + 1);
+    array_push(&s->strings, name, strlen(name) + 1);
     return sz;
 }
 struct Binding* scope_find(struct Scope* s, const char* id)

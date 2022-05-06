@@ -7,24 +7,30 @@ typedef struct Attribute
 {
 } Attribute;
 
+typedef struct TypeSymbol
+{
+    const char* name;
+    struct DeclSpecs* last_decl;
+    struct DeclSpecs* def;
+    size_t idx;
+    size_t size;
+    size_t align;
+} TypeSymbol;
+
 typedef struct DeclSpecs
 {
     INHERIT_AST;
 
-    const char* name;
-    /* stored +1 so 0 means uninitialized */
-    uint32_t tt_idx;
-
     /// encompassing function or struct
     Ast* parent;
+    const char* name;
     struct Attribute attr;
     struct Symbol* _typedef;
     struct StmtBlock* suinit;
     struct Decl* first_member;
     struct StmtDecls* enum_init;
-    struct DeclSpecs* def;
-    size_t size;
-    size_t align;
+    struct DeclSpecs* prev_decl;
+    struct TypeSymbol* sym;
 
     unsigned int is_struct : 1;
     unsigned int is_enum : 1;

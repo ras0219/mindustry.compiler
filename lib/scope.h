@@ -7,7 +7,7 @@
 typedef struct Binding
 {
     size_t ident_offset;
-    struct Symbol* sym;
+    void* sym;
 } Binding;
 
 typedef struct Scope
@@ -24,6 +24,7 @@ void scope_init(struct Scope* s);
 void scope_destroy(struct Scope* s);
 void scope_push_subscope(struct Scope* s);
 void scope_pop_subscope(struct Scope* s);
-size_t scope_insert(struct Scope* s, struct Symbol* sym);
+/// precondition: str not in scope
+size_t scope_insert(struct Scope* s, void* sym, const char* str);
 struct Binding* scope_find_subscope(struct Scope* s, const char* id);
 struct Binding* scope_find(struct Scope* s, const char* id);

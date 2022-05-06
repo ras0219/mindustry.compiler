@@ -173,7 +173,7 @@ int parse_main(struct TestState* state)
     struct DeclSpecs* mainrty = (struct DeclSpecs*)mainfn->type;
     REQUIRE_EQ(AST_DECLSPEC, mainrty->kind);
     REQUIRE_NULL(mainrty->name);
-    REQUIRE_NULL(mainrty->def);
+    REQUIRE_NULL(mainrty->sym);
     REQUIREZ(mainrty->is_long);
     REQUIREZ(mainrty->is_short);
     REQUIREZ(mainrty->is_enum);
@@ -214,7 +214,7 @@ int parse_typedef(struct TestState* state)
     struct DeclSpecs* defspecs = (struct DeclSpecs*)def->type;
     REQUIRE_EQ(AST_DECLSPEC, defspecs->kind);
     REQUIRE_NULL(defspecs->name);
-    REQUIRE_NULL(defspecs->def);
+    REQUIRE_NULL(defspecs->sym);
     REQUIRE(defspecs->is_long);
     REQUIRE(defspecs->is_unsigned);
     REQUIRE(defspecs->is_typedef);
@@ -426,8 +426,8 @@ int parse_nested_struct(struct TestState* state)
         }
         REQUIRE_NULL(decls->specs->first_member->sym->next_field->sym->next_field);
 
-        REQUIRE_EQ(4, decls->specs->align);
-        REQUIRE_EQ(8, decls->specs->size);
+        REQUIRE_EQ(4, decls->specs->sym->align);
+        REQUIRE_EQ(8, decls->specs->sym->size);
     }
 
     rc = 0;
@@ -867,12 +867,39 @@ fail:
     return rc;
 }
 
+int parse_body(struct TestState* state)
+{
+    int rc = 1;
+    StandardTest test;
+    SUBTEST(stdtest_run(state,
+                        &test,
+                        "int i;\n"
+                        "int main() {\n"
+                        "int i;\n"
+                        "{ int i; }\n"
+                        "}\n"
+                        "typedef unsigned long size_t;\n"
+                        "size_t array_size(const struct Array* arr, size_t sz);\n"
+                        "static size_t findstr(const char* str, const char* const* heap, size_t heap_size);\n"
+                        "static __forceinline long tt_find_insert_null(struct TypeTable* tt, const char* str)\n"
+                        "{\n"
+                        "    const size_t n = array_size((void*)0, sizeof(const char*));\n"
+                        "    size_t offset = findstr(str, (const char* const*)0, n);\n"
+                        "    return offset;\n"
+                        "}\n"));
+    rc = 0;
+fail:
+    stdtest_destroy(&test);
+    return rc;
+}
+
 int main()
 {
     struct TestState _state = {};
     struct TestState* state = &_state;
     RUN_TEST(preproc_ternary);
     RUN_TEST(parse_main);
+    RUN_TEST(parse_body);
     RUN_TEST(parse_typedef);
     RUN_TEST(parse_struct);
     RUN_TEST(parse_initializer);

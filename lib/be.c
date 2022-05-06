@@ -359,25 +359,26 @@ static int is_sym_array_or_function(Symbol* sym)
 
 static int be_compile_lvalue_ExprRef(struct BackEnd* be, struct ExprRef* e, struct TACAddress* out)
 {
-    struct Decl* decl = e->sym->def;
+    Symbol* sym = e->sym;
+    struct Decl* decl = sym->last_decl;
     out->is_addr = 1;
     if (decl->specs->parent)
     {
-        if (decl->sym->arg_index > 0)
+        if (sym->arg_index > 0)
         {
             out->kind = TACA_ARG;
-            out->arg_idx = decl->sym->arg_index - 1;
+            out->arg_idx = sym->arg_index - 1;
         }
         else
         {
             out->kind = TACA_FRAME;
-            out->frame_offset = decl->sym->frame_offset;
+            out->frame_offset = sym->frame_offset;
         }
     }
     else
     {
         out->kind = decl->specs->is_static ? TACA_LNAME : TACA_NAME;
-        out->name = decl->sym->name;
+        out->name = sym->name;
     }
     out->sizing = 8;
     return 0;
