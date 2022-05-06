@@ -766,6 +766,23 @@ fail:
     return rc;
 }
 
+int parse_initializer_expr_designated(struct TestState* state)
+{
+    int rc = 1;
+    StandardTest test;
+    SUBTEST(stdtest_run(state,
+                        &test,
+                        "struct A {int x;};\n"
+                        "struct A foo();\n"
+                        "struct B {struct A a, b;};\n"
+                        "void bar()\n"
+                        "{ struct B a = { foo() }; }\n"));
+    rc = 0;
+fail:
+    stdtest_destroy(&test);
+    return rc;
+}
+
 int parse_initializer_expr_sue(struct TestState* state)
 {
     int rc = 1;
@@ -943,6 +960,7 @@ int main()
     RUN_TEST(parse_uuva_list);
     RUN_TEST(parse_shadow);
     RUN_TEST(parse_initializer_expr_sue);
+    RUN_TEST(parse_initializer_expr_designated);
 
     const char* const clicolorforce = getenv("CLICOLOR_FORCE");
     const char* const clicolor = getenv("CLICOLOR");

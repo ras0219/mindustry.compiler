@@ -1307,6 +1307,7 @@ typedef struct DInitFrame
     uint32_t extent;
     uint32_t index;
     uint32_t elem_size;
+    /// Always cvr-stripped
     struct TypeStr ty;
 } DInitFrame;
 
@@ -1320,62 +1321,14 @@ typedef struct DInitIter
 
 static void di_init(DInitIter* i) { memset(i, 0, sizeof(DInitIter)); }
 static void di_destroy(DInitIter* i) { array_destroy(&i->stk); }
-static int di_fill_frame(DInitFrame* frame, Elaborator* elab, size_t offset, const TypeStr* parent_ty, const RowCol* rc)
+
+static int di_fill_frame(DInitFrame* frame,
+                         Elaborator* elab,
+                         size_t offset,
+                         const TypeStr* parent_ty,
+                         size_t designator_idx,
+                         const RowCol* rc)
 {
-    memset(frame, 0, sizeof(*frame));
-    frame->offset = offset;
-    char b = typestr_byte(parent_ty);
-    switch (b)
-    {
-        case TYPE_BYTE_UNK_ARRAY:
-        case TYPE_BYTE_ARRAY:
-        {
-            frame->is_array = 1;
-            frame->ty = *parent_ty;
-            typestr_strip_cvr(&frame->ty);
-            if (b == TYPE_BYTE_UNK_ARRAY)
-            {
-                --frame->ty.buf[0];
-                frame->extent = UINT32_MAX;
-            }
-            else
-            {
-                frame->extent = typestr_pop_offset(&frame->ty);
-            }
-            frame->elem_size = typestr_get_size(elab, &frame->ty);
-            if (frame->extent == 0)
-            {
-                return parser_ferror(rc, "error: array must have nonzero extent\n");
-            }
-            return 0;
-        }
-        case TYPE_BYTE_UNION: frame->is_union = 1;
-        case TYPE_BYTE_STRUCT:
-        {
-            TypeSymbol* sym = typestr_get_decl(elab->types, parent_ty);
-            if (!sym || !sym->def)
-            {
-                return parser_ferror(rc, "error: incomplete type\n");
-            }
-            frame->field = sym->def->first_member;
-            if (!frame->field)
-            {
-                return parser_ferror(rc, "error: unimplemented initialization of type with no members\n");
-            }
-            typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, &frame->ty, frame->field);
-            return 0;
-        }
-        default: return parser_ferror(rc, "error: unimplemented type for initializer list\n");
-    }
-}
-static int di_fill_frame_from_designator(DInitFrame* frame,
-                                         Elaborator* elab,
-                                         size_t offset,
-                                         const TypeStr* parent_ty,
-                                         size_t designator_idx,
-                                         const RowCol* rc)
-{
-    const Designator* const designator = (const Designator*)elab->p->designators.data + designator_idx;
     memset(frame, 0, sizeof(*frame));
     char b = typestr_byte(parent_ty);
     switch (b)
@@ -1395,22 +1348,29 @@ static int di_fill_frame_from_designator(DInitFrame* frame,
             {
                 frame->extent = typestr_pop_offset(&frame->ty);
             }
+            typestr_strip_cvr(&frame->ty);
             frame->elem_size = typestr_get_size(elab, &frame->ty);
             if (frame->extent == 0)
             {
                 return parser_ferror(rc, "error: array must have nonzero extent\n");
             }
-            if (!designator->array_expr)
+            if (designator_idx != SIZE_MAX)
             {
-                return parser_ferror(rc, "error: invalid member designator for array object\n");
+                const Designator* const designator = (const Designator*)elab->p->designators.data + designator_idx;
+
+                if (!designator->array_expr)
+                {
+                    return parser_ferror(rc, "error: invalid member designator for array object\n");
+                }
+                int32_t k = eval_constant(elab, designator->array_expr);
+                if (k >= frame->extent)
+                {
+                    return parser_ferror(
+                        rc, "error: array designator exceeds bounds: '%d' >= '%zu'\n", k, frame->extent);
+                }
+                frame->index = k;
             }
-            int32_t k = eval_constant(elab, designator->array_expr);
-            if (k >= frame->extent)
-            {
-                return parser_ferror(rc, "error: array designator exceeds bounds: '%d' >= '%zu'\n", k, frame->extent);
-            }
-            frame->index = k;
-            frame->offset = offset + frame->elem_size * k;
+            frame->offset = offset + frame->elem_size * frame->index;
             return 0;
         }
         case TYPE_BYTE_UNION: frame->is_union = 1;
@@ -1421,17 +1381,27 @@ static int di_fill_frame_from_designator(DInitFrame* frame,
             {
                 return parser_ferror(rc, "error: incomplete type\n");
             }
-            if (!designator->field)
+            if (designator_idx == SIZE_MAX)
             {
-                return parser_ferror(rc, "error: invalid array designator for struct/union\n");
+                frame->field = sym->def->first_member;
             }
-            frame->field = find_field_by_name(sym->def, designator->field, elab->p->expr_seqs.data);
-            if (!frame->field)
+            else
             {
-                return parser_ferror(rc, "error: field not found in structure: '%s'\n", frame->field);
+                const Designator* const designator = (const Designator*)elab->p->designators.data + designator_idx;
+
+                if (!designator->field)
+                {
+                    return parser_ferror(rc, "error: invalid array designator for struct/union\n");
+                }
+                frame->field = find_field_by_name(sym->def, designator->field, elab->p->expr_seqs.data);
+                if (!frame->field)
+                {
+                    return parser_ferror(rc, "error: field not found in structure: '%s'\n", designator->field);
+                }
             }
             frame->offset = offset + frame->field->sym->frame_offset;
             typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, &frame->ty, frame->field);
+            typestr_strip_cvr(&frame->ty);
             return 0;
         }
         default: return parser_ferror(rc, "error: unimplemented type for initializer list\n");
@@ -1442,11 +1412,11 @@ static int di_enter(DInitIter* i, struct Elaborator* elab, const RowCol* rc)
 {
     if (0 == i->stk.sz)
     {
-        return di_fill_frame(array_alloc(&i->stk, sizeof(DInitFrame)), elab, i->offset, &i->cur_ty, rc);
+        return di_fill_frame(array_alloc(&i->stk, sizeof(DInitFrame)), elab, i->offset, &i->cur_ty, SIZE_MAX, rc);
     }
     DInitFrame* new_frame = array_alloc(&i->stk, sizeof(DInitFrame));
     DInitFrame* prev_frame = new_frame - 1;
-    return di_fill_frame(new_frame, elab, prev_frame->offset, &prev_frame->ty, rc);
+    return di_fill_frame(new_frame, elab, prev_frame->offset, &prev_frame->ty, SIZE_MAX, rc);
 }
 
 static int di_reset(DInitIter* i, struct Elaborator* elab, size_t offset, const struct TypeStr* dty, const RowCol* rc)
@@ -1481,6 +1451,7 @@ loop:;
         if (back->field == NULL) goto pop;
         back->offset += back->field->sym->frame_offset - prev_field_offset;
         typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, &back->ty, back->field);
+        typestr_strip_cvr(&back->ty);
     }
 }
 
@@ -1497,18 +1468,17 @@ static void elaborate_init_ty_AstInit(struct Elaborator* elab, size_t offset, co
         if (init->designator_extent != 0)
         {
             array_clear(&iter.stk);
-            if (di_fill_frame_from_designator(array_alloc(&iter.stk, sizeof(DInitFrame)),
-                                              elab,
-                                              iter.offset,
-                                              &iter.cur_ty,
-                                              init->designator_offset,
-                                              &init->tok->rc))
+            if (di_fill_frame(array_alloc(&iter.stk, sizeof(DInitFrame)),
+                              elab,
+                              iter.offset,
+                              &iter.cur_ty,
+                              init->designator_offset,
+                              &init->tok->rc))
                 goto fail;
             for (size_t k = 1; k < init->designator_extent; ++k)
             {
                 DInitFrame* f = array_alloc(&iter.stk, sizeof(DInitFrame));
-                if (di_fill_frame_from_designator(
-                        f, elab, f[-1].offset, &f[-1].ty, init->designator_offset + k, &init->tok->rc))
+                if (di_fill_frame(f, elab, f[-1].offset, &f[-1].ty, init->designator_offset + k, &init->tok->rc))
                     goto fail;
             }
         }
@@ -1520,12 +1490,24 @@ static void elaborate_init_ty_AstInit(struct Elaborator* elab, size_t offset, co
         }
         else
         {
+            if (!ast_kind_is_expr(init->init->kind))
+            {
+                parser_tok_error(init->init->tok, "error: expected expression in object initialization\n");
+                goto fail;
+            }
+            Expr* expr = (Expr*)init->init;
+            // standard expression initialization
+            struct TypeStr ts;
+            elaborate_expr(elab, NULL, expr, &ts);
+            typestr_decay(&ts);
+
             while (typestr_is_aggregate(&back->ty))
             {
+                if (typestr_match(&back->ty, &ts)) break;
                 if (di_enter(&iter, elab, &init->tok->rc)) goto fail;
                 back = array_back(&iter.stk, sizeof(*back));
             }
-            elaborate_init_ty(elab, back->offset, &back->ty, init->init);
+            typestr_implicit_conversion(elab->types, &init->init->tok->rc, &ts, &back->ty);
             init->offset = back->offset;
             init->sizing = typestr_calc_sizing(elab, &back->ty);
         }
