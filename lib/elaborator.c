@@ -1550,8 +1550,6 @@ static void elaborate_init_ty(struct Elaborator* elab, size_t offset, const Type
     switch (tyb)
     {
         case TYPE_BYTE_FUNCTION: elaborate_stmt(elab, NULL, ast); break;
-        case TYPE_BYTE_UNION: parser_tok_error(ast->tok, "error: unimplemented union initializer type.\n"); break;
-        case TYPE_BYTE_STRUCT: parser_tok_error(ast->tok, "error: unimplemented struct initializer type.\n"); break;
         case TYPE_BYTE_ARRAY:
         case TYPE_BYTE_UNK_ARRAY:
         {
@@ -1572,6 +1570,8 @@ static void elaborate_init_ty(struct Elaborator* elab, size_t offset, const Type
             elaborate_expr(elab, NULL, (Expr*)ast, &ts);
             break;
         }
+        case TYPE_BYTE_UNION:
+        case TYPE_BYTE_STRUCT:
         default:
         {
             if (!ast_kind_is_expr(ast->kind))

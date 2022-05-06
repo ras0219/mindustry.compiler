@@ -766,6 +766,34 @@ fail:
     return rc;
 }
 
+int parse_initializer_expr_sue(struct TestState* state)
+{
+    int rc = 1;
+    StandardTest test;
+    SUBTEST(stdtest_run(state,
+                        &test,
+                        "struct A {int x;};\n"
+                        "struct A foo();\n"
+                        "void bar()\n"
+                        "{ struct A a = foo(); }\n"));
+    SUBTEST(stdtest_run(state,
+                        &test,
+                        "union A {int x;};\n"
+                        "union A foo();\n"
+                        "void bar()\n"
+                        "{ union A a = foo(); }\n"));
+    SUBTEST(stdtest_run(state,
+                        &test,
+                        "enum A {first};\n"
+                        "enum A foo();\n"
+                        "void bar()\n"
+                        "{ enum A a = foo(); }\n"));
+    rc = 0;
+fail:
+    stdtest_destroy(&test);
+    return rc;
+}
+
 int parse_unk_array(struct TestState* state)
 {
     int rc = 1;
@@ -914,6 +942,7 @@ int main()
     RUN_TEST(parse_decls_and_defs);
     RUN_TEST(parse_uuva_list);
     RUN_TEST(parse_shadow);
+    RUN_TEST(parse_initializer_expr_sue);
 
     const char* const clicolorforce = getenv("CLICOLOR_FORCE");
     const char* const clicolor = getenv("CLICOLOR");
