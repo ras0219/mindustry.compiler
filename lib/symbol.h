@@ -12,6 +12,7 @@ typedef struct TypeSymbol
     const char* name;
     struct DeclSpecs* last_decl;
     struct DeclSpecs* def;
+    struct Symbol* first_member;
     size_t idx;
     size_t size;
     size_t align;
@@ -27,7 +28,6 @@ typedef struct DeclSpecs
     struct Attribute attr;
     struct Symbol* _typedef;
     struct StmtBlock* suinit;
-    struct Decl* first_member;
     struct StmtDecls* enum_init;
     struct DeclSpecs* prev_decl;
     struct TypeSymbol* sym;
@@ -108,6 +108,7 @@ typedef struct Symbol
     const char* name;
     Decl* last_decl;
     Decl* def;
+    struct Symbol* next_field;
 
     // 0 means not an argument, 1 means first argument, etc
     unsigned int arg_index;
@@ -118,7 +119,6 @@ typedef struct Symbol
     int32_t fn_ret_sizing;
     size_t size;
     size_t align;
-    Decl* next_field;
 
     unsigned int is_enum_constant : 1;
     int enum_value;

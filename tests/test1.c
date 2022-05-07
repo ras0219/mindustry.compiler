@@ -408,23 +408,23 @@ int parse_nested_struct(struct TestState* state)
             REQUIRE_EQ(1, addr_t_decls->extent);
             REQUIRE_EXPR(Decl, addr_t_decl, exprs[addr_t_decls->offset])
             {
-                REQUIRE_PTR_EQ(addr_t_decl, decls->specs->first_member);
+                REQUIRE_PTR_EQ(addr_t_decl->sym, decls->specs->sym->first_member);
                 REQUIRE_EQ(4, addr_t_decl->sym->align);
                 REQUIRE_EQ(4, addr_t_decl->sym->size);
             }
         }
-        REQUIRE(decls->specs->first_member->sym->next_field);
+        REQUIRE(decls->specs->sym->first_member->next_field);
         REQUIRE_EXPR(StmtDecls, in_u_decls, exprs[decls->specs->suinit->offset + 1])
         {
             REQUIRE_EQ(1, in_u_decls->extent);
             REQUIRE_EXPR(Decl, in_u_decl, exprs[in_u_decls->offset])
             {
-                REQUIRE_PTR_EQ(in_u_decl, decls->specs->first_member->sym->next_field);
+                REQUIRE_PTR_EQ(in_u_decl->sym, decls->specs->sym->first_member->next_field);
                 REQUIRE_EQ(2, in_u_decl->sym->align);
                 REQUIRE_EQ(4, in_u_decl->sym->size);
             }
         }
-        REQUIRE_NULL(decls->specs->first_member->sym->next_field->sym->next_field);
+        REQUIRE_NULL(decls->specs->sym->first_member->next_field->next_field);
 
         REQUIRE_EQ(4, decls->specs->sym->align);
         REQUIRE_EQ(8, decls->specs->sym->size);
@@ -938,6 +938,47 @@ fail:
     return rc;
 }
 
+int parse_fn_ptr_conversion(struct TestState* state)
+{
+    int rc = 1;
+    StandardTest test;
+    SUBTEST(stdtest_run(state,
+                        &test,
+                        "int foo();\n"
+                        "int main() {\n"
+                        "int (*i)() = foo;\n"
+                        "int (*j)() = &foo;\n"
+                        "}\n"));
+    rc = 0;
+fail:
+    stdtest_destroy(&test);
+    return rc;
+}
+
+int parse_expr1(struct TestState* state)
+{
+    int rc = 1;
+    StandardTest test;
+    SUBTEST(stdtest_run(state,
+                        &test,
+                        "int foo();\n"
+                        "struct Arr { int y; };\n"
+                        "const struct Arr arr[] = {1,2,3};\n"
+                        "extern const struct Arr arr[];\n"
+                        "struct Foo { int x, int y; };\n"
+                        "int main() {\n"
+                        "((Foo*)0)->y;\n"
+                        "struct Arr* p = arr, q=&arr;\n"
+                        "p=arr;\n"
+                        "p=&arr;\n"
+                        "sizeof(arr);\n"
+                        "}\n"));
+    rc = 0;
+fail:
+    stdtest_destroy(&test);
+    return rc;
+}
+
 int main()
 {
     struct TestState _state = {};
@@ -961,6 +1002,7 @@ int main()
     RUN_TEST(parse_shadow);
     RUN_TEST(parse_initializer_expr_sue);
     RUN_TEST(parse_initializer_expr_designated);
+    RUN_TEST(parse_fn_ptr_conversion);
 
     const char* const clicolorforce = getenv("CLICOLOR_FORCE");
     const char* const clicolor = getenv("CLICOLOR");

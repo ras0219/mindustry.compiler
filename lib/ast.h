@@ -128,12 +128,12 @@ struct ExprBuiltin
 #define AST_STRUCT_EXPR_BUILTIN ExprBuiltin
 #define AST_KIND_ExprBuiltin EXPR_BUILTIN
 
-struct ExprRef
+typedef struct ExprRef
 {
     INHERIT_EXPR;
 
     struct Symbol* sym;
-};
+} ExprRef;
 #define AST_STRUCT_EXPR_REF ExprRef
 #define AST_KIND_ExprRef EXPR_REF
 

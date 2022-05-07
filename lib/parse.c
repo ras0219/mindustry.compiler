@@ -838,16 +838,16 @@ static const struct Token* parse_declspecs(Parser* p, const struct Token* cur_to
         if (s->name)
         {
             struct Binding* const cur_bind = scope_find(&p->type_scope, s->name);
-            if (!cur_bind)
+            if (cur_bind)
+            {
+                s->sym = cur_bind->sym;
+                s->prev_decl = s->sym->last_decl;
+            }
+            else
             {
                 s->sym = pool_alloc_zeroes(&p->typesym_pool, sizeof(TypeSymbol));
                 s->sym->name = s->name;
                 scope_insert(&p->type_scope, s->sym, s->name);
-            }
-            else
-            {
-                s->sym = cur_bind->sym;
-                s->prev_decl = s->sym->last_decl;
             }
         }
         else
@@ -1459,6 +1459,19 @@ static const struct Token* parse_stmt_decl(Parser* p, const struct Token* cur_to
             {
                 scope_push_subscope(&p->scope);
                 PARSER_DO(parse_stmt_block(p, cur_tok + 1, &specs->suinit));
+                for (size_t i = 0; i < specs->suinit->extent; ++i)
+                {
+                    StmtDecls* decls = ((StmtDecls**)p->expr_seqs.data)[specs->suinit->offset + i];
+                    if (decls->extent == 0 && !decls->specs->name)
+                    {
+                        // Inject anonymous declarations into suinit bodies
+                        Decl* anon_decl = parse_alloc_decl(p, decls->specs);
+                        decls->offset = array_size(&p->expr_seqs, sizeof(void*));
+                        decls->extent = 1;
+                        arrptr_push(&p->expr_seqs, anon_decl);
+                        PARSER_CHECK_NOT(insert_definition(p, anon_decl));
+                    }
+                }
                 scope_pop_subscope(&p->scope);
             }
             else if (specs->is_enum)

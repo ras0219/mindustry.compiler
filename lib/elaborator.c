@@ -180,6 +180,7 @@ enum
     TYPE_MASK_ARITH = TYPE_FLAGS_FLOAT | TYPE_FLAGS_INT,
     TYPE_MASK_SCALAR = TYPE_FLAGS_POINTER | TYPE_MASK_ARITH,
     TYPE_MASK_OBJECT = TYPE_FLAGS_VOID | TYPE_FLAGS_INT | TYPE_FLAGS_POINTER | TYPE_FLAGS_STRUCT | TYPE_FLAGS_UNION,
+    TYPE_MASK_FN_ARR = TYPE_FLAGS_FUNCTION | TYPE_FLAGS_ARRAY,
 };
 
 unsigned int typestr_mask(const struct TypeStr* ts)
@@ -723,7 +724,7 @@ __forceinline static void typestr_from_decltype_Decl(const struct Ast* const* ex
     return typestr_from_decltype(expr_seqs, tt, s, &d->ast);
 }
 
-static size_t typestr_get_size_i(struct Elaborator* elab, const struct TypeStr* ts, int i)
+static size_t typestr_get_size_i(struct Elaborator* elab, const struct TypeStr* ts, int i, const RowCol* rc)
 {
     if (ts->buf[i] == 'r') --i;
     if (ts->buf[i] == 'v') --i;
@@ -736,7 +737,7 @@ static size_t typestr_get_size_i(struct Elaborator* elab, const struct TypeStr* 
             TypeSymbol* sym = tt_get(elab->types, typestr_get_offset_i(ts, i));
             if (!sym->size)
             {
-                typestr_error1(NULL, elab->types, "error: unable to get size of incomplete type: %.*s\n", ts);
+                typestr_error1(rc, elab->types, "error: unable to get size of incomplete type: %.*s\n", ts);
                 return 1;
             }
             return sym->size;
@@ -760,21 +761,21 @@ static size_t typestr_get_size_i(struct Elaborator* elab, const struct TypeStr* 
         case TYPE_BYTE_ARRAY:
         {
             uint32_t offset = typestr_get_offset_i(ts, i);
-            size_t elem_size = typestr_get_size_i(elab, ts, i - sizeof(uint32_t) - 1);
+            size_t elem_size = typestr_get_size_i(elab, ts, i - sizeof(uint32_t) - 1, rc);
             if (elem_size > UINT32_MAX) abort();
             return offset * elem_size;
         }
         default:
         {
-            typestr_error1(NULL, elab->types, "error: unable to get size of type: %.*s\n", ts);
+            typestr_error1(rc, elab->types, "error: unable to get size of type: %.*s\n", ts);
             return 1;
         }
     }
 }
 
-static size_t typestr_get_size(struct Elaborator* elab, const struct TypeStr* ts)
+static size_t typestr_get_size(struct Elaborator* elab, const struct TypeStr* ts, const RowCol* rc)
 {
-    return typestr_get_size_i(elab, ts, ts->buf[0]);
+    return typestr_get_size_i(elab, ts, ts->buf[0], rc);
 }
 
 static size_t typestr_get_align_i(struct Elaborator* elab, const struct TypeStr* ts, int i)
@@ -832,7 +833,7 @@ static size_t typestr_get_align(struct Elaborator* elab, const struct TypeStr* t
     return typestr_get_align_i(elab, ts, ts->buf[0]);
 }
 
-static size_t typestr_get_elem_size(struct Elaborator* elab, const struct TypeStr* ts)
+static size_t typestr_get_elem_size(struct Elaborator* elab, const struct TypeStr* ts, const RowCol* rc)
 {
     int i = ts->buf[0];
     if (ts->buf[i] == 'r') --i;
@@ -840,7 +841,7 @@ static size_t typestr_get_elem_size(struct Elaborator* elab, const struct TypeSt
     if (ts->buf[i] == 'c') --i;
     switch (ts->buf[i])
     {
-        case TYPE_BYTE_POINTER: return typestr_get_size_i(elab, ts, i - 1);
+        case TYPE_BYTE_POINTER: return typestr_get_size_i(elab, ts, i - 1, rc);
         default:
         {
             struct Array buf = {};
@@ -852,9 +853,9 @@ static size_t typestr_get_elem_size(struct Elaborator* elab, const struct TypeSt
     }
 }
 
-static int32_t typestr_calc_sizing(struct Elaborator* elab, const struct TypeStr* ts)
+static int32_t typestr_calc_sizing(struct Elaborator* elab, const struct TypeStr* ts, const RowCol* rc)
 {
-    size_t sz = typestr_get_size(elab, ts);
+    size_t sz = typestr_get_size(elab, ts, rc);
     if (sz > INT32_MAX) abort();
     if (typestr_mask(ts) & TYPE_FLAGS_SIGNED)
         return -(int32_t)sz;
@@ -862,15 +863,23 @@ static int32_t typestr_calc_sizing(struct Elaborator* elab, const struct TypeStr
         return sz;
 }
 
-static struct Decl* find_field_by_name(struct DeclSpecs* def, const char* fieldname, struct Decl* const* const decls)
+static Symbol* find_field_by_name(TypeSymbol* def, const char* fieldname)
 {
-    if (!def || !def->suinit) abort();
-    if (!def->first_member) return NULL;
-    struct Decl* field = def->first_member;
+    Symbol* field = def->first_member;
     while (field)
     {
-        if (strcmp(field->sym->name, fieldname) == 0) return field;
-        field = field->sym->next_field;
+        if (!field->name)
+        {
+            if (field->def->specs->suinit)
+            {
+                // anonymous nested struct
+                Symbol* inner_field = find_field_by_name(field->def->specs->sym, fieldname);
+                if (inner_field) return inner_field;
+            }
+            continue;
+        }
+        if (strcmp(field->name, fieldname) == 0) return field;
+        field = field->next_field;
     }
     return NULL;
 }
@@ -1051,7 +1060,7 @@ static void elaborate_binop(struct Elaborator* elab,
             }
             if ((lhs_mask | rhs_mask) & TYPE_FLAGS_POINTER)
             {
-                e->info = typestr_get_elem_size(elab, rty);
+                e->info = typestr_get_elem_size(elab, rty, &e->tok->rc);
             }
             else
             {
@@ -1061,7 +1070,7 @@ static void elaborate_binop(struct Elaborator* elab,
         case TOKEN_SYM1('-'):
             if (lhs_mask & TYPE_FLAGS_POINTER)
             {
-                e->info = typestr_get_elem_size(elab, rty);
+                e->info = typestr_get_elem_size(elab, rty, &e->tok->rc);
             }
             else
             {
@@ -1108,7 +1117,7 @@ static void elaborate_binop(struct Elaborator* elab,
                 *rty = rhs_ty;
             }
             typestr_dereference(rty);
-            e->info = typestr_get_size(elab, rty);
+            e->info = typestr_get_size(elab, rty, &e->tok->rc);
             break;
         case TOKEN_SYM1(','):
         case TOKEN_SYM1('?'): *rty = rhs_ty; break;
@@ -1186,7 +1195,7 @@ static void elaborate_builtin(struct Elaborator* elab,
                 elaborate_decl(elab, e->type);
                 typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, rty, e->type);
             }
-            e->sizeof_size = typestr_get_size(elab, rty);
+            e->sizeof_size = typestr_get_size(elab, rty, &e->tok->rc);
             *rty = s_type_literal_int;
             break;
         case LEX_UUVA_START:
@@ -1248,7 +1257,13 @@ static void elaborate_unop(struct Elaborator* elab,
         case TOKEN_SYM1('&'):
         {
             *rty = orig_lhs;
-            typestr_add_pointer(rty);
+            if (e->lhs->kind == EXPR_REF && (typestr_mask(&((ExprRef*)e->lhs)->sym->type) & TYPE_MASK_FN_ARR))
+            {
+            }
+            else
+            {
+                typestr_add_pointer(rty);
+            }
             break;
         }
         case TOKEN_SYM2('+', '+'):
@@ -1300,7 +1315,7 @@ static void elaborate_init(struct Elaborator* elab, size_t offset, struct Decl* 
 typedef struct DInitFrame
 {
     size_t offset;
-    Decl* field;
+    Symbol* field;
     uint8_t is_array : 1;
     uint8_t is_unk : 1;
     uint8_t is_union : 1;
@@ -1349,7 +1364,7 @@ static int di_fill_frame(DInitFrame* frame,
                 frame->extent = typestr_pop_offset(&frame->ty);
             }
             typestr_strip_cvr(&frame->ty);
-            frame->elem_size = typestr_get_size(elab, &frame->ty);
+            frame->elem_size = typestr_get_size(elab, &frame->ty, rc);
             if (frame->extent == 0)
             {
                 return parser_ferror(rc, "error: array must have nonzero extent\n");
@@ -1383,7 +1398,7 @@ static int di_fill_frame(DInitFrame* frame,
             }
             if (designator_idx == SIZE_MAX)
             {
-                frame->field = sym->def->first_member;
+                frame->field = sym->first_member;
             }
             else
             {
@@ -1393,14 +1408,14 @@ static int di_fill_frame(DInitFrame* frame,
                 {
                     return parser_ferror(rc, "error: invalid array designator for struct/union\n");
                 }
-                frame->field = find_field_by_name(sym->def, designator->field, elab->p->expr_seqs.data);
+                frame->field = find_field_by_name(sym, designator->field);
                 if (!frame->field)
                 {
                     return parser_ferror(rc, "error: field not found in structure: '%s'\n", designator->field);
                 }
             }
-            frame->offset = offset + frame->field->sym->frame_offset;
-            typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, &frame->ty, frame->field);
+            frame->offset = offset + frame->field->frame_offset;
+            typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, &frame->ty, frame->field->def);
             typestr_strip_cvr(&frame->ty);
             return 0;
         }
@@ -1443,14 +1458,14 @@ loop:;
     }
     else
     {
-        const size_t prev_field_offset = back->field->sym->frame_offset;
+        const size_t prev_field_offset = back->field->frame_offset;
         if (back->is_union)
             back->field = NULL;
         else
-            back->field = back->field->sym->next_field;
+            back->field = back->field->next_field;
         if (back->field == NULL) goto pop;
-        back->offset += back->field->sym->frame_offset - prev_field_offset;
-        typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, &back->ty, back->field);
+        back->offset += back->field->frame_offset - prev_field_offset;
+        typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, &back->ty, back->field->def);
         typestr_strip_cvr(&back->ty);
     }
 }
@@ -1509,7 +1524,7 @@ static void elaborate_init_ty_AstInit(struct Elaborator* elab, size_t offset, co
             }
             typestr_implicit_conversion(elab->types, &init->init->tok->rc, &ts, &back->ty);
             init->offset = back->offset;
-            init->sizing = typestr_calc_sizing(elab, &back->ty);
+            init->sizing = typestr_calc_sizing(elab, &back->ty, &init->init->tok->rc);
         }
     }
 
@@ -1777,7 +1792,7 @@ static void elaborate_expr(struct Elaborator* elab,
                     const struct TypeStr* orig_tt_arg = (struct TypeStr*)elab->types->fn_args.data + i + args_fn_offset;
                     typestr_implicit_conversion(elab->types, &arg_expr->tok->rc, &arg_expr_ty, orig_tt_arg);
                     ((struct ParamConversion*)elab->param_conversions.data + i + args_fn_offset)->sizing =
-                        typestr_calc_sizing(elab, orig_tt_arg);
+                        typestr_calc_sizing(elab, orig_tt_arg, &arg_expr->tok->rc);
                 }
                 else
                 {
@@ -1807,16 +1822,19 @@ static void elaborate_expr(struct Elaborator* elab,
                 if (sym->def)
                 {
                     // find field in decl
-                    struct Decl* field =
-                        find_field_by_name(sym->def, e->fieldname, (struct Decl* const*)elab->p->expr_seqs.data);
+                    Symbol* field = find_field_by_name(sym, e->fieldname);
                     if (field)
                     {
-                        e->sym = field->sym;
-                        typestr_from_decltype(elab->p->expr_seqs.data, elab->types, rty, field->type);
+                        e->sym = field;
+                        typestr_from_decltype(elab->p->expr_seqs.data, elab->types, rty, field->def->type);
                         typestr_add_cvr(rty, cvr_mask);
                     }
                     else
                     {
+                        DeclSpecs* first_spec = sym->last_decl;
+                        while (first_spec->prev_decl)
+                            first_spec = first_spec->prev_decl;
+
                         struct Array buf = {0};
                         typestr_fmt(elab->types, rty, &buf);
                         array_push_byte(&buf, 0);
@@ -1852,7 +1870,7 @@ static void elaborate_expr(struct Elaborator* elab,
         default: parser_tok_error(NULL, "error: unknown expr kind: %s\n", ast_kind_to_string(top_expr->kind)); return;
     }
 
-    top_expr->sizing = typestr_calc_sizing(elab, rty);
+    top_expr->sizing = typestr_calc_sizing(elab, rty, &top_expr->tok->rc);
 }
 
 static __forceinline size_t round_to_alignment(size_t size, size_t align)
@@ -1928,12 +1946,12 @@ static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
                 if (end - begin < fn->extent) abort();
                 for (size_t i = 0; i < fn->extent; ++i)
                 {
-                    paramcvs[fn->offset + i].sizing =
-                        typestr_calc_sizing(elab, (struct TypeStr*)elab->types->fn_args.data + begin + i);
+                    paramcvs[fn->offset + i].sizing = typestr_calc_sizing(
+                        elab, (struct TypeStr*)elab->types->fn_args.data + begin + i, &decl->tok->rc);
                 }
                 TypeStr ts = sym->type;
                 typestr_pop_offset(&ts);
-                sym->fn_ret_sizing = typestr_calc_sizing(elab, &ts);
+                sym->fn_ret_sizing = typestr_calc_sizing(elab, &ts, &decl->tok->rc);
             }
             if (decl->init)
             {
@@ -1941,7 +1959,7 @@ static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
             }
             if (tyb == TYPE_BYTE_UNK_ARRAY)
             {
-                const size_t elem_size = typestr_get_size_i(elab, &sym->type, sym->type.buf[0] - 1);
+                const size_t elem_size = typestr_get_size_i(elab, &sym->type, sym->type.buf[0] - 1, &decl->tok->rc);
                 if (!decl->init)
                 {
                     UNWRAP(parser_tok_error(
@@ -1973,7 +1991,7 @@ static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
                 }
             }
 
-            sym->size = typestr_get_size(elab, &sym->type);
+            sym->size = typestr_get_size(elab, &sym->type, &decl->tok->rc);
             sym->align = typestr_get_align(elab, &sym->type);
 
             if (sym->size == 0)
@@ -2059,11 +2077,12 @@ static int elaborate_declspecs(struct Elaborator* elab, struct DeclSpecs* specs)
         {
             // struct/union definition
             struct StmtBlock* block = specs->suinit;
+            block->elaborated = 1;
 
             size_t struct_align = 1;
             size_t struct_size = 0;
 
-            struct Decl** p_next_decl = &specs->first_member;
+            Symbol** p_next_decl = &specs->sym->first_member;
 
             struct Ast** const seqs = elab->p->expr_seqs.data;
             for (size_t i = 0; i < block->extent; ++i)
@@ -2071,21 +2090,12 @@ static int elaborate_declspecs(struct Elaborator* elab, struct DeclSpecs* specs)
                 if (seqs[i + block->offset]->kind != STMT_DECLS) abort();
                 struct StmtDecls* decls = (struct StmtDecls*)seqs[i + block->offset];
                 UNWRAP(elaborate_declspecs(elab, decls->specs));
-                if (decls->extent == 0 && !decls->specs->name)
-                {
-                    // nested anonymous struct/union
-                    *p_next_decl = decls->specs->first_member;
-                    while ((*p_next_decl)->sym->next_field)
-                    {
-                        p_next_decl = &(*p_next_decl)->sym->next_field;
-                    }
-                }
                 for (size_t j = 0; j < decls->extent; ++j)
                 {
                     if (seqs[decls->offset + j]->kind != AST_DECL) abort();
                     struct Decl* field = (struct Decl*)seqs[decls->offset + j];
                     UNWRAP(elaborate_decl(elab, field));
-                    *p_next_decl = field;
+                    *p_next_decl = field->sym;
                     p_next_decl = &field->sym->next_field;
                     if (field->type || !field->sym->name)
                     {
@@ -2111,6 +2121,8 @@ static int elaborate_declspecs(struct Elaborator* elab, struct DeclSpecs* specs)
                 }
             }
 
+            if (!specs->sym->first_member) abort();
+
             if (struct_size == 0) struct_size = 1;
             struct_size = round_to_alignment(struct_size, struct_align);
             specs->sym->align = struct_align;
@@ -2119,6 +2131,7 @@ static int elaborate_declspecs(struct Elaborator* elab, struct DeclSpecs* specs)
     }
 
 fail:
+
     return rc;
 }
 
