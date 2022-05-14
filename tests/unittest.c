@@ -11,4 +11,5 @@ void unittest_print_stack(const struct TestState* state)
     {
         fprintf(stderr, "%s:%zu: from %s\n", frames[i].file, frames[i].line, frames[i].func);
     }
+    fprintf(stderr, "%.*s", (int)state->info.sz, (char*)state->info.data);
 }

@@ -570,7 +570,7 @@ static void typestr_append_decltype_DeclSpecs(const struct Ast* const* expr_seqs
 {
     if (d->_typedef)
     {
-        return typestr_append_decltype(expr_seqs, tt, s, &d->_typedef->last_decl->ast);
+        typestr_append_decltype(expr_seqs, tt, s, &d->_typedef->last_decl->ast);
     }
     else if (d->sym)
     {
@@ -865,8 +865,7 @@ static int32_t typestr_calc_sizing(struct Elaborator* elab, const struct TypeStr
 
 static Symbol* find_field_by_name(TypeSymbol* def, const char* fieldname)
 {
-    Symbol* field = def->first_member;
-    while (field)
+    for (Symbol* field = def->first_member; field; field = field->next_field)
     {
         if (!field->name)
         {
@@ -876,10 +875,11 @@ static Symbol* find_field_by_name(TypeSymbol* def, const char* fieldname)
                 Symbol* inner_field = find_field_by_name(field->def->specs->sym, fieldname);
                 if (inner_field) return inner_field;
             }
-            continue;
         }
-        if (strcmp(field->name, fieldname) == 0) return field;
-        field = field->next_field;
+        else
+        {
+            if (strcmp(field->name, fieldname) == 0) return field;
+        }
     }
     return NULL;
 }
@@ -1399,6 +1399,7 @@ static int di_fill_frame(DInitFrame* frame,
             if (designator_idx == SIZE_MAX)
             {
                 frame->field = sym->first_member;
+                if (!frame->field) return 1;
             }
             else
             {
@@ -1953,7 +1954,7 @@ static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
                 typestr_pop_offset(&ts);
                 sym->fn_ret_sizing = typestr_calc_sizing(elab, &ts, &decl->tok->rc);
             }
-            if (decl->init)
+            if (decl->init && !sym->is_enum_constant)
             {
                 elaborate_init(elab, 0, decl, decl->init);
             }
@@ -1991,7 +1992,7 @@ static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
                 }
             }
 
-            sym->size = typestr_get_size(elab, &sym->type, &decl->tok->rc);
+            sym->size = typestr_get_size(elab, &sym->type, decl->tok ? &decl->tok->rc : &decl->specs->tok->rc);
             sym->align = typestr_get_align(elab, &sym->type);
 
             if (sym->size == 0)
@@ -2058,6 +2059,7 @@ static int elaborate_declspecs(struct Elaborator* elab, struct DeclSpecs* specs)
             {
                 if (seqs[i + block->offset]->kind != AST_DECL) abort();
                 struct Decl* edecl = (struct Decl*)seqs[i + block->offset];
+                UNWRAP(elaborate_decl(elab, edecl));
                 if (edecl->init)
                 {
                     if (!ast_kind_is_expr(edecl->init->kind))
@@ -2070,7 +2072,6 @@ static int elaborate_declspecs(struct Elaborator* elab, struct DeclSpecs* specs)
                 {
                     edecl->sym->enum_value = enum_value++;
                 }
-                edecl->sym->is_enum_constant = 1;
             }
         }
         else if (specs->suinit)
@@ -2121,7 +2122,10 @@ static int elaborate_declspecs(struct Elaborator* elab, struct DeclSpecs* specs)
                 }
             }
 
-            if (!specs->sym->first_member) abort();
+            if (!specs->sym->first_member)
+            {
+                return parser_tok_error(block->tok, "error: structures must have at least one member field\n");
+            }
 
             if (struct_size == 0) struct_size = 1;
             struct_size = round_to_alignment(struct_size, struct_align);

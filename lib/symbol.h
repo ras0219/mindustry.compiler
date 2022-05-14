@@ -5,6 +5,7 @@
 
 typedef struct Attribute
 {
+    char ch;
 } Attribute;
 
 typedef struct TypeSymbol
@@ -109,6 +110,7 @@ typedef struct Symbol
     Decl* last_decl;
     Decl* def;
     struct Symbol* next_field;
+    unsigned int is_enum_constant : 1;
 
     // 0 means not an argument, 1 means first argument, etc
     unsigned int arg_index;
@@ -120,9 +122,11 @@ typedef struct Symbol
     size_t size;
     size_t align;
 
-    unsigned int is_enum_constant : 1;
     int enum_value;
 
     // backend information
-    size_t frame_offset;
+
+    /// For objects, this is the offset into the stack frame where the object resides
+    /// For functions, this is the offset of the saved %rdi pointer
+    int frame_offset;
 } Symbol;

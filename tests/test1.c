@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include "ast.h"
+#include "be.h"
 #include "cg.h"
 #include "elaborator.h"
 #include "errors.h"
@@ -9,6 +10,7 @@
 #include "preproc.h"
 #include "stdlibe.h"
 #include "symbol.h"
+#include "tac.h"
 #include "unittest.h"
 #include "unwrap.h"
 
@@ -121,12 +123,20 @@ fail:
     preproc_free(pp);
     return 1;
 }
+
 typedef struct StandardTest
 {
     struct Parser* parser;
     struct Preprocessor* pp;
     struct Elaborator* elab;
 } StandardTest;
+
+typedef struct BETest
+{
+    StandardTest base;
+    struct BackEnd* be;
+    struct CodeGen* cg;
+} BETest;
 
 static int stdtest_run(struct TestState* state, struct StandardTest* test, const char* text)
 {
@@ -151,6 +161,39 @@ static void stdtest_destroy(struct StandardTest* test)
     }
     if (test->parser) parser_destroy(test->parser), my_free(test->parser);
     if (test->pp) preproc_free(test->pp);
+}
+
+static int betest_run(struct TestState* state, BETest* test, const char* text)
+{
+    test->be = NULL;
+    test->cg = NULL;
+    if (stdtest_run(state, &test->base, text)) return 1;
+    test->be = my_malloc(sizeof(struct BackEnd));
+    test->cg = my_malloc(sizeof(struct CodeGen));
+    be_init(test->be, test->base.parser, test->base.elab, test->cg);
+    cg_init(test->cg);
+
+    struct Expr** exprs = test->base.parser->expr_seqs.data;
+    REQUIRE(0 < test->base.parser->top->extent);
+    REQUIRE_EXPR(StmtDecls, decls, exprs[test->base.parser->top->offset + test->base.parser->top->extent - 1])
+    {
+        REQUIRE(0 < decls->extent);
+        REQUIRE_EXPR(Decl, decl, exprs[decls->offset + decls->extent - 1])
+        {
+            return be_compile_decl(test->be, decl);
+            ;
+        }
+    }
+    return 0;
+fail:
+    return 1;
+}
+
+static void betest_destroy(struct BETest* test)
+{
+    stdtest_destroy(&test->base);
+    if (test->be) be_destroy(test->be), my_free(test->be);
+    if (test->cg) cg_destroy(test->cg), my_free(test->cg);
 }
 
 int parse_main(struct TestState* state)
@@ -979,10 +1022,262 @@ fail:
     return rc;
 }
 
+int parse_enums(struct TestState* state)
+{
+    int rc = 1;
+    StandardTest test;
+    SUBTEST(stdtest_run(state,
+                        &test,
+                        "enum A { a1 = 5, a2, a3 };\n"
+                        "typedef struct { enum A a; } W;"
+                        "int main() {\n"
+                        "enum A x = a3;\n"
+                        "int y = (x == a2);\n"
+                        "if ((unsigned int)y == a1)\n"
+                        "  sizeof(enum A);\n"
+                        "W w, *pw = &w;\n"
+                        "pw->a = a1;\n"
+                        "}\n"));
+    rc = 0;
+
+    struct Expr** const exprs = (struct Expr**)test.parser->expr_seqs.data;
+    REQUIRE_EQ(3, test.parser->top->extent);
+    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->offset])
+    {
+        REQUIRE_EQ(0, decls->extent);
+        REQUIRE(decls->specs->enum_init);
+        REQUIRE_EQ(3, decls->specs->enum_init->extent);
+        REQUIRE_EXPR(Decl, w, exprs[decls->specs->enum_init->offset])
+        {
+            REQUIRE_EQ(5, w->sym->enum_value);
+            REQUIRE_PTR_EQ(w, w->sym->def);
+            REQUIRE_EQ(4, w->sym->size);
+        }
+    }
+
+fail:
+    stdtest_destroy(&test);
+    return rc;
+}
+
+int parse_aggregates(struct TestState* state)
+{
+    int rc = 1;
+    StandardTest test;
+    SUBTEST(stdtest_run(state,
+                        &test,
+                        "struct A {\n"
+                        "struct {\n"
+                        "long l; char c;\n"
+                        "};\n"
+                        "};"));
+    rc = 0;
+fail:
+    stdtest_destroy(&test);
+    return rc;
+}
+
+int parse_ptrconvert(struct TestState* state)
+{
+    int rc = 1;
+    StandardTest test;
+    SUBTEST(stdtest_run(state,
+                        &test,
+                        "typedef int Int;"
+                        "int bar(int* i);\n"
+                        "int foo(const Int* i);\n"
+                        "int main() {\n"
+                        "int *x = (void*)0;\n"
+                        "foo(x);\n"
+                        "bar(x);\n"
+                        "const int *y = (void*)0;\n"
+                        "foo(y);\n"
+                        "}\n"));
+    rc = 0;
+fail:
+    stdtest_destroy(&test);
+    return rc;
+}
+
+#define REQUIRE_ENUM(expected, actual, stringify)                                                                      \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        state->assertions++;                                                                                           \
+        int _expr_a = (expected);                                                                                      \
+        int _expr_b = (actual);                                                                                        \
+        if (_expr_a != _expr_b)                                                                                        \
+        {                                                                                                              \
+            unittest_print_stack(state);                                                                               \
+            fprintf(stderr,                                                                                            \
+                    "%s:%d: error: '%s == %s' was '%s == %s'\n",                                                       \
+                    __FILE__,                                                                                          \
+                    __LINE__,                                                                                          \
+                    STRINGIFY(expected),                                                                               \
+                    STRINGIFY(actual),                                                                                 \
+                    (stringify)(_expr_a),                                                                              \
+                    (stringify)(_expr_b));                                                                             \
+            state->assertionfails++;                                                                                   \
+            goto fail;                                                                                                 \
+        }                                                                                                              \
+    } while (0)
+
+#define REQUIRE_TACO(expected, actual) REQUIRE_ENUM(expected, actual, taco_to_string)
+#define REQUIRE_TACA(expected, actual) REQUIRE_ENUM(expected, actual, taca_to_string)
+
+void array_append_taca(Array* arr, struct TACAddress* addr)
+{
+    array_push_byte(arr, '{');
+    array_appends(arr, taca_to_string(addr->kind));
+    if (addr->is_addr) array_appends(arr, ", .is_addr = 1");
+    if (addr->sizing != 0) array_appendf(arr, ", .sizing = %d", addr->sizing);
+    switch (addr->kind)
+    {
+        case TACA_FRAME: array_appendf(arr, ", .frame_offset = %d}", addr->frame_offset); break;
+        case TACA_IMM: array_appendf(arr, ", .imm = %zu}", addr->imm); break;
+        case TACA_ARG: array_appendf(arr, ", .arg_idx = %zu}", addr->arg_idx); break;
+        case TACA_REG: array_appendf(arr, ", .reg = %s}", register_to_string(addr->reg)); break;
+        case TACA_VOID: array_push_byte(arr, '}'); break;
+        default: array_appendf(arr, ", unimplemented = %p}", addr); break;
+    }
+}
+
+int require_taca(TestState* state, struct TACAddress* expected, struct TACAddress* actual)
+{
+    struct Array buf_expected = {0};
+    struct Array buf_actual = {0};
+    array_append_taca(&buf_expected, expected);
+    array_push_byte(&buf_expected, 0);
+    array_append_taca(&buf_actual, actual);
+    array_push_byte(&buf_actual, 0);
+    REQUIRE_STR_EQ(buf_expected.data, buf_actual.data);
+    return 0;
+fail:
+    return 1;
+}
+
+int require_tace(TestState* state, struct TACEntry* expected, struct TACEntry* actual)
+{
+    int rc = 0;
+    REQUIRE_TACO(expected->op, actual->op);
+    INFO("arg1\n", 1) { rc |= require_taca(state, &expected->arg1, &actual->arg1); }
+    INFO("arg2\n", 2) { rc |= require_taca(state, &expected->arg2, &actual->arg2); }
+    return 0;
+fail:
+    return 1;
+}
+
+#define REQUIRE_TACES()                                                                                                \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        struct TACEntry* data = test.be->code.data;                                                                    \
+        const size_t actual_sz = array_size(&test.be->code, sizeof(struct TACEntry));                                  \
+        const size_t expected_sz = sizeof(expected) / sizeof(expected[0]);                                             \
+        size_t sz = actual_sz;                                                                                         \
+        if (sz > expected_sz) sz = expected_sz;                                                                        \
+        for (size_t i = 0; i < sz; ++i)                                                                                \
+        {                                                                                                              \
+            INFO("index %zu\n", i) { SUBTEST(require_tace(state, expected + i, data + i)); }                           \
+        }                                                                                                              \
+        REQUIRE_EQ(expected_sz, actual_sz);                                                                            \
+    } while (0)
+
+int test_be_simple(TestState* state)
+{
+    int rc = 1;
+    BETest test;
+    SUBTEST(betest_run(state, &test, "int main() { return 42; }"));
+
+    struct TACEntry expected[] = {
+        {.op = TACO_ASSIGN,
+         .arg1 = {TACA_REG, .sizing = -4, .reg = REG_RAX},
+         .arg2 = {TACA_IMM, .sizing = -4, .imm = 42}},
+        {.op = TACO_RETURN},
+    };
+
+    REQUIRE_TACES();
+
+    rc = 0;
+fail:
+    betest_destroy(&test);
+    return rc;
+}
+
+int test_be_simple2(TestState* state)
+{
+    int rc = 1;
+    BETest test;
+    SUBTEST(betest_run(state, &test, "int main(int argc, char** argv) { return argc; }"));
+
+    struct TACEntry expected[] = {
+        {.op = TACO_ASSIGN,
+         .arg1 = {TACA_FRAME, .sizing = 4, .frame_offset = 0},
+         .arg2 = {TACA_REG, .sizing = 4, .reg = REG_RDI}},
+        {.op = TACO_ASSIGN,
+         .arg1 = {TACA_FRAME, .sizing = 8, .frame_offset = 8},
+         .arg2 = {TACA_REG, .sizing = 8, .reg = REG_RSI}},
+        {.op = TACO_ASSIGN,
+         .arg1 = {TACA_REG, .sizing = -4, .reg = REG_RAX},
+         .arg2 = {TACA_FRAME, .sizing = -4, .frame_offset = 0}},
+        {.op = TACO_RETURN},
+    };
+    REQUIRE_TACES();
+
+    rc = 0;
+fail:
+    betest_destroy(&test);
+    return rc;
+}
+
+int test_be_memory_ret(TestState* state)
+{
+    int rc = 1;
+    BETest test;
+    SUBTEST(betest_run(state,
+                       &test,
+                       "struct A { char buf[32]; };\n"
+                       "struct A main(int n, void* v, struct A m) { return m; }"));
+
+    struct TACEntry expected[] = {
+        {.op = TACO_ASSIGN,
+         .arg1 = {TACA_FRAME, .sizing = 8, .frame_offset = 0},
+         .arg2 = {TACA_REG, .sizing = 8, .reg = REG_RDI}},
+        {.op = TACO_ASSIGN,
+         .arg1 = {TACA_FRAME, .sizing = 4, .frame_offset = 8},
+         .arg2 = {TACA_REG, .sizing = 4, .reg = REG_RSI}},
+        {.op = TACO_ASSIGN,
+         .arg1 = {TACA_FRAME, .sizing = 8, .frame_offset = 16},
+         .arg2 = {TACA_REG, .sizing = 8, .reg = REG_RDX}},
+        {.op = TACO_ASSIGN,
+         .arg1 = {TACA_FRAME, .is_addr = 1, .sizing = 8, .frame_offset = 0},
+         .arg2 = {TACA_FRAME, .sizing = 32, .frame_offset = -40}},
+        {.op = TACO_ASSIGN,
+         .arg1 = {TACA_REG, .sizing = 8, .reg = REG_RAX},
+         .arg2 = {TACA_FRAME, .sizing = 8, .frame_offset = 0}},
+        {.op = TACO_RETURN},
+    };
+    REQUIRE_TACES();
+
+    rc = 0;
+fail:
+    betest_destroy(&test);
+    return rc;
+}
+
 int main()
 {
-    struct TestState _state = {};
+    struct TestState _state = {.colorsuc = "", .colorerr = "", .colorreset = ""};
     struct TestState* state = &_state;
+
+    const char* const clicolorforce = getenv("CLICOLOR_FORCE");
+    const char* const clicolor = getenv("CLICOLOR");
+
+    if (clicolorforce && 0 != strcmp(clicolorforce, "0") || !clicolor || 0 != strcmp(clicolor, "0"))
+    {
+        _state.colorsuc = "\033[32;1m";
+        _state.colorerr = "\033[31;1m";
+        _state.colorreset = "\033[m";
+    }
+
     RUN_TEST(preproc_ternary);
     RUN_TEST(parse_main);
     RUN_TEST(parse_body);
@@ -1003,24 +1298,22 @@ int main()
     RUN_TEST(parse_initializer_expr_sue);
     RUN_TEST(parse_initializer_expr_designated);
     RUN_TEST(parse_fn_ptr_conversion);
+    RUN_TEST(parse_enums);
+    RUN_TEST(parse_aggregates);
+    RUN_TEST(parse_ptrconvert);
+    RUN_TEST(test_be_simple);
+    RUN_TEST(test_be_simple2);
+    RUN_TEST(test_be_memory_ret);
 
-    const char* const clicolorforce = getenv("CLICOLOR_FORCE");
-    const char* const clicolor = getenv("CLICOLOR");
-    const char* color = "";
+    const char* color = (state->testfails + state->assertionfails == 0) ? _state.colorsuc : _state.colorerr;
 
-    if (clicolorforce && 0 != strcmp(clicolorforce, "0") || !clicolor || 0 != strcmp(clicolor, "0"))
-    {
-        if (state->testfails + state->assertionfails == 0)
-            color = "\033[32;1m";
-        else
-            color = "\033[31;1m";
-    }
-    printf("%s%d tests. %d failed. %d assertions. %d failed.\033[m\n",
+    printf("%s%d tests. %d failed. %d assertions. %d failed.%s\n",
            color,
            state->tests,
            state->testfails,
            state->assertions,
-           state->assertionfails);
+           state->assertionfails,
+           _state.colorreset);
 
     return state->testfails > 0 || state->assertionfails > 0;
 }

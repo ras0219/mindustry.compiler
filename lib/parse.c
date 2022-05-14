@@ -1157,6 +1157,8 @@ static const struct Token* parse_enum_body(struct Parser* p, const struct Token*
         enumerator->sym = pool_alloc_zeroes(&p->sym_pool, sizeof(Symbol));
         enumerator->sym->name = token_str(p, decl.tok);
         enumerator->sym->last_decl = enumerator;
+        enumerator->sym->def = enumerator;
+        enumerator->sym->is_enum_constant = 1;
         scope_insert(&p->scope, enumerator->sym, enumerator->sym->name);
         arrptr_push(&decls, enumerator);
         if (cur_tok->type == TOKEN_SYM1(','))
@@ -1466,6 +1468,7 @@ static const struct Token* parse_stmt_decl(Parser* p, const struct Token* cur_to
                     {
                         // Inject anonymous declarations into suinit bodies
                         Decl* anon_decl = parse_alloc_decl(p, decls->specs);
+                        anon_decl->type = &decls->specs->ast;
                         decls->offset = array_size(&p->expr_seqs, sizeof(void*));
                         decls->extent = 1;
                         arrptr_push(&p->expr_seqs, anon_decl);

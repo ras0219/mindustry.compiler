@@ -32,7 +32,14 @@ const char* taco_to_string(enum TACOKind k)
         default: abort();
     }
 }
-
+const char* register_to_string(enum Register k)
+{
+    switch (k)
+    {
+        X_REGISTER(Y)
+        default: abort();
+    }
+}
 #undef Y
 static const struct TACAddress s_taca_void = {};
 
@@ -42,12 +49,20 @@ static __forceinline size_t round_to_alignment(size_t size, size_t align)
     return n - (n % align);
 }
 
+static __forceinline size_t be_frame_alloc(struct BackEnd* be, size_t size, size_t align)
+{
+    size_t r = round_to_alignment(be->frame_size, align);
+    be->frame_size = r + size;
+    if (be->max_frame_size < be->frame_size) be->max_frame_size = be->frame_size;
+    return r;
+}
+
 __forceinline static struct TACAddress taca_imm(size_t imm)
 {
     struct TACAddress ret = {
         .kind = TACA_IMM,
         .imm = imm,
-        .sizing = 8,
+        .sizing = -4,
     };
     return ret;
 }
@@ -87,7 +102,6 @@ void be_init(struct BackEnd* be, struct Parser* p, struct Elaborator* e, struct 
     be->parser = p;
     be->elab = e;
     be->cg = cg;
-    be->debug_taces = 1;
 }
 
 static struct TACAddress be_push_tace(struct BackEnd* be, const struct TACEntry* e, int32_t sizing)
@@ -95,8 +109,8 @@ static struct TACAddress be_push_tace(struct BackEnd* be, const struct TACEntry*
     const size_t offset = array_size(&be->code, sizeof(struct TACEntry));
     array_push(&be->code, e, sizeof(struct TACEntry));
     if (e->op == TACO_ASSIGN && e->arg2.kind == TACA_VOID) abort();
-    if (!e->arg1.is_addr && e->arg1.sizing > 8 && e->op != TACO_LOAD) abort();
-    if (!e->arg2.is_addr && e->arg2.sizing > 8 && e->op != TACO_ASSIGN && e->op != TACO_LOAD) abort();
+    if (!e->arg1.is_addr && e->arg1.sizing > 8 && e->arg1.kind == TACA_REG) abort();
+    if (!e->arg2.is_addr && e->arg2.sizing > 8 && e->arg2.kind == TACA_REG) abort();
     if (e->arg2.sizing == 0 && (e->arg2.kind != TACA_VOID && e->arg2.kind != TACA_ALABEL))
     {
         parser_ferror(e->rc, "0 sized arg\n");
@@ -391,6 +405,7 @@ static int be_compile_ExprRef(struct BackEnd* be, struct ExprRef* esym, struct T
     {
         out->kind = TACA_IMM;
         out->imm = esym->sym->enum_value;
+        out->sizing = -4;
     }
     else
     {
@@ -440,6 +455,7 @@ static int be_compile_ExprCall(struct BackEnd* be, struct ExprCall* e, struct TA
     {
         param.arg1 = ((struct TACAddress*)param_addr.data)[i - 1];
         param.arg2.param_idx = i - 1 + ret_is_memory;
+        param.arg2.param_memory = param.arg1.sizing > 8 || param.arg2.param_idx >= 6;
         be_push_tace(be, &param, 0);
     }
 
@@ -611,6 +627,19 @@ static int be_compile_ExprBuiltin(struct BackEnd* be, struct ExprBuiltin* e, str
             tace.arg1.frame_offset += 8;
             tace.arg1.sizing = 8;
             tace.arg2.arg_idx = 0;
+            be_push_tace(be, &tace, 0);
+            *out = s_taca_void;
+            break;
+        case LEX_UUVA_COPY:
+            tace.op = TACO_ASSIGN;
+            UNWRAP(be_compile_lvalue(be, e->expr1, &tace.arg1));
+            if (tace.arg1.kind != TACA_FRAME || !tace.arg1.is_addr)
+                UNWRAP(
+                    parser_tok_error(e->tok, "error: first argument of __builtin_va_copy must be a local variable\n"));
+            UNWRAP(be_compile_expr(be, e->expr2, &tace.arg2));
+            if (tace.arg2.kind != TACA_FRAME)
+                UNWRAP(
+                    parser_tok_error(e->tok, "error: second argument of __builtin_va_copy must be a local variable\n"));
             be_push_tace(be, &tace, 0);
             *out = s_taca_void;
             break;
@@ -939,7 +968,30 @@ static int be_compile_StmtReturn(struct BackEnd* be, struct StmtReturn* stmt)
     };
     if (stmt->expr)
     {
-        UNWRAP(be_compile_expr(be, stmt->expr, &entry.arg1));
+        if (stmt->expr->sizing > 8)
+        {
+            struct TACEntry retassign = {
+                .op = TACO_ASSIGN,
+                .arg1 = {TACA_FRAME, .sizing = 8, .frame_offset = 0, .is_addr = 1},
+            };
+            UNWRAP(be_compile_expr(be, stmt->expr, &retassign.arg2));
+            be_push_tace(be, &retassign, 0);
+            struct TACEntry retval = {
+                .op = TACO_ASSIGN,
+                .arg1 = {TACA_REG, .sizing = 8, .reg = REG_RAX},
+                .arg2 = {TACA_FRAME, .sizing = 8, .frame_offset = 0},
+            };
+            be_push_tace(be, &retval, 0);
+        }
+        else
+        {
+            struct TACEntry retval = {
+                .op = TACO_ASSIGN,
+                .arg1 = {TACA_REG, .sizing = stmt->expr->sizing, .reg = REG_RAX},
+            };
+            UNWRAP(be_compile_expr(be, stmt->expr, &retval.arg2));
+            be_push_tace(be, &retval, 0);
+        }
     }
     be_push_tace(be, &entry, 0);
 fail:
@@ -1193,15 +1245,114 @@ static void be_debug_print_taca(const struct TACAddress* addr)
             case TACA_CONST: snprintf(buf + i, sizeof(buf) - i, " %zu", addr->const_idx); break;
             case TACA_ALABEL: snprintf(buf + i, sizeof(buf) - i, " %zu", addr->alabel); break;
             case TACA_IMM: snprintf(buf + i, sizeof(buf) - i, " %zu", addr->imm); break;
-            case TACA_FRAME: snprintf(buf + i, sizeof(buf) - i, " %zu", addr->frame_offset); break;
+            case TACA_FRAME: snprintf(buf + i, sizeof(buf) - i, " %d", addr->frame_offset); break;
             case TACA_REF: snprintf(buf + i, sizeof(buf) - i, " %zu", addr->ref); break;
             case TACA_NAME: snprintf(buf + i, sizeof(buf) - i, " %s", addr->name); break;
-            case TACA_PARAM: snprintf(buf + i, sizeof(buf) - i, " %zu", addr->param_idx); break;
+            case TACA_PARAM: snprintf(buf + i, sizeof(buf) - i, " %d", addr->param_idx); break;
             case TACA_ARG: snprintf(buf + i, sizeof(buf) - i, " %zu", addr->arg_idx); break;
             default: break;
         }
     }
     printf("%-25s", buf);
+}
+
+// static const int s_ms_arg_reg[] = {REG_RCX, REG_RDX, REG_R8, REG_R9};
+static const int s_sysv_arg_reg[] = {REG_RDI, REG_RSI, REG_RDX, REG_RCX, REG_R8, REG_R9};
+
+int be_compile_decl(struct BackEnd* be, Decl* decl)
+{
+    int rc = 0;
+    array_clear(&be->code);
+    struct Decl* def = decl->sym->def ? decl->sym->def : decl;
+    if ((decl->type->kind == AST_DECLFN && !def->init) || def->specs->is_extern)
+    {
+        cg_declare_extern(be->cg, decl->sym->name);
+    }
+    else if (!decl->specs->is_static && !decl->specs->is_inline)
+    {
+        cg_declare_public(be->cg, decl->sym->name);
+    }
+    if (!decl->sym->name) abort();
+    if (decl->type->kind == AST_DECLFN)
+    {
+        struct DeclFn* declfn = (struct DeclFn*)decl->type;
+        if (decl->init)
+        {
+            cg_mark_label(be->cg, decl->sym->name);
+            be->frame_size = 0;
+            be->max_frame_size = 0;
+            be->cur_decl = decl;
+            be->cur_fn = declfn;
+
+            int j = 0;
+
+            if (declfn->is_varargs)
+            {
+                // reserve a va_list structure at beginning of frame
+                be->frame_size = 8 + 8 + 4 + 4;
+                be->max_frame_size = be->frame_size;
+            }
+
+            TACEntry save_arg = {
+                .op = TACO_ASSIGN,
+                .arg1 = {TACA_FRAME, .sizing = 8, .frame_offset = 0},
+                .arg2 = {TACA_REG, .sizing = 8, .reg = REG_RDI},
+            };
+            if (decl->sym->fn_ret_sizing > 8)
+            {
+                decl->sym->frame_offset = be_frame_alloc(be, 8, 8);
+                save_arg.arg1.frame_offset = decl->sym->frame_offset;
+                be_push_tace(be, &save_arg, 0);
+                ++j;
+            }
+
+            ssize_t memory_offset = -8;
+
+            Ast** const asts = be->parser->expr_seqs.data;
+            for (size_t i = 0; i < declfn->extent; ++i)
+            {
+                Ast* ast = asts[declfn->offset + i];
+                if (ast->kind != STMT_DECLS) abort();
+                StmtDecls* decls = (void*)ast;
+                if (decls->extent != 1) abort();
+                Ast* arg_ast = asts[decls->offset];
+                if (arg_ast->kind != AST_DECL) abort();
+                Decl* arg_decl = (void*)arg_ast;
+
+                if (arg_decl->sym->size > 8 || j >= 6)
+                {
+                    // class MEMORY
+                    int misalign = memory_offset % arg_decl->sym->align;
+                    if (misalign != 0) memory_offset -= misalign + arg_decl->sym->align;
+                    memory_offset -= arg_decl->sym->size;
+                    arg_decl->sym->frame_offset = memory_offset;
+                }
+                else
+                {
+                    // class INTEGER
+                    arg_decl->sym->frame_offset = be_frame_alloc(be, arg_decl->sym->size, arg_decl->sym->align);
+                    save_arg.arg1.sizing = arg_decl->sym->size;
+                    save_arg.arg1.frame_offset = arg_decl->sym->frame_offset;
+                    save_arg.arg2.sizing = arg_decl->sym->size;
+                    save_arg.arg2.reg = s_sysv_arg_reg[j];
+                    be_push_tace(be, &save_arg, 0);
+                    ++j;
+                }
+            }
+
+            UNWRAP(be_compile_stmt(be, decl->init));
+        }
+    }
+    else if (!decl->specs->is_extern)
+    {
+        // global variable
+        struct Array data = {};
+        array_push_zeroes(&data, decl->sym->size);
+        cg_reserve_data(be->cg, decl->sym->name, data.data, data.sz);
+    }
+
+fail:
+    return rc;
 }
 
 int be_compile(struct BackEnd* be)
@@ -1222,80 +1373,28 @@ int be_compile(struct BackEnd* be)
         {
             if (ast_seqs[decls->offset + j]->kind != AST_DECL) abort();
             struct Decl* decl = (struct Decl*)ast_seqs[decls->offset + j];
-            struct Decl* def = decl->sym->def ? decl->sym->def : decl;
-            if ((decl->type->kind == AST_DECLFN && !def->init) || def->specs->is_extern)
+            UNWRAP(be_compile_decl(be, decl));
+            if (be->code.sz)
             {
-                cg_declare_extern(be->cg, decl->sym->name);
-            }
-            else if (!decl->specs->is_static && !decl->specs->is_inline)
-            {
-                cg_declare_public(be->cg, decl->sym->name);
-            }
-            if (!decl->sym->name) abort();
-            if (decl->type->kind == AST_DECLFN)
-            {
-                struct DeclFn* declfn = (struct DeclFn*)decl->type;
-                if (decl->init)
+                if (be->debug_taces)
                 {
-                    cg_mark_label(be->cg, decl->sym->name);
-                    be->frame_size = 0;
-                    be->max_frame_size = 0;
-                    be->cur_decl = decl;
-                    be->cur_fn = declfn;
-
-                    size_t num_args = declfn->is_varargs ? 6 : declfn->extent;
-
-                    struct TACEntry entry = {.op = TACO_ARG};
-                    for (size_t i = 0; i < num_args; ++i)
+                    struct TACEntry* taces = (struct TACEntry*)be->code.data;
+                    for (size_t i = 0; i < array_size(&be->code, sizeof(struct TACEntry)); ++i)
                     {
-                        entry.arg1.kind = TACA_ARG;
-                        entry.arg1.arg_idx = i;
-                        if (i < declfn->extent)
-                            entry.arg1.sizing =
-                                ((struct ParamConversion*)be->elab->param_conversions.data + declfn->offset + i)
-                                    ->sizing;
-                        else
-                            entry.arg1.sizing = 8;
-                        if (entry.arg1.sizing > 8 || entry.arg1.sizing < -8 || entry.arg1.sizing == 0) abort();
-                        be_push_tace(be, &entry, 0);
+                        printf("%4zu: %-14s   ", i, taco_to_string(taces[i].op));
+                        be_debug_print_taca(&taces[i].arg1);
+                        printf("   ");
+                        be_debug_print_taca(&taces[i].arg2);
+                        printf("\n");
                     }
-
-                    if (declfn->is_varargs)
-                    {
-                        // reserve a va_list structure at beginning of frame
-                        be->frame_size += 8 + 8 + 4 + 4;
-                    }
-
-                    UNWRAP(be_compile_stmt(be, decl->init));
-
-                    if (be->debug_taces)
-                    {
-                        struct TACEntry* taces = (struct TACEntry*)be->code.data;
-                        for (size_t i = 0; i < array_size(&be->code, sizeof(struct TACEntry)); ++i)
-                        {
-                            printf("%4zu: %-14s   ", i, taco_to_string(taces[i].op));
-                            be_debug_print_taca(&taces[i].arg1);
-                            printf("   ");
-                            be_debug_print_taca(&taces[i].arg2);
-                            printf("\n");
-                        }
-                    }
-                    else
-                    {
-                        UNWRAP(cg_gen_taces(be->cg,
-                                            (struct TACEntry*)be->code.data,
-                                            array_size(&be->code, sizeof(struct TACEntry)),
-                                            be->max_frame_size));
-                    }
-                    array_clear(&be->code);
                 }
-            }
-            else if (!decl->specs->is_extern)
-            {
-                // global variable
-                struct Array data = {};
-                array_push_zeroes(&data, decl->sym->size);
-                cg_reserve_data(be->cg, decl->sym->name, data.data, data.sz);
+                else
+                {
+                    UNWRAP(cg_gen_taces(be->cg,
+                                        (struct TACEntry*)be->code.data,
+                                        array_size(&be->code, sizeof(struct TACEntry)),
+                                        be->max_frame_size));
+                }
             }
         }
     }

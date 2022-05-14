@@ -9,14 +9,18 @@ struct TestFrame
     size_t line;
 };
 
-struct TestState
+typedef struct TestState
 {
+    const char* colorsuc;
+    const char* colorerr;
+    const char* colorreset;
     int tests;
     int testfails;
     int assertions;
     int assertionfails;
     struct Array stack;
-};
+    struct Array info;
+} TestState;
 
 #define STRINGIFY_HELPER(X) #X
 #define STRINGIFY(X) STRINGIFY_HELPER(X)
@@ -35,6 +39,9 @@ struct TestState
 
 void unittest_print_stack(const struct TestState* state);
 
+#define REQUIRE_FAIL_IMPL(fmt, ...)                                                                                    \
+    fprintf(stderr, "%s%s:%d: error: " fmt "\n%s", state->colorerr, __FILE__, __LINE__, __VA_ARGS__, state->colorreset)
+
 #define REQUIRE_IMPL(expr, expr_str)                                                                                   \
     do                                                                                                                 \
     {                                                                                                                  \
@@ -43,7 +50,7 @@ void unittest_print_stack(const struct TestState* state);
         if (_expr_v)                                                                                                   \
         {                                                                                                              \
             unittest_print_stack(state);                                                                               \
-            fprintf(stderr, "%s:%d: error: '%s' was zero\n", __FILE__, __LINE__, expr_str);                            \
+            REQUIRE_FAIL_IMPL("error: '%s' was zero", expr_str);                                                       \
             state->assertionfails++;                                                                                   \
             goto fail;                                                                                                 \
         }                                                                                                              \
@@ -60,20 +67,30 @@ void unittest_print_stack(const struct TestState* state);
         if (_expr_a != _expr_b)                                                                                        \
         {                                                                                                              \
             unittest_print_stack(state);                                                                               \
-            fprintf(stderr,                                                                                            \
-                    "%s:%d: error: '%s == %s' was '%d == %d'\n",                                                       \
-                    __FILE__,                                                                                          \
-                    __LINE__,                                                                                          \
-                    expected_str,                                                                                      \
-                    actual_str,                                                                                        \
-                    _expr_a,                                                                                           \
-                    _expr_b);                                                                                          \
+            REQUIRE_FAIL_IMPL("error: '%s == %s' was '%d == %d'", expected_str, actual_str, _expr_a, _expr_b);         \
             state->assertionfails++;                                                                                   \
             goto fail;                                                                                                 \
         }                                                                                                              \
     } while (0)
 
 #define REQUIRE_EQ(expected, actual) REQUIRE_EQ_IMPL(expected, #expected, actual, #actual)
+
+#define REQUIRE_ZU_EQ_IMPL(expected, expected_str, actual, actual_str)                                                 \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        state->assertions++;                                                                                           \
+        size_t _expr_a = (expected);                                                                                   \
+        size_t _expr_b = (actual);                                                                                     \
+        if (_expr_a != _expr_b)                                                                                        \
+        {                                                                                                              \
+            unittest_print_stack(state);                                                                               \
+            REQUIRE_FAIL_IMPL("error: '%s == %s' was '%zu == %zu'", expected_str, actual_str, _expr_a, _expr_b);       \
+            state->assertionfails++;                                                                                   \
+            goto fail;                                                                                                 \
+        }                                                                                                              \
+    } while (0)
+
+#define REQUIRE_ZU_EQ(expected, actual) REQUIRE_ZU_EQ_IMPL(expected, #expected, actual, #actual)
 
 #define REQUIRE_PTR_EQ(expected, actual)                                                                               \
     do                                                                                                                 \
@@ -171,6 +188,32 @@ void unittest_print_stack(const struct TestState* state);
             }                                                                                                          \
             else                                                                                                       \
                 _with_ast_body##N:
+
+#define INFO_IMPL(N, _fmt, ...)                                                                                        \
+    if (1)                                                                                                             \
+    {                                                                                                                  \
+        goto _info_start##N;                                                                                           \
+    }                                                                                                                  \
+    else                                                                                                               \
+        for (size_t _info_pos;;)                                                                                       \
+            if (1)                                                                                                     \
+            {                                                                                                          \
+                state->info.sz = _info_pos;                                                                            \
+                break;                                                                                                 \
+            }                                                                                                          \
+            else if (1)                                                                                                \
+            {                                                                                                          \
+                _info_start##N:;                                                                                       \
+                _info_pos = state->info.sz;                                                                            \
+                array_appendf(&state->info, "%s:%d: info: ", __FILE__, __LINE__);                                      \
+                array_appendf(&state->info, _fmt, __VA_ARGS__);                                                        \
+                goto _info_body##N;                                                                                    \
+            }                                                                                                          \
+            else                                                                                                       \
+                _info_body##N:
+
+#define INFO2(N, fmt, ...) INFO_IMPL(N, fmt, __VA_ARGS__)
+#define INFO(fmt, ...) INFO2(__COUNTER__, fmt, __VA_ARGS__)
 
 #define REQUIRE_AST_IMPL1(_type, _var, _expr, _expr_type, _expr_str, N)                                                \
     REQUIRE_AST_IMPL(_type, _var, _expr, _expr_type, _expr_str, N)

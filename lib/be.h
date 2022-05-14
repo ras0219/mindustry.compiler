@@ -36,5 +36,6 @@ struct BackEnd
 };
 
 void be_init(struct BackEnd* be, struct Parser* p, struct Elaborator* e, struct CodeGen* cg);
+int be_compile_decl(struct BackEnd* be, struct Decl* decl);
 int be_compile(struct BackEnd* be);
 void be_destroy(struct BackEnd* be);

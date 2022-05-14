@@ -8,7 +8,13 @@ ASFLAGS=-g -c
 LD=gcc
 LDFLAGS=
 
+SRC=array.c ast.c autoheap.c be.c cg.c elaborator.c fe.c hash.c lex.c \
+	lex.c main.c parse.c parser_globals.c pool.c poolset.c preproc.c scope.c stringmap.c stringpool.c \
+	symbol.c typestr.c
+
 all: main.selfbuild
+
+asm: $(SRC:.c=.asm)
 
 main.asm: ../cli/main.c ${CC}
 	${CC} ${CFLAGS} $< -c -o $@
@@ -19,9 +25,7 @@ main.asm: ../cli/main.c ${CC}
 %.o: %.asm
 	${AS} ${ASFLAGS} $< -o $@
 
-main.selfbuild: array.o ast.o autoheap.o be.o cg.o elaborator.o fe.o hash.o lex.o \
-		lex.o main.o parse.o parser_globals.o pool.o poolset.o preproc.o scope.o stringmap.o stringpool.o \
-		symbol.o typestr.o
+main.selfbuild: $(SRC:.c=.o)
 	${LD} ${LDFLAGS} $^ -o $@
 
 clean:

@@ -52,7 +52,8 @@
     Y(TACA_TEMP)                                                                                                       \
     Y(TACA_REF)                                                                                                        \
     Y(TACA_CONST)                                                                                                      \
-    Y(TACA_PARAM)
+    Y(TACA_PARAM)                                                                                                      \
+    Y(TACA_REG)
 
 #define Y_SUM(Z) +1
 #define Y_COMMA(Z) Z,
@@ -71,11 +72,27 @@ enum TACAKind
 {
     X_TACA_KIND(Y_COMMA)
 };
+
+#define X_REGISTER(Y)                                                                                                  \
+    Y(REG_RAX)                                                                                                         \
+    Y(REG_RBX)                                                                                                         \
+    Y(REG_RCX)                                                                                                         \
+    Y(REG_RDX)                                                                                                         \
+    Y(REG_RDI)                                                                                                         \
+    Y(REG_RSI)                                                                                                         \
+    Y(REG_R8)                                                                                                          \
+    Y(REG_R9)
+enum Register
+{
+    X_REGISTER(Y_COMMA)
+};
+
 #undef Y_COMMA
 #undef Y_SUM
 
 const char* taca_to_string(enum TACAKind k);
 const char* taco_to_string(enum TACOKind k);
+const char* register_to_string(enum Register k);
 
 struct TACAddress
 {
@@ -87,18 +104,23 @@ struct TACAddress
         const char* literal;
         const char* name;
         size_t imm;
-        size_t param_idx;
+        struct
+        {
+            size_t param_idx : 16;
+            size_t param_memory : 1;
+        };
+        size_t reg;
         size_t ref;
         size_t const_idx;
         size_t arg_idx;
-        size_t frame_offset;
+        int frame_offset;
         size_t alabel;
     };
 };
 
-struct TACEntry
+typedef struct TACEntry
 {
     enum TACOKind op;
     struct TACAddress arg1, arg2;
     const struct RowCol* rc;
-};
+} TACEntry;
