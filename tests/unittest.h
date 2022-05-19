@@ -39,21 +39,23 @@ typedef struct TestState
 
 void unittest_print_stack(const struct TestState* state);
 
-#define REQUIRE_FAIL_IMPL(fmt, ...)                                                                                    \
-    fprintf(stderr, "%s%s:%d: error: " fmt "\n%s", state->colorerr, __FILE__, __LINE__, __VA_ARGS__, state->colorreset)
+#define REQUIRE_FAIL_IMPL(file, line, fmt, ...)                                                                        \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        unittest_print_stack(state);                                                                                   \
+        fprintf(stderr, "%s%s:%d: error: " fmt "\n%s", state->colorerr, file, line, __VA_ARGS__, state->colorreset);   \
+        state->assertionfails++;                                                                                       \
+        goto fail;                                                                                                     \
+    } while (0)
+
+#define REQUIRE_FAIL(fmt, ...) REQUIRE_FAIL_IMPL(__FILE__, __LINE__, fmt, __VA_ARGS__)
 
 #define REQUIRE_IMPL(expr, expr_str)                                                                                   \
     do                                                                                                                 \
     {                                                                                                                  \
         state->assertions++;                                                                                           \
         int _expr_v = !(expr);                                                                                         \
-        if (_expr_v)                                                                                                   \
-        {                                                                                                              \
-            unittest_print_stack(state);                                                                               \
-            REQUIRE_FAIL_IMPL("error: '%s' was zero", expr_str);                                                       \
-            state->assertionfails++;                                                                                   \
-            goto fail;                                                                                                 \
-        }                                                                                                              \
+        if (_expr_v) REQUIRE_FAIL("'%s' was zero", expr_str);                                                          \
     } while (0)
 
 #define REQUIRE(expr) REQUIRE_IMPL(expr, #expr)
@@ -64,13 +66,7 @@ void unittest_print_stack(const struct TestState* state);
         state->assertions++;                                                                                           \
         int _expr_a = (expected);                                                                                      \
         int _expr_b = (actual);                                                                                        \
-        if (_expr_a != _expr_b)                                                                                        \
-        {                                                                                                              \
-            unittest_print_stack(state);                                                                               \
-            REQUIRE_FAIL_IMPL("error: '%s == %s' was '%d == %d'", expected_str, actual_str, _expr_a, _expr_b);         \
-            state->assertionfails++;                                                                                   \
-            goto fail;                                                                                                 \
-        }                                                                                                              \
+        if (_expr_a != _expr_b) REQUIRE_FAIL("'%s == %s' was '%d == %d'", expected_str, actual_str, _expr_a, _expr_b); \
     } while (0)
 
 #define REQUIRE_EQ(expected, actual) REQUIRE_EQ_IMPL(expected, #expected, actual, #actual)
@@ -82,12 +78,7 @@ void unittest_print_stack(const struct TestState* state);
         size_t _expr_a = (expected);                                                                                   \
         size_t _expr_b = (actual);                                                                                     \
         if (_expr_a != _expr_b)                                                                                        \
-        {                                                                                                              \
-            unittest_print_stack(state);                                                                               \
-            REQUIRE_FAIL_IMPL("error: '%s == %s' was '%zu == %zu'", expected_str, actual_str, _expr_a, _expr_b);       \
-            state->assertionfails++;                                                                                   \
-            goto fail;                                                                                                 \
-        }                                                                                                              \
+            REQUIRE_FAIL("'%s == %s' was '%zu == %zu'", expected_str, actual_str, _expr_a, _expr_b);                   \
     } while (0)
 
 #define REQUIRE_ZU_EQ(expected, actual) REQUIRE_ZU_EQ_IMPL(expected, #expected, actual, #actual)
@@ -98,13 +89,7 @@ void unittest_print_stack(const struct TestState* state);
         state->assertions++;                                                                                           \
         const void* _expr_a = (expected);                                                                              \
         const void* _expr_b = (actual);                                                                                \
-        if (_expr_a != _expr_b)                                                                                        \
-        {                                                                                                              \
-            unittest_print_stack(state);                                                                               \
-            fprintf(stderr, "%s:%d: error: '%s == %s' was false\n", __FILE__, __LINE__, #expected, #actual);           \
-            state->assertionfails++;                                                                                   \
-            goto fail;                                                                                                 \
-        }                                                                                                              \
+        if (_expr_a != _expr_b) REQUIRE_FAIL("'%s == %s' was false", #expected, #actual);                              \
     } while (0)
 
 #define REQUIRE_STR_EQ(expected, actual)                                                                               \
@@ -114,20 +99,39 @@ void unittest_print_stack(const struct TestState* state);
         const char* _expr_a = (expected);                                                                              \
         const char* _expr_b = (actual);                                                                                \
         if (strcmp(_expr_a, _expr_b) != 0)                                                                             \
-        {                                                                                                              \
-            unittest_print_stack(state);                                                                               \
-            fprintf(stderr,                                                                                            \
-                    "%s:%d: error: '%s eq %s' was '\"%s\" eq \"%s\"'\n",                                               \
-                    __FILE__,                                                                                          \
-                    __LINE__,                                                                                          \
-                    #expected,                                                                                         \
-                    #actual,                                                                                           \
-                    _expr_a,                                                                                           \
-                    _expr_b);                                                                                          \
-            state->assertionfails++;                                                                                   \
-            goto fail;                                                                                                 \
-        }                                                                                                              \
+            REQUIRE_FAIL("'%s eq %s' was '\"%s\" eq \"%s\"'", #expected, #actual, _expr_a, _expr_b);                   \
     } while (0)
+
+#define REQUIRE_MEM_EQ_IMPL(file, line, expected, expected_len, actual, actual_len)                                    \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        state->assertions++;                                                                                           \
+        const char* _expr_a = (expected);                                                                              \
+        const char* _expr_b = (actual);                                                                                \
+        int _len_a = (int)(expected_len);                                                                              \
+        int _len_b = (int)(actual_len);                                                                                \
+        if (_len_a != _len_b || memcmp(_expr_a, _expr_b, _len_a) != 0)                                                 \
+            REQUIRE_FAIL_IMPL(file,                                                                                    \
+                              line,                                                                                    \
+                              "'%.*s' != '%.*s'\n"                                                                     \
+                              "    expected:      \"%.*s\"\n"                                                          \
+                              "    actual:        \"%.*s\"\n"                                                          \
+                              "    expected-expr: %s\n"                                                                \
+                              "    actual-expr:   %s\n",                                                               \
+                              _len_a,                                                                                  \
+                              _expr_a,                                                                                 \
+                              _len_b,                                                                                  \
+                              _expr_b,                                                                                 \
+                              _len_a,                                                                                  \
+                              _expr_a,                                                                                 \
+                              _len_b,                                                                                  \
+                              _expr_b,                                                                                 \
+                              #expected,                                                                               \
+                              #actual);                                                                                \
+    } while (0)
+
+#define REQUIRE_MEM_EQ(expected, expected_len, actual, actual_len)                                                     \
+    REQUIRE_MEM_EQ_IMPL(__FILE__, __LINE__, expected, expected_len, actual, actual_len)
 
 #define REQUIREZ(expr)                                                                                                 \
     do                                                                                                                 \

@@ -145,6 +145,7 @@ struct ExprField
     const struct Token* field_tok;
     const char* fieldname;
     struct Expr* lhs;
+
     /* filled by elaboration */
     struct Symbol* sym;
 };
@@ -177,15 +178,24 @@ struct ExprUnOp
 #define AST_STRUCT_EXPR_UNOP ExprUnOp
 #define AST_KIND_ExprUnOp EXPR_UNOP
 
-struct ExprCall
+typedef struct ExprCall
 {
     INHERIT_EXPR;
     struct Expr* fn;
-    size_t offset;
-    size_t extent;
-};
+    size_t param_offset;
+    size_t param_extent;
+} ExprCall;
 #define AST_STRUCT_EXPR_CALL ExprCall
 #define AST_KIND_ExprCall EXPR_CALL
+
+typedef struct CallParam
+{
+    Expr* expr;
+
+    // elaboration info to track implicit conversion
+    int32_t sizing;
+    int32_t align;
+} CallParam;
 
 typedef struct Designator
 {

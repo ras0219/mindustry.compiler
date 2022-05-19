@@ -21,7 +21,7 @@ struct BackEnd
 
     struct Scope scope;
 
-    struct Decl* cur_decl;
+    struct Symbol* cur_sym;
     struct DeclFn* cur_fn;
     struct Array switch_cases;
     size_t continue_label;
@@ -36,6 +36,6 @@ struct BackEnd
 };
 
 void be_init(struct BackEnd* be, struct Parser* p, struct Elaborator* e, struct CodeGen* cg);
-int be_compile_decl(struct BackEnd* be, struct Decl* decl);
+int be_compile_toplevel_decl(struct BackEnd* be, struct Decl* decl);
 int be_compile(struct BackEnd* be);
 void be_destroy(struct BackEnd* be);

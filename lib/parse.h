@@ -29,6 +29,8 @@ typedef struct Parser
     struct Array expr_seqs;
     /// Array<Designator> from AstInit::designator_offset
     struct Array designators;
+    /// Array<CallParam> from ExprCall::param_offset
+    struct Array callparams;
 
     // top-level expressions
     struct StmtBlock* top;

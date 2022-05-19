@@ -9,8 +9,8 @@
 
 struct ParamConversion
 {
-    int32_t frame_offset;
     int32_t sizing;
+    int32_t align;
 };
 
 typedef struct Elaborator
@@ -18,8 +18,6 @@ typedef struct Elaborator
     struct Parser* p;
 
     struct TypeTable* types;
-
-    struct Array param_conversions;
 
     FILE* fdebug;
 } Elaborator;

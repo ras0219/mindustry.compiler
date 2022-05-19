@@ -73,6 +73,16 @@ enum TACAKind
     X_TACA_KIND(Y_COMMA)
 };
 
+/*
+ * ^^^ parent frame
+ * | TACA_ARG
+ * | ret addr
+ * +---------- rsp at entry
+ * | TACA_FRAME
+ * | TACA_PARAM
+ * +---------- rsp at subroutine call
+ */
+
 #define X_REGISTER(Y)                                                                                                  \
     Y(REG_RAX)                                                                                                         \
     Y(REG_RBX)                                                                                                         \
@@ -81,7 +91,10 @@ enum TACAKind
     Y(REG_RDI)                                                                                                         \
     Y(REG_RSI)                                                                                                         \
     Y(REG_R8)                                                                                                          \
-    Y(REG_R9)
+    Y(REG_R9)                                                                                                          \
+    Y(REG_R10)                                                                                                         \
+    Y(REG_R11)
+
 enum Register
 {
     X_REGISTER(Y_COMMA)
@@ -94,7 +107,7 @@ const char* taca_to_string(enum TACAKind k);
 const char* taco_to_string(enum TACOKind k);
 const char* register_to_string(enum Register k);
 
-struct TACAddress
+typedef struct TACAddress
 {
     enum TACAKind kind;
     uint8_t is_addr : 1;
@@ -104,19 +117,15 @@ struct TACAddress
         const char* literal;
         const char* name;
         size_t imm;
-        struct
-        {
-            size_t param_idx : 16;
-            size_t param_memory : 1;
-        };
         size_t reg;
         size_t ref;
         size_t const_idx;
-        size_t arg_idx;
-        int frame_offset;
+        size_t arg_offset;
+        size_t frame_offset;
+        size_t param_offset;
         size_t alabel;
     };
-};
+} TACAddress;
 
 typedef struct TACEntry
 {

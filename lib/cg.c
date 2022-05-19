@@ -114,10 +114,10 @@ void cg_reserve_data(struct CodeGen* cg, const char* name, const char* data, siz
     array_push_byte(&cg->data, '\n');
 }
 
-static const char* const s_reg_names[] = {"%rax", "%rbx", "%rcx", "%rdx", "%rdi", "%rsi", "%r8", "%r9"};
-static const char* const s_reg_names_4[] = {"%eax", "%ebx", "%ecx", "%edx", "%edi", "%esi", "%r8d", "%r9d"};
-static const char* const s_reg_names_2[] = {"%ax", "%bx", "%cx", "%dx", "%di", "%si", "%r8w", "%r9w"};
-static const char* const s_reg_names_1[] = {"%al", "%bl", "%cl", "%dl", "%dil", "%sil", "%r8b", "%r9b"};
+static const char* const s_reg_names[] = {"%rax", "%rbx", "%rcx", "%rdx", "%rdi", "%rsi", "%r8", "%r9", "%r10", "%r11"};
+static const char* const s_reg_names_4[] = {"%eax", "%ebx", "%ecx", "%edx", "%edi", "%esi", "%r8d", "%r9d", "%r10d", "%r11d"};
+static const char* const s_reg_names_2[] = {"%ax", "%bx", "%cx", "%dx", "%di", "%si", "%r8w", "%r9w", "%r10w", "%r11w"};
+static const char* const s_reg_names_1[] = {"%al", "%bl", "%cl", "%dl", "%dil", "%sil", "%r8b", "%r9b", "%r10b", "%r11b"};
 
 struct ActivationRecord
 {
@@ -127,6 +127,22 @@ struct ActivationRecord
     size_t temp_offset;
     size_t arg_offset;
 };
+
+static void cg_gen_taca_reg(struct CodeGen* cg, int reg, int32_t sizing)
+{
+    switch (sizing)
+    {
+        case 8:
+        case -8: array_appends(&cg->code, s_reg_names[reg]); break;
+        case 4:
+        case -4: array_appends(&cg->code, s_reg_names_4[reg]); break;
+        case 2:
+        case -2: array_appends(&cg->code, s_reg_names_2[reg]); break;
+        case 1:
+        case -1: array_appends(&cg->code, s_reg_names_1[reg]); break;
+        default: abort();
+    }
+}
 
 static int cg_gen_taca(struct CodeGen* cg, struct TACAddress addr, struct ActivationRecord* frame)
 {
@@ -154,36 +170,16 @@ static int cg_gen_taca(struct CodeGen* cg, struct TACAddress addr, struct Activa
         case TACA_ALABEL: array_appendf(&cg->code, "L$%zu", addr.alabel); break;
         case TACA_LLABEL: array_appendf(&cg->code, "L$%zu_%s", cg->cur_fn_lbl_prefix, addr.literal); break;
         case TACA_TEMP: array_appends(&cg->code, "%rcx"); break;
-        case TACA_REG:
-            switch (addr.sizing)
-            {
-                case 8:
-                case -8: array_appends(&cg->code, s_reg_names[addr.reg]); break;
-                case 4:
-                case -4: array_appends(&cg->code, s_reg_names_4[addr.reg]); break;
-                case 2:
-                case -2: array_appends(&cg->code, s_reg_names_2[addr.reg]); break;
-                case 1:
-                case -1: array_appends(&cg->code, s_reg_names_1[addr.reg]); break;
-                default: abort();
-            }
-            break;
+        case TACA_REG: cg_gen_taca_reg(cg, addr.reg, addr.sizing); break;
         case TACA_CONST: array_appendf(&cg->code, "L_.S%d(%%rip)", addr.const_idx); break;
         case TACA_REF:
             array_appendf(&cg->code, "%zu(%%rsp)", frame->temp_offset + frame->frame_slots[addr.ref] * 8);
             break;
-        case TACA_ARG:
-            if (cg->target == CG_TARGET_MACOS_GAS && addr.arg_idx < 6)
-            {
-                // With System-V abi, the first 6
-                array_appendf(&cg->code, "%zu(%%rsp)", addr.arg_idx * 8);
-            }
-            else
-            {
-                array_appendf(&cg->code, "%zu(%%rsp)", frame->total_frame_size + 8 + (addr.arg_idx - 6) * 8);
-            }
-            break;
+        case TACA_PARAM: array_appendf(&cg->code, "%zu(%%rsp)", addr.param_offset); break;
         case TACA_FRAME: array_appendf(&cg->code, "%zu(%%rsp)", frame->locals_offset + addr.frame_offset); break;
+        case TACA_ARG:
+            array_appendf(&cg->code, "%zu(%%rsp)", frame->locals_offset + frame->total_frame_size + addr.arg_offset);
+            break;
         default: parser_ferror(NULL, "error: unimplemented TACA: %s\n", taca_to_string(addr.kind)); break;
     }
     return rc;
@@ -282,18 +278,7 @@ static void ffs_push(struct FreeFrameSlots* ffs, unsigned char s)
 static int cg_gen_store(struct CodeGen* cg, struct TACAddress addr, int reg, struct ActivationRecord* frame)
 {
     array_appends(&cg->code, "    mov ");
-    switch (addr.sizing)
-    {
-        case 8:
-        case -8: array_appends(&cg->code, s_reg_names[reg]); break;
-        case 4:
-        case -4: array_appends(&cg->code, s_reg_names_4[reg]); break;
-        case 2:
-        case -2: array_appends(&cg->code, s_reg_names_2[reg]); break;
-        case 1:
-        case -1: array_appends(&cg->code, s_reg_names_1[reg]); break;
-        default: abort();
-    }
+    cg_gen_taca_reg(cg, reg, addr.sizing);
     array_appends(&cg->code, ", ");
     int rc = cg_gen_taca(cg, addr, frame);
     array_push_byte(&cg->code, '\n');
@@ -326,6 +311,17 @@ static int cg_memcpy(
     struct CodeGen* cg, struct TACAddress arg1, struct TACAddress arg2, int32_t sizing, struct ActivationRecord* frame)
 {
     int rc = 0;
+    if (sizing <= 8 && arg1.is_addr && arg2.is_addr)
+    {
+        arg1.is_addr = 0;
+        arg1.sizing = sizing;
+        arg2.is_addr = 0;
+        arg2.sizing = sizing;
+        UNWRAP(cg_gen_load(cg, arg2, REG_RCX, frame));
+        UNWRAP(cg_gen_store(cg, arg1, REG_RCX, frame));
+        goto fail;
+    }
+
     UNWRAP(cg_gen_load(cg, arg2, REG_RAX, frame));
     UNWRAP(cg_gen_load(cg, arg1, REG_RBX, frame));
     int32_t j = 0;
@@ -365,14 +361,46 @@ fail:
 static int cg_assign(struct CodeGen* cg, struct TACAddress arg1, struct TACAddress arg2, struct ActivationRecord* frame)
 {
     int rc = 0;
+    if (!arg1.is_addr && arg1.kind == TACA_REG)
+    {
+        if (arg2.is_addr)
+        {
+            UNWRAP(cg_gen_load(cg, arg2, REG_R11, frame));
+            array_appends(&cg->code, "    mov ");
+            cg_gen_taca_reg(cg, REG_R11, 8);
+        }
+        else
+        {
+            array_appends(&cg->code, "    mov ");
+            UNWRAP(cg_gen_taca(cg, arg2, frame));
+        }
+        array_appends(&cg->code, ", 0(");
+        cg_gen_taca_reg(cg, arg1.reg, arg1.sizing);
+        array_appends(&cg->code, ")\n");
+        goto fail;
+    }
+    if (arg1.is_addr && arg1.kind == TACA_REG)
+    {
+        UNWRAP(cg_gen_load(cg, arg2, arg1.reg, frame));
+        goto fail;
+    }
     if (!arg2.is_addr)
     {
-        arg2.is_addr = 1;
-        UNWRAP(cg_memcpy(cg, arg1, arg2, arg2.sizing, frame));
+        if (arg2.kind == TACA_REG)
+        {
+            // todo: fix cg_gen_store to dereference first argument
+            arg1.sizing = arg2.sizing;
+            arg1.is_addr = 0;
+            UNWRAP(cg_gen_store(cg, arg1, arg2.reg, frame));
+        }
+        else
+        {
+            arg2.is_addr = 1;
+            UNWRAP(cg_memcpy(cg, arg1, arg2, arg2.sizing, frame));
+        }
         goto fail;
     }
     UNWRAP(cg_gen_load(cg, arg2, REG_RAX, frame));
-    UNWRAP(cg_gen_store(cg, arg1, REG_RAX, frame));
 fail:
     return rc;
 }
@@ -574,10 +602,10 @@ int cg_gen_taces(struct CodeGen* cg, const struct TACEntry* taces, size_t n_tace
         {
             ++num_args;
         }
-        if (tace->arg2.kind == TACA_PARAM && tace->arg2.param_idx > max_params)
-        {
-            max_params = tace->arg2.param_idx;
-        }
+        // if (tace->arg2.kind == TACA_PARAM && tace->arg2.param_idx > max_params)
+        // {
+        //     max_params = tace->arg2.param_idx;
+        // }
     }
 
     size_t frame_size = locals_size + ffs.max_used * 8;
@@ -631,7 +659,7 @@ int cg_gen_taces(struct CodeGen* cg, const struct TACEntry* taces, size_t n_tace
         UNWRAP(cg_gen_tace(cg, taces, i, &frame));
     }
 
-    array_appendf(&cg->code, "    addq $%zu, %%rsp\n    retq\n", frame_size);
+    array_appendf(&cg->code, "    addq $%zu, %%rsp\n    ret\n", frame_size);
 
 fail:
     my_free(frame_slots);
@@ -692,237 +720,4 @@ int cg_emit(struct CodeGen* cg, FILE* fout)
 fail:
     perror("error: failed to write output");
     return 1;
-
-#if 0
-    const struct CodeGenLabel lab = {
-        .line = globals_size,
-        .str_len = strlen("__stk__"),
-        .str_offset = cg->label_strs.sz,
-    };
-    array_push(&cg->label_strs, "__stk__", lab.str_len);
-    array_push(&cg->labels, &lab, sizeof(struct CodeGenLabel));
-
-    if (cg->fdebug) fprintf(cg->fdebug, "\nCode Gen\n--------\n");
-    fflush(NULL);
-
-    const char* const text = (const char*)cg->text.data;
-    size_t last_emit_point = 0;
-    size_t i = 0;
-    for (; i < cg->text.sz; ++i)
-    {
-        if (text[i] == '$')
-        {
-            if (fwrite(text + last_emit_point, 1, i - last_emit_point, cg->fout) != i - last_emit_point)
-            {
-                perror("error: failed to write output");
-                abort();
-            }
-            const size_t sym_begin = ++i;
-            do
-            {
-                if (i == cg->text.sz)
-                {
-                    fprintf(stderr, "error: unterminated symbol in generated code\n");
-                    abort();
-                }
-                if (text[i] == '$') break;
-                ++i;
-            } while (1);
-            const struct CodeGenLabel* label = cg_lookup(cg, text + sym_begin, i - sym_begin);
-            if (!label)
-            {
-                // fprintf(stderr, "error: unresolved symbol: '%.*s'\n", (int)(i - sym_begin), text + sym_begin);
-                // abort();
-            }
-            else
-            {
-                fprintf(cg->fout, "%zu", label->line);
-            }
-            last_emit_point = ++i;
-        }
-    }
-    if (fwrite(text + last_emit_point, 1, i - last_emit_point, cg->fout) != i - last_emit_point)
-    {
-        perror("error: failed to write output");
-        abort();
-    }
-#endif
 }
-
-#if 0
-static struct RowCol s_unknown_rc = {
-    .file = "<unknown>",
-    .row = 1,
-    .col = 1,
-};
-void cg_write_push_ret(struct CodeGen* cg, struct FreeVar* ret_addr)
-{
-    if (ret_addr->buf[0])
-    {
-        cg_write_inst_set(cg, ret_addr->buf, "ret");
-    }
-    else
-    {
-        cg_write_mem(cg, "__stk__", "ret", &s_unknown_rc);
-        cg_write_inst_op(cg, "+", "__stk__", "__stk__", "1");
-    }
-}
-void cg_write_prepare_stack(struct CodeGen* cg)
-{
-    cg_write_mem(cg, "__stk__", "__ebp__", &s_unknown_rc);
-    cg_write_inst_set(cg, "__ebp__", "__stk__");
-}
-void cg_write_epilog(struct CodeGen* cg)
-{
-    cg_write_inst_op(cg, "-", "__stk__", "__ebp__", "1");
-    cg_read_mem(cg, "__ebp__", "__ebp__", &s_unknown_rc);
-}
-void cg_write_return(struct CodeGen* cg, struct FreeVar* ret_addr)
-{
-    if (strcmp(ret_addr->buf, "_r_main") == 0)
-    {
-        cg_write_inst_jump(cg, "0");
-    }
-    else if (ret_addr->buf[0])
-    {
-        cg_write_inst_set(cg, "@counter", ret_addr->buf);
-    }
-    else
-    {
-        cg_read_mem(cg, "__stk__", "@counter", &s_unknown_rc);
-    }
-}
-void cg_write_inst_set(struct CodeGen* cg, const char* dst, const char* src)
-{
-    if (strcmp(dst, src) == 0) return;
-    char buf[64];
-    snprintf(buf, sizeof(buf), "set %s %s", dst, src);
-    cg_write_inst(cg, buf);
-}
-void cg_write_inst_jump(struct CodeGen* cg, const char* dst)
-{
-    char buf[64];
-    snprintf(buf, sizeof(buf), "jump %s always", dst);
-    cg_write_inst(cg, buf);
-}
-static const char* str_for_op(const char* op)
-{
-    const char* str_op;
-    if (op[0] == '=' && op[1] == '=')
-        str_op = "equal";
-    else if (op[0] == '!' && op[1] == '=')
-        str_op = "notEqual";
-    else if (op[0] == '>' && op[1] == '\0')
-        str_op = "greaterThan";
-    else if (op[0] == '<' && op[1] == '\0')
-        str_op = "lessThan";
-    else if (op[0] == '>' && op[1] == '=')
-        str_op = "greaterThanEq";
-    else if (op[0] == '<' && op[1] == '=')
-        str_op = "lessThanEq";
-    else if (op[0] == '+' && op[1] == '\0')
-        str_op = "add";
-    else if (op[0] == '-' && op[1] == '\0')
-        str_op = "sub";
-    else if (op[0] == '*' && op[1] == '\0')
-        str_op = "mul";
-    else if (op[0] == '%' && op[1] == '\0')
-        str_op = "mod";
-    else if (op[0] == '/' && op[1] == '\0')
-        str_op = "idiv";
-    else if (op[0] == '|' && op[1] == '|')
-        str_op = "or";
-    else if (op[0] == '&' && op[1] == '&')
-        str_op = "land";
-    else
-        abort();
-    return str_op;
-}
-void cg_write_inst_jump_op(struct CodeGen* cg, const char* tgt, const char* op, const char* a, const char* b)
-{
-    if (op[0] == '=' && op[1] == '=' && strcmp(a, "1") == 0 && strcmp(b, "true") == 0)
-    {
-        return cg_write_inst_jump(cg, tgt);
-    }
-    const char* str_op = str_for_op(op);
-    char buf[128];
-    snprintf(buf, sizeof(buf), "jump %s %s %s %s", tgt, str_op, a, b);
-    cg_write_inst(cg, buf);
-}
-void cg_write_inst_add(struct CodeGen* cg, const char* dst, const char* a, int n)
-{
-    char buf[128];
-    snprintf(buf, sizeof(buf), "op add %s %s %d", dst, a, n);
-    cg_write_inst(cg, buf);
-}
-void cg_write_inst_op(struct CodeGen* cg, const char* op, const char* dst, const char* a, const char* b)
-{
-    const char* str_op = str_for_op(op);
-    char buf[128];
-    snprintf(buf, sizeof(buf), "op %s %s %s %s", str_op, dst, a, b);
-    cg_write_inst(cg, buf);
-}
-int cg_write_mem(struct CodeGen* cg, const char* addr, const char* val, const struct RowCol* rc)
-{
-    if (!val || !*val) abort();
-    if (!addr || !*addr) abort();
-    if (!cg->memory.buf[0])
-    {
-        // return parser_ferror(rc, "error: no memory bank configured yet -- use #pragma memory <memory1>\n"), 1;
-    }
-    char buf[128];
-    snprintf(buf, sizeof(buf), "write %s %s %s", val, cg->memory.buf, addr);
-    cg_write_inst(cg, buf);
-    return 0;
-}
-int cg_read_mem(struct CodeGen* cg, const char* addr, const char* reg, const struct RowCol* rc)
-{
-    if (!cg->memory.buf[0])
-    {
-        return parser_ferror(rc, "error: no memory bank configured yet -- use #pragma memory <memory1>\n"), 1;
-    }
-    char buf[128];
-    snprintf(buf, sizeof(buf), "read %s %s %s", reg, cg->memory.buf, addr);
-    cg_write_inst(cg, buf);
-    return 0;
-}
-void cg_write_inst(struct CodeGen* cg, const char* inst)
-{
-    if (cg->fdebug) fprintf(cg->fdebug, "%03zu: %s\n", cg->lines, inst);
-    array_push(&cg->text, inst, strlen(inst));
-    array_push(&cg->text, "\n", 1);
-    ++cg->lines;
-}
-
-struct CodeGenLabel
-{
-    ptrdiff_t str_offset;
-    ptrdiff_t str_len;
-    size_t line;
-};
-
-static const struct CodeGenLabel* cg_lookup(struct CodeGen* cg, const char* sym, size_t sym_len)
-{
-    const struct CodeGenLabel* const labels = (const struct CodeGenLabel*)cg->labels.data;
-    const size_t labels_sz = cg->labels.sz / sizeof(struct CodeGenLabel);
-    const char* const strs = (const char*)cg->label_strs.data;
-    for (size_t i = 0; i < labels_sz; ++i)
-    {
-        if (labels[i].str_len == sym_len && memcmp(sym, strs + labels[i].str_offset, sym_len) == 0) return labels + i;
-    }
-    return NULL;
-}
-
-int cg_set_memory_bank(struct CodeGen* cg, const struct RowCol* rc, const char* mem)
-{
-    size_t n = strlen(mem);
-    if (n >= sizeof(cg->memory.buf))
-    {
-        return parser_ferror(
-                   rc, "error: memory bank length must be less than '%lu' characters", sizeof(cg->memory.buf)),
-               1;
-    }
-    strcpy(cg->memory.buf, mem);
-    return 0;
-}
-#endif

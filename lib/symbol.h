@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ast.h"
+#include "tac.h"
 #include "typestr.h"
 
 typedef struct Attribute
@@ -119,6 +120,7 @@ typedef struct Symbol
     TypeStr type;
 
     int32_t fn_ret_sizing;
+    size_t field_offset;
     size_t size;
     size_t align;
 
@@ -126,7 +128,7 @@ typedef struct Symbol
 
     // backend information
 
-    /// For objects, this is the offset into the stack frame where the object resides
-    /// For functions, this is the offset of the saved %rdi pointer
-    int frame_offset;
+    /// For objects, this is the location on the stack frame where the object resides
+    /// For functions, this is the location of the saved %rdi pointer
+    TACAddress addr;
 } Symbol;

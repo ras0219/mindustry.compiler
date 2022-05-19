@@ -593,8 +593,8 @@ static void typestr_append_decltype_DeclSpecs(const struct Ast* const* expr_seqs
     }
     else if (d->tok->type == LEX_UUVALIST)
     {
-        s->buf[(int)++s->buf[0]] = TYPE_BYTE_VOID;
-        s->buf[(int)++s->buf[0]] = TYPE_BYTE_POINTER;
+        s->buf[(int)++s->buf[0]] = TYPE_BYTE_UUVALIST;
+        typestr_append_offset(s, 1, TYPE_BYTE_ARRAY);
     }
     else
     {
@@ -674,6 +674,7 @@ top:
                 struct TypeStr* arg_ts = array_push_zeroes(&args, sizeof(struct TypeStr));
                 struct StmtDecls* arg_decls = (void*)expr_seqs[d->offset + i];
                 typestr_append_decltype(expr_seqs, tt, arg_ts, expr_seqs[arg_decls->offset]);
+                typestr_decay(arg_ts);
             }
             if (d->is_varargs)
             {
@@ -1207,7 +1208,6 @@ static void elaborate_builtin(struct Elaborator* elab,
             elaborate_declspecs(elab, e->specs);
             elaborate_decl(elab, e->type);
             typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, rty, e->type);
-            *rty = s_type_void;
             break;
         case LEX_UUVA_END: *rty = s_type_void; break;
         case LEX_UUVA_COPY:
@@ -1415,7 +1415,7 @@ static int di_fill_frame(DInitFrame* frame,
                     return parser_ferror(rc, "error: field not found in structure: '%s'\n", designator->field);
                 }
             }
-            frame->offset = offset + frame->field->frame_offset;
+            frame->offset = offset + frame->field->field_offset;
             typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, &frame->ty, frame->field->def);
             typestr_strip_cvr(&frame->ty);
             return 0;
@@ -1459,13 +1459,13 @@ loop:;
     }
     else
     {
-        const size_t prev_field_offset = back->field->frame_offset;
+        const size_t prev_field_offset = back->field->field_offset;
         if (back->is_union)
             back->field = NULL;
         else
             back->field = back->field->next_field;
         if (back->field == NULL) goto pop;
-        back->offset += back->field->frame_offset - prev_field_offset;
+        back->offset += back->field->field_offset - prev_field_offset;
         typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, &back->ty, back->field->def);
         typestr_strip_cvr(&back->ty);
     }
@@ -1766,11 +1766,11 @@ static void elaborate_expr(struct Elaborator* elab,
                                                       args_fn_extent - 1);
                     args_fn_extent -= is_variadic;
                 }
-                if (expr->extent < args_fn_extent || !is_variadic && expr->extent > args_fn_extent)
+                if (expr->param_extent < args_fn_extent || !is_variadic && expr->param_extent > args_fn_extent)
                 {
                     parser_tok_error(expr->tok,
                                      "error: too many arguments in function call: got %zu but expected %zu\n",
-                                     expr->extent,
+                                     expr->param_extent,
                                      args_fn_extent);
                 }
             }
@@ -1780,11 +1780,12 @@ static void elaborate_expr(struct Elaborator* elab,
                     &expr->tok->rc, elab->types, "error: expected function type but got '%.*s'\n", &orig_fty);
             }
 
-            struct Expr** exprs = elab->p->expr_seqs.data;
+            CallParam* params = elab->p->callparams.data;
             struct TypeStr arg_expr_ty;
-            for (size_t i = 0; i < expr->extent; ++i)
+            for (size_t i = 0; i < expr->param_extent; ++i)
             {
-                struct Expr* arg_expr = exprs[expr->offset + i];
+                CallParam* const param = params + expr->param_offset + i;
+                struct Expr* arg_expr = param->expr;
                 elaborate_expr(elab, ctx, arg_expr, &arg_expr_ty);
                 struct TypeStr orig_arg_expr_ty = arg_expr_ty;
                 typestr_decay(&arg_expr_ty);
@@ -1792,8 +1793,8 @@ static void elaborate_expr(struct Elaborator* elab,
                 {
                     const struct TypeStr* orig_tt_arg = (struct TypeStr*)elab->types->fn_args.data + i + args_fn_offset;
                     typestr_implicit_conversion(elab->types, &arg_expr->tok->rc, &arg_expr_ty, orig_tt_arg);
-                    ((struct ParamConversion*)elab->param_conversions.data + i + args_fn_offset)->sizing =
-                        typestr_calc_sizing(elab, orig_tt_arg, &arg_expr->tok->rc);
+                    param->sizing = typestr_calc_sizing(elab, orig_tt_arg, &arg_expr->tok->rc);
+                    param->align = typestr_get_align(elab, orig_tt_arg);
                 }
                 else
                 {
@@ -1939,17 +1940,6 @@ static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
             {
                 if (!decl->init) abort();
                 if (decl->type->kind != AST_DECLFN) abort();
-                struct DeclFn* fn = (void*)decl->type;
-                uint32_t f_offset = typestr_get_offset(&sym->type);
-                size_t begin = f_offset ? arrsz_at(&elab->types->fn_args_ends, f_offset - 1) : 0;
-                size_t end = arrsz_at(&elab->types->fn_args_ends, f_offset);
-                struct ParamConversion* paramcvs = elab->param_conversions.data;
-                if (end - begin < fn->extent) abort();
-                for (size_t i = 0; i < fn->extent; ++i)
-                {
-                    paramcvs[fn->offset + i].sizing = typestr_calc_sizing(
-                        elab, (struct TypeStr*)elab->types->fn_args.data + begin + i, &decl->tok->rc);
-                }
                 TypeStr ts = sym->type;
                 typestr_pop_offset(&ts);
                 sym->fn_ret_sizing = typestr_calc_sizing(elab, &ts, &decl->tok->rc);
@@ -2109,12 +2099,12 @@ static int elaborate_declspecs(struct Elaborator* elab, struct DeclSpecs* specs)
                         struct_size = round_to_alignment(struct_size, field->sym->align);
                         if (specs->is_struct)
                         {
-                            field->sym->frame_offset = struct_size;
+                            field->sym->field_offset = struct_size;
                             struct_size += field->sym->size;
                         }
                         else
                         {
-                            field->sym->frame_offset = 0;
+                            field->sym->field_offset = 0;
                             if (field->sym->size > struct_size) struct_size = field->sym->size;
                         }
                         if (struct_align < field->sym->align) struct_align = field->sym->align;
@@ -2150,9 +2140,6 @@ void elaborator_init(struct Elaborator* elab, struct Parser* p)
 int elaborate(struct Elaborator* elab)
 {
     struct Parser* const p = elab->p;
-    if (elab->param_conversions.sz != 0) abort();
-    array_push_zeroes(&elab->param_conversions,
-                      sizeof(struct ParamConversion) * array_size(&p->expr_seqs, sizeof(void*)));
     elaborate_stmt(elab, NULL, &p->top->ast);
     return parser_has_errors();
 }

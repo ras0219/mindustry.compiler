@@ -177,8 +177,8 @@ static struct ExprCall* parse_alloc_expr_call(
     e->kind = EXPR_CALL;
     e->tok = tok;
     e->fn = fn;
-    e->offset = off;
-    e->extent = ext;
+    e->param_offset = off;
+    e->param_extent = ext;
     return e;
 }
 
@@ -197,14 +197,6 @@ static __forceinline void parse_push_expr_seq_arr(struct Parser* p, struct Array
         if (((struct Ast**)arr->data)[i]->kind == -1) abort();
     }
     array_push(&p->expr_seqs, arr->data, arr->sz);
-}
-static __forceinline void parse_push_expr_seq(struct Parser* p, struct Expr** data, size_t n)
-{
-    for (size_t i = 0; i < n; ++i)
-    {
-        if (data[i]->kind == -1) abort();
-    }
-    array_push(&p->expr_seqs, data, n * sizeof(void*));
 }
 static __forceinline void parse_push_decl_seq(struct Parser* p, struct Decl** data, size_t n)
 {
@@ -235,7 +227,7 @@ top:;
         else
         {
 #define PARAM_COUNT 16
-            struct Expr* arg_exprs[PARAM_COUNT];
+            CallParam params[PARAM_COUNT] = {0};
             size_t i = 0;
             do
             {
@@ -243,7 +235,7 @@ top:;
                     return parser_ferror(
                                &cur_tok->rc, "error: too many arguments for function (%d supported)\n", PARAM_COUNT),
                            NULL;
-                PARSER_DO(parse_expr(p, cur_tok, arg_exprs + i++, PRECEDENCE_ASSIGN));
+                PARSER_DO(parse_expr(p, cur_tok, &params[i++].expr, PRECEDENCE_ASSIGN));
                 if (cur_tok->type == TOKEN_SYM1(','))
                 {
                     ++cur_tok;
@@ -256,10 +248,9 @@ top:;
                 }
                 PARSER_FAIL("error: expected ',' or ')'\n");
             } while (1);
-            size_t offset = array_size(&p->expr_seqs, sizeof(struct Expr*));
-            size_t extent = i;
-            parse_push_expr_seq(p, arg_exprs, i);
-            lhs = (struct Expr*)parse_alloc_expr_call(p, tok_op, lhs, offset, extent);
+            size_t offset = array_size(&p->callparams, sizeof(CallParam));
+            array_push(&p->callparams, params, sizeof(CallParam) * i);
+            lhs = (struct Expr*)parse_alloc_expr_call(p, tok_op, lhs, offset, i);
         }
         goto top;
     }
@@ -1779,6 +1770,7 @@ void parser_destroy(struct Parser* p)
     pool_destroy(&p->sym_pool);
     pool_destroy(&p->typesym_pool);
     array_destroy(&p->expr_seqs);
+    array_destroy(&p->callparams);
     array_destroy(&p->designators);
 }
 
