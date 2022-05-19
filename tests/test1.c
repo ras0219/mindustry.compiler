@@ -1469,7 +1469,7 @@ int test_be_call(TestState* state)
     });
     REQUIRE_NEXT_TACE({
         TACO_ASSIGN,
-        {TACA_PARAM, .sizing = 32, .param_offset = 32},
+        {TACA_PARAM, .is_addr = 1, .param_offset = 32},
         {TACA_FRAME, .sizing = 32, .frame_offset = 32},
     });
     REQUIRE_NEXT_TACE({
@@ -1479,7 +1479,7 @@ int test_be_call(TestState* state)
     });
     REQUIRE_NEXT_TACE({
         TACO_ASSIGN,
-        {TACA_PARAM, .sizing = 32, .param_offset = 32},
+        {TACA_PARAM, .is_addr = 1, .param_offset = 32},
         {TACA_FRAME, .sizing = 32, .frame_offset = 0},
     });
     REQUIRE_NEXT_TACE({
@@ -1752,7 +1752,7 @@ int test_cg_assign(TestState* state)
             {TACA_REG, .sizing = 8, .reg = REG_RAX},
             {TACA_REG, .sizing = 4, .reg = REG_RBX},
         },
-        // assign through: mov %ebx, 0(%rax)
+        // store address
         {
             TACO_ASSIGN,
             {TACA_REG, .sizing = 8, .reg = REG_RAX},

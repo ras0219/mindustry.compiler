@@ -497,7 +497,7 @@ static int be_compile_ExprCall(struct BackEnd* be, struct ExprCall* e, struct TA
             param_offset += param->sizing > 0 ? param->sizing : -param->sizing;
             tace_arg->arg1.kind = TACA_PARAM;
             tace_arg->arg1.param_offset = param_offset;
-            tace_arg->arg1.sizing = param->sizing;
+            tace_arg->arg1.is_addr = 1;
             ++j;
         }
         UNWRAP(be_compile_expr(be, param->expr, &tace_arg->arg2));
