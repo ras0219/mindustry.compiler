@@ -1014,6 +1014,22 @@ fail:
     return rc;
 }
 
+int parse_implicit_conversion(struct TestState* state)
+{
+    int rc = 1;
+    StandardTest test;
+    SUBTEST(stdtest_run(state,
+                        &test,
+                        "int main() {\n"
+                        "int*x = 0;\n"
+                        "x = 1-1;\n"
+                        "}\n"));
+    rc = 0;
+fail:
+    stdtest_destroy(&test);
+    return rc;
+}
+
 int parse_expr1(struct TestState* state)
 {
     int rc = 1;
@@ -1421,7 +1437,7 @@ int test_be_call(TestState* state)
     // ii_call(10);
     REQUIRE_NEXT_TACE({
         TACO_ASSIGN,
-        {TACA_REG, .sizing = -4, .reg = REG_RDI},
+        {TACA_REG, .is_addr = 1, .reg = REG_RDI},
         {TACA_IMM, .sizing = -4, .imm = 10},
     });
     REQUIRE_NEXT_TACE({
@@ -1438,7 +1454,7 @@ int test_be_call(TestState* state)
     });
     REQUIRE_NEXT_TACE({
         TACO_ASSIGN,
-        {TACA_REG, .sizing = -4, .reg = REG_RSI},
+        {TACA_REG, .is_addr = 1, .reg = REG_RSI},
         {TACA_IMM, .sizing = -4, .imm = 5},
     });
     REQUIRE_NEXT_TACE({
@@ -1505,17 +1521,17 @@ int test_be_call2(TestState* state)
     });
     REQUIRE_NEXT_TACE({
         TACO_ASSIGN,
-        {TACA_REG, .sizing = 8, .reg = REG_RDI},
+        {TACA_REG, .is_addr = 1, .reg = REG_RDI},
         {TACA_FRAME, .sizing = 8, .frame_offset = 0},
     });
     REQUIRE_NEXT_TACE({
         TACO_ASSIGN,
-        {TACA_REG, .sizing = 8, .reg = REG_RSI},
+        {TACA_REG, .is_addr = 1, .reg = REG_RSI},
         {TACA_CONST, .is_addr = 1, .const_idx = 0},
     });
     REQUIRE_NEXT_TACE({
         TACO_ASSIGN,
-        {TACA_REG, .sizing = 0, .reg = REG_RDX},
+        {TACA_REG, .is_addr = 1, .reg = REG_RDX},
         {TACA_FRAME, .sizing = 8, .frame_offset = 8},
     });
     REQUIRE_NEXT_TACE({
@@ -1812,6 +1828,7 @@ int main()
     RUN_TEST(parse_initializer_expr_sue);
     RUN_TEST(parse_initializer_expr_designated);
     RUN_TEST(parse_fn_ptr_conversion);
+    RUN_TEST(parse_implicit_conversion);
     RUN_TEST(parse_params);
     RUN_TEST(parse_enums);
     RUN_TEST(parse_aggregates);

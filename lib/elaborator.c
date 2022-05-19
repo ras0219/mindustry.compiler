@@ -31,7 +31,7 @@ __forceinline static TypeSymbol* tt_get(const TypeTable* tt, uint32_t i)
     return ((TypeSymbol**)tt->typesyms.data)[i];
 }
 
-static int32_t eval_constant(struct Elaborator* elab, struct Expr* e)
+static int32_t eval_constant(struct Elaborator* elab, const Expr* e)
 {
     switch (e->kind)
     {
@@ -135,6 +135,108 @@ static int32_t eval_constant(struct Elaborator* elab, struct Expr* e)
             parser_tok_error(
                 e->tok, "error: expected integer constant expression (not %s)\n", ast_kind_to_string(e->kind));
             return 0;
+    }
+}
+
+/// \returns nonzero if \c e was a constant expression
+static int try_eval_constant(struct Elaborator* elab, const Expr* e, int32_t* out_value)
+{
+    switch (e->kind)
+    {
+        case EXPR_LIT:
+        {
+            struct ExprLit* lit = (struct ExprLit*)e;
+            if (lit->tok->type == LEX_NUMBER || lit->tok->type == LEX_CHARLIT)
+            {
+                if (lit->numeric > INT32_MAX)
+                {
+                    return 0;
+                }
+                *out_value = lit->numeric;
+                return 1;
+            }
+            return 0;
+        }
+        case EXPR_REF:
+        {
+            struct ExprRef* ref = (void*)e;
+            if (ref->sym->is_enum_constant)
+            {
+                *out_value = ref->sym->enum_value;
+                return 1;
+            }
+            return 0;
+        }
+        case EXPR_BINOP:
+        {
+            struct ExprBinOp* op = (struct ExprBinOp*)e;
+            int32_t l, r;
+            if (!try_eval_constant(elab, op->lhs, &l)) return 0;
+            if (!try_eval_constant(elab, op->rhs, &r)) return 0;
+            switch (op->tok->type)
+            {
+                case TOKEN_SYM1('*'):
+                {
+                    int64_t p = (int64_t)l * (int64_t)r;
+                    if (p > INT32_MAX || p < INT32_MIN) return 0;
+                    *out_value = (int32_t)p;
+                    return 1;
+                }
+                case TOKEN_SYM1('|'):
+                {
+                    int64_t p = (int64_t)l | (int64_t)r;
+                    if (p > INT32_MAX || p < INT32_MIN) return 0;
+                    *out_value = (int32_t)p;
+                    return 1;
+                }
+                case TOKEN_SYM1('-'):
+                {
+                    int64_t p = (int64_t)l - (int64_t)r;
+                    if (p > INT32_MAX || p < INT32_MIN) return 0;
+                    *out_value = (int32_t)p;
+                    return 1;
+                }
+                case TOKEN_SYM1('+'):
+                {
+                    int64_t p = (int64_t)l + (int64_t)r;
+                    if (p > INT32_MAX || p < INT32_MIN) return 0;
+                    *out_value = (int32_t)p;
+                    return 1;
+                }
+                case TOKEN_SYM2('<', '<'):
+                {
+                    if (r < 0 || r > 32) return 0;
+                    int64_t p = (int64_t)l << r;
+                    if (p > INT32_MAX || p < INT32_MIN) return 0;
+                    *out_value = (int32_t)p;
+                    return 1;
+                }
+                default: break;
+            }
+            return 0;
+        }
+        case EXPR_UNOP:
+        {
+            struct ExprUnOp* expr = (void*)e;
+            if (expr->tok->type == TOKEN_SYM1('-'))
+            {
+                if (!try_eval_constant(elab, expr->lhs, out_value)) return 0;
+                if (*out_value == INT32_MIN) return 0;
+                *out_value = -*out_value;
+                return 1;
+            }
+            else if (expr->tok->type == TOKEN_SYM1('+'))
+            {
+                return try_eval_constant(elab, expr->lhs, out_value);
+            }
+            return 0;
+        }
+        case EXPR_CAST:
+        {
+            struct ExprCast* expr = (void*)e;
+            return try_eval_constant(elab, expr->expr, out_value);
+        }
+        default: return 0;
     }
 }
 
@@ -472,11 +574,19 @@ static void typestr_decay(struct TypeStr* t)
     }
 }
 
-static void typestr_implicit_conversion(struct TypeTable* types,
+static int is_zero_constant(Elaborator* elab, const Expr* e)
+{
+    int32_t i;
+    return try_eval_constant(elab, e, &i) && i == 0;
+}
+
+static void typestr_implicit_conversion(Elaborator* elab,
                                         const struct RowCol* rc,
                                         const struct TypeStr* orig_from,
-                                        const struct TypeStr* orig_to)
+                                        const struct TypeStr* orig_to,
+                                        const Expr* from_expr)
 {
+    struct TypeTable* types = elab->types;
     if (typestr_match(orig_from, orig_to)) return;
 
     // first, value transformations
@@ -497,6 +607,10 @@ static void typestr_implicit_conversion(struct TypeTable* types,
             // cvr_to contains cvr_from
             if (typestr_match(&to, &from) || typestr_match(&s_void, &to) || typestr_match(&s_void, &from)) return;
         }
+    }
+    else if (typestr_is_pointer(&to) && (typestr_mask(&from) & TYPE_FLAGS_INT) && is_zero_constant(elab, from_expr))
+    {
+        return;
     }
     else
     {
@@ -893,14 +1007,6 @@ static void elaborate_expr(struct Elaborator* elab,
                            struct Expr* top_expr,
                            struct TypeStr* rty);
 
-static int is_zero_constant(struct Expr* e)
-{
-    if (e->kind != EXPR_LIT) return 0;
-    struct ExprLit* lit = (void*)e;
-    if (lit->tok->type != LEX_NUMBER) return 0;
-    return lit->numeric == 0;
-}
-
 static void elaborate_binop(struct Elaborator* elab,
                             struct ElaborateDeclCtx* ctx,
                             struct ExprBinOp* e,
@@ -1099,7 +1205,7 @@ static void elaborate_binop(struct Elaborator* elab,
         case TOKEN_SYM2('<', '='):
         case TOKEN_SYM2('&', '&'):
         case TOKEN_SYM2('|', '|'): *rty = s_type_literal_int; break;
-        case TOKEN_SYM1('='): typestr_implicit_conversion(elab->types, &e->tok->rc, &rhs_ty, rty); break;
+        case TOKEN_SYM1('='): typestr_implicit_conversion(elab, &e->tok->rc, &rhs_ty, rty, e->rhs); break;
         case TOKEN_SYM1('['):
             if (rhs_mask & lhs_mask & TYPE_FLAGS_POINTER || !((rhs_mask | lhs_mask) & TYPE_FLAGS_POINTER))
             {
@@ -1154,10 +1260,10 @@ static void elaborate_binop(struct Elaborator* elab,
                     *rty = s_type_unknown;
                 }
             }
-            else if (typestr_is_pointer(rty) && is_zero_constant(e->rhs))
+            else if (typestr_is_pointer(rty) && is_zero_constant(elab, e->rhs))
             {
             }
-            else if (typestr_is_pointer(&rhs_ty) && is_zero_constant(e->lhs))
+            else if (typestr_is_pointer(&rhs_ty) && is_zero_constant(elab, e->lhs))
             {
                 *rty = rhs_ty;
             }
@@ -1523,7 +1629,7 @@ static void elaborate_init_ty_AstInit(struct Elaborator* elab, size_t offset, co
                 if (di_enter(&iter, elab, &init->tok->rc)) goto fail;
                 back = array_back(&iter.stk, sizeof(*back));
             }
-            typestr_implicit_conversion(elab->types, &init->init->tok->rc, &ts, &back->ty);
+            typestr_implicit_conversion(elab, &init->init->tok->rc, &ts, &back->ty, expr);
             init->offset = back->offset;
             init->sizing = typestr_calc_sizing(elab, &back->ty, &init->init->tok->rc);
         }
@@ -1582,7 +1688,7 @@ static void elaborate_init_ty(struct Elaborator* elab, size_t offset, const Type
             // standard expression initialization
             struct TypeStr ts;
             elaborate_expr(elab, NULL, expr, &ts);
-            typestr_implicit_conversion(elab->types, &ast->tok->rc, &ts, dty);
+            typestr_implicit_conversion(elab, &ast->tok->rc, &ts, dty, expr);
         }
     }
 }
@@ -1653,10 +1759,6 @@ static void elaborate_stmt(struct Elaborator* elab, struct ElaborateDeclCtx* ctx
             struct Decl* d = top;
             if (!d->type) abort();
             elaborate_decl(elab, d);
-
-            // typestr_from_decltype(elab->p->expr_seqs.data, elab->types, rty, d->type);
-            // TODO: ensure valid initialization
-            // typestr_implicit_conversion(elab->types, expr_to_rc(d->init), &init_ty, rty);
             return;
         }
         case STMT_DECLS:
@@ -1792,7 +1894,7 @@ static void elaborate_expr(struct Elaborator* elab,
                 if (i < args_fn_extent)
                 {
                     const struct TypeStr* orig_tt_arg = (struct TypeStr*)elab->types->fn_args.data + i + args_fn_offset;
-                    typestr_implicit_conversion(elab->types, &arg_expr->tok->rc, &arg_expr_ty, orig_tt_arg);
+                    typestr_implicit_conversion(elab, &arg_expr->tok->rc, &arg_expr_ty, orig_tt_arg, arg_expr);
                     param->sizing = typestr_calc_sizing(elab, orig_tt_arg, &arg_expr->tok->rc);
                     param->align = typestr_get_align(elab, orig_tt_arg);
                 }

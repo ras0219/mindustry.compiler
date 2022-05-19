@@ -468,6 +468,7 @@ static int be_compile_ExprCall(struct BackEnd* be, struct ExprCall* e, struct TA
         TACEntry* tace_arg = array_push_zeroes(&param_addr, sizeof(struct TACEntry));
         tace_arg->op = TACO_ASSIGN;
         tace_arg->arg1 = taca_reg(s_sysv_arg_reg[0], 0);
+        tace_arg->arg1.is_addr = 1;
         tace_arg->arg2 = *out;
         tace_arg->arg2.is_addr = 1;
         tace_arg->arg2.sizing = 0;
@@ -487,7 +488,7 @@ static int be_compile_ExprCall(struct BackEnd* be, struct ExprCall* e, struct TA
         {
             tace_arg->arg1.kind = TACA_REG;
             tace_arg->arg1.reg = s_sysv_arg_reg[j];
-            tace_arg->arg1.sizing = param->sizing;
+            tace_arg->arg1.is_addr = 1;
             ++j;
         }
         else
