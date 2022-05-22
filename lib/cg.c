@@ -80,6 +80,8 @@ void cg_declare_public(struct CodeGen* cg, const char* sym)
         array_appendf(&cg->code, ".globl _%s\n", sym);
 }
 
+void cg_start_function(struct CodeGen* cg, const char* sym) { cg_mark_label(cg, sym); }
+
 void cg_mark_label(struct CodeGen* cg, const char* sym)
 {
     cg_debug(cg, "   : %s\n", sym);
@@ -115,9 +117,11 @@ void cg_reserve_data(struct CodeGen* cg, const char* name, const char* data, siz
 }
 
 static const char* const s_reg_names[] = {"%rax", "%rbx", "%rcx", "%rdx", "%rdi", "%rsi", "%r8", "%r9", "%r10", "%r11"};
-static const char* const s_reg_names_4[] = {"%eax", "%ebx", "%ecx", "%edx", "%edi", "%esi", "%r8d", "%r9d", "%r10d", "%r11d"};
+static const char* const s_reg_names_4[] = {
+    "%eax", "%ebx", "%ecx", "%edx", "%edi", "%esi", "%r8d", "%r9d", "%r10d", "%r11d"};
 static const char* const s_reg_names_2[] = {"%ax", "%bx", "%cx", "%dx", "%di", "%si", "%r8w", "%r9w", "%r10w", "%r11w"};
-static const char* const s_reg_names_1[] = {"%al", "%bl", "%cl", "%dl", "%dil", "%sil", "%r8b", "%r9b", "%r10b", "%r11b"};
+static const char* const s_reg_names_1[] = {
+    "%al", "%bl", "%cl", "%dl", "%dil", "%sil", "%r8b", "%r9b", "%r10b", "%r11b"};
 
 struct ActivationRecord
 {
@@ -299,10 +303,10 @@ static int cg_gen_store_frame(struct CodeGen* cg, size_t i, int reg, struct Acti
 static int cg_add(struct CodeGen* cg, size_t i, const struct TACEntry* taces, struct ActivationRecord* frame)
 {
     int rc = 0;
-    UNWRAP(cg_gen_load(cg, taces[i].arg1, REG_RAX, frame));
-    UNWRAP(cg_gen_load(cg, taces[i].arg2, REG_RBX, frame));
-    array_appends(&cg->code, "add %rbx, %rax\n");
-    UNWRAP(cg_gen_store_frame(cg, i, REG_RAX, frame));
+    UNWRAP(cg_gen_load(cg, taces[i].arg1, REG_R10, frame));
+    UNWRAP(cg_gen_load(cg, taces[i].arg2, REG_R11, frame));
+    array_appends(&cg->code, "add %r11, %r10\n");
+    UNWRAP(cg_gen_store_frame(cg, i, REG_R10, frame));
 fail:
     return rc;
 }
@@ -323,34 +327,34 @@ static int cg_memcpy(
     }
 
     UNWRAP(cg_gen_load(cg, arg2, REG_RAX, frame));
-    UNWRAP(cg_gen_load(cg, arg1, REG_RBX, frame));
+    UNWRAP(cg_gen_load(cg, arg1, REG_RDX, frame));
     int32_t j = 0;
     for (; j + 8 < sizing; j += 8)
     {
         array_appendf(&cg->code, "    movq %d(%%rax), %%rcx\n", j);
-        array_appendf(&cg->code, "    movq %%rcx, %d(%%rbx)\n", j);
+        array_appendf(&cg->code, "    movq %%rcx, %d(%%rdx)\n", j);
     }
     switch (sizing - j)
     {
         case 8:
         case -8:
             array_appendf(&cg->code, "    movq %d(%%rax), %%rcx\n", j);
-            array_appendf(&cg->code, "    movq %%rcx, %d(%%rbx)\n", j);
+            array_appendf(&cg->code, "    movq %%rcx, %d(%%rdx)\n", j);
             break;
         case 4:
         case -4:
             array_appendf(&cg->code, "    movl %d(%%rax), %%ecx\n", j);
-            array_appendf(&cg->code, "    movl %%ecx, %d(%%rbx)\n", j);
+            array_appendf(&cg->code, "    movl %%ecx, %d(%%rdx)\n", j);
             break;
         case 2:
         case -2:
             array_appendf(&cg->code, "    movw %d(%%rax), %%cx\n", j);
-            array_appendf(&cg->code, "    movw %%cx, %d(%%rbx)\n", j);
+            array_appendf(&cg->code, "    movw %%cx, %d(%%rdx)\n", j);
             break;
         case 1:
         case -1:
             array_appendf(&cg->code, "    movb %d(%%rax), %%cl\n", j);
-            array_appendf(&cg->code, "    movb %%cl, %d(%%rbx)\n", j);
+            array_appendf(&cg->code, "    movb %%cl, %d(%%rdx)\n", j);
             break;
         default: UNWRAP(parser_ferror(NULL, "error: invalid sizing: %d\n", sizing - j));
     }
@@ -419,8 +423,8 @@ static int cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t 
         case TACO_EQ:
         case TACO_NEQ:
             UNWRAP(cg_gen_load(cg, tace->arg1, REG_RAX, frame));
-            UNWRAP(cg_gen_load(cg, tace->arg2, REG_RBX, frame));
-            array_appends(&cg->code, "cmp %rbx, %rax\n");
+            UNWRAP(cg_gen_load(cg, tace->arg2, REG_RDX, frame));
+            array_appends(&cg->code, "cmp %rdx, %rax\n");
             switch (tace->op)
             {
                 case TACO_LT: array_appends(&cg->code, "    setl %al\n"); break;
@@ -437,13 +441,13 @@ static int cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t 
         case TACO_DIV:
         case TACO_MOD:
             UNWRAP(cg_gen_load(cg, tace->arg1, REG_RAX, frame));
-            UNWRAP(cg_gen_load(cg, tace->arg2, REG_RBX, frame));
+            UNWRAP(cg_gen_load(cg, tace->arg2, REG_RCX, frame));
             array_appends(&cg->code, "    movq $0, %rdx\n");
-            array_appends(&cg->code, "    idivq %rbx\n");
+            array_appends(&cg->code, "    idivq %rcx\n");
             if (tace->op == TACO_DIV)
                 UNWRAP(cg_gen_store_frame(cg, i, REG_RAX, frame));
             else
-                UNWRAP(cg_gen_store_frame(cg, i, REG_RBX, frame));
+                UNWRAP(cg_gen_store_frame(cg, i, REG_RCX, frame));
             break;
         case TACO_BAND: inst = "and"; goto simple_binary;
         case TACO_BOR: inst = "or"; goto simple_binary;
@@ -484,9 +488,9 @@ static int cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t 
             break;
         }
         simple_binary:
-            UNWRAP(cg_gen_load(cg, tace->arg2, REG_RBX, frame));
+            UNWRAP(cg_gen_load(cg, tace->arg2, REG_RDX, frame));
             UNWRAP(cg_gen_load(cg, tace->arg1, REG_RAX, frame));
-            array_appendf(&cg->code, "    %s %%rbx, %%rax\n", inst);
+            array_appendf(&cg->code, "    %s %%rdx, %%rax\n", inst);
             UNWRAP(cg_gen_store_frame(cg, i, REG_RAX, frame));
             break;
         case TACO_ADD: UNWRAP(cg_add(cg, i, taces, frame)); break;
@@ -632,7 +636,12 @@ int cg_gen_taces(struct CodeGen* cg, const struct TACEntry* taces, size_t n_tace
     frame.locals_offset = max_params > 6 ? max_params * 8 : 6 * 8;
     frame.temp_offset = frame.locals_offset + locals_size;
 
-    array_appendf(&cg->code, "    subq $%zu, %%rsp\n", frame_size);
+    array_appendf(&cg->code,
+                  "    .cfi_startproc\n"
+                  "    subq $%zu, %%rsp\n"
+                  "    .cfi_def_cfa rsp, %zu\n",
+                  frame_size,
+                  frame_size + 8);
 
     for (size_t i = 0; i < n_taces; ++i)
     {
@@ -659,7 +668,12 @@ int cg_gen_taces(struct CodeGen* cg, const struct TACEntry* taces, size_t n_tace
         UNWRAP(cg_gen_tace(cg, taces, i, &frame));
     }
 
-    array_appendf(&cg->code, "    addq $%zu, %%rsp\n    ret\n", frame_size);
+    array_appendf(&cg->code,
+                  "    addq $%zu, %%rsp\n"
+                  "    .cfi_def_cfa rsp, 8\n"
+                  "    ret\n"
+                  "    .cfi_endproc\n",
+                  frame_size);
 
 fail:
     my_free(frame_slots);
@@ -683,7 +697,7 @@ int cg_emit(struct CodeGen* cg, FILE* fout)
     }
     else
     {
-        prelude = "\n";
+        prelude = ".cfi_sections .eh_frame, .debug_frame\n";
     }
 
     UNWRAP(!fwrite(prelude, strlen(prelude), 1, fout));

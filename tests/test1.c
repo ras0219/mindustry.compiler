@@ -1689,6 +1689,32 @@ fail:
     return rc;
 }
 
+int test_be_conversions(TestState* state)
+{
+    int rc = 1;
+    BETest test;
+    SUBTEST(betest_run(state,
+                       &test,
+                       "void cg_declare_extern()"
+                       "{"
+                       "char x = 10;"
+                       "}"));
+    int index = 0;
+
+    // prologue;
+    REQUIRE_NEXT_TACE({
+        TACO_ASSIGN,
+        {TACA_FRAME, .is_addr = 1, .frame_offset = 0},
+        {TACA_IMM, .sizing = -4, .imm = 10},
+    });
+    REQUIRE_END_TACE();
+
+    rc = 0;
+fail:
+    betest_destroy(&test);
+    return rc;
+}
+
 typedef struct CGTest
 {
     struct CodeGen* cg;
@@ -1839,6 +1865,7 @@ int main()
     RUN_TEST(test_be_call);
     RUN_TEST(test_be_call2);
     RUN_TEST(test_be_va_args);
+    RUN_TEST(test_be_conversions);
     RUN_TEST(test_cg_assign);
 
     const char* color = (state->testfails + state->assertionfails == 0) ? _state.colorsuc : _state.colorerr;

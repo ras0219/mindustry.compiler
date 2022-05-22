@@ -33,6 +33,7 @@ void cg_init(struct CodeGen* cg);
 void cg_destroy(struct CodeGen* cg);
 void cg_declare_extern(struct CodeGen* cg, const char* sym);
 void cg_declare_public(struct CodeGen* cg, const char* sym);
+void cg_start_function(struct CodeGen* cg, const char* sym);
 void cg_mark_label(struct CodeGen* cg, const char* sym);
 void cg_string_constant(struct CodeGen* cg, size_t cidx, const char* str);
 void cg_reserve_data(struct CodeGen* cg, const char* name, const char* data, size_t sz);

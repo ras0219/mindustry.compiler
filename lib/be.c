@@ -1405,7 +1405,7 @@ int be_compile_toplevel_decl(struct BackEnd* be, Decl* decl)
         struct DeclFn* declfn = (struct DeclFn*)decl->type;
         if (decl->init)
         {
-            cg_mark_label(be->cg, sym->name);
+            cg_start_function(be->cg, sym->name);
             be->frame_size = 0;
             be->max_frame_size = 0;
             be->cur_sym = sym;

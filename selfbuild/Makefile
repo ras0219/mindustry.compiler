@@ -1,12 +1,7 @@
 CFLAGS:=-I ../lib ${CFLAGS}
-# AS=clang
-# ASFLAGS=-target x86_64-apple-darwin20.3.0 -g -c
-# LD=clang
-# LDFLAGS=-target x86_64-apple-darwin20.3.0 -mcpu=x86-64
-AS=gcc
-ASFLAGS=-g -c
-LD=gcc
-LDFLAGS=
+AS?=gcc
+ASFLAGS?=-g -c
+LD?=gcc
 
 SRC=array.c ast.c autoheap.c be.c cg.c elaborator.c fe.c hash.c lex.c \
 	lex.c main.c parse.c parser_globals.c pool.c poolset.c preproc.c scope.c stringmap.c stringpool.c \
@@ -30,3 +25,15 @@ main.selfbuild: $(SRC:.c=.o)
 
 clean:
 	rm *.o *.asm main.selfbuild
+
+fibonacci.asm: ../examples/fibonacci.c ${CC}
+	${CC} ${CFLAGS} $< -c -o $@
+
+fibonacci: fibonacci.o
+	${LD} ${LDFLAGS} $^ -o $@
+
+stringmanip.asm: ../examples/stringmanip.c ${CC}
+	${CC} ${CFLAGS} $< -c -o $@
+
+stringmanip: stringmanip.o
+	${LD} ${LDFLAGS} $^ -o $@
