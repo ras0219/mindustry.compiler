@@ -52,6 +52,12 @@ static __forceinline size_t round_to_alignment(size_t size, size_t align)
     return n - (n % align);
 }
 
+static __forceinline Sizing min_sizing(Sizing s1, Sizing s2)
+{
+    Sizing ret = {.is_signed = s2.is_signed, .width = s1.width < s2.width ? s1.width : s2.width};
+    return ret;
+}
+
 static __forceinline size_t be_frame_alloc(struct BackEnd* be, size_t size, size_t align)
 {
     size_t r = round_to_alignment(be->frame_size, align);
@@ -65,33 +71,33 @@ __forceinline static struct TACAddress taca_imm(size_t imm)
     struct TACAddress ret = {
         .kind = TACA_IMM,
         .imm = imm,
-        .sizing = -4,
+        .sizing = {1, 4},
     };
     return ret;
 }
 
-__forceinline static struct TACAddress taca_frame(size_t offset, int sizing)
+__forceinline static struct TACAddress taca_frame(size_t offset, Sizing sizing)
 {
     struct TACAddress ret = {
         .kind = TACA_FRAME,
         .frame_offset = offset,
         .sizing = sizing,
     };
-    if (ret.sizing == 0)
+    if (ret.sizing.width == 0)
     {
         ret.is_addr = 1;
     }
     return ret;
 }
 
-__forceinline static struct TACAddress taca_reg(size_t reg, int sizing)
+__forceinline static struct TACAddress taca_reg(size_t reg, Sizing sizing)
 {
     struct TACAddress ret = {
         .kind = TACA_REG,
         .reg = reg,
         .sizing = sizing,
     };
-    if (ret.sizing == 0)
+    if (ret.sizing.width == 0)
     {
         ret.is_addr = 1;
     }
@@ -134,7 +140,7 @@ void be_init(struct BackEnd* be, struct Parser* p, struct Elaborator* e, struct 
     be->cg = cg;
 }
 
-static struct TACAddress be_push_tace(struct BackEnd* be, const struct TACEntry* e, int32_t sizing)
+static struct TACAddress be_push_tace(struct BackEnd* be, const struct TACEntry* e, Sizing sizing)
 {
     const size_t offset = array_size(&be->code, sizeof(struct TACEntry));
     array_push(&be->code, e, sizeof(struct TACEntry));
@@ -142,14 +148,14 @@ static struct TACAddress be_push_tace(struct BackEnd* be, const struct TACEntry*
     if (e->arg1.is_addr)
     {
         if (e->arg1.kind == TACA_REG && e->op != TACO_ASSIGN) abort();
-        if (e->arg1.sizing != 0) abort();
+        if (e->arg1.sizing.width != 0) abort();
     }
     if (e->arg2.is_addr)
     {
         if (e->arg2.kind == TACA_REG) abort();
-        if (e->arg2.sizing != 0) abort();
+        if (e->arg2.sizing.width != 0) abort();
     }
-    else if (e->arg2.sizing == 0 && (e->arg2.kind != TACA_VOID && e->arg2.kind != TACA_ALABEL))
+    else if (e->arg2.sizing.width == 0 && (e->arg2.kind != TACA_VOID && e->arg2.kind != TACA_ALABEL))
     {
         parser_ferror(e->rc, "0 sized arg\n");
         abort();
@@ -178,13 +184,28 @@ static void be_push_jump(struct BackEnd* be, size_t n)
     entry->arg1.alabel = n;
 }
 
+static const Sizing s_sizing_pointer = {
+    .is_signed = 0,
+    .width = 8,
+};
+static const Sizing s_sizing_int = {
+    .is_signed = 1,
+    .width = 4,
+};
+static const Sizing s_sizing_uint = {
+    .width = 4,
+};
+static const Sizing s_sizing_zero = {0};
+
+static int sizing_is_pointer(Sizing s) { return s.width == 8 && s.is_signed == 0; }
+
 static TACAddress be_increment(struct BackEnd* be, const TACAddress* addr, int offset)
 {
     if (offset == 0) return *addr;
     if (addr->is_addr)
     {
         TACAddress out = *addr;
-        if (addr->sizing != 0) abort();
+        if (addr->sizing.width != 0) abort();
         switch (addr->kind)
         {
             case TACA_FRAME: out.frame_offset += offset; return out;
@@ -193,7 +214,7 @@ static TACAddress be_increment(struct BackEnd* be, const TACAddress* addr, int o
             default: break;
         }
     }
-    else if (addr->sizing != 8)
+    else if (!sizing_is_pointer(addr->sizing))
     {
         abort();
     }
@@ -202,7 +223,7 @@ static TACAddress be_increment(struct BackEnd* be, const TACAddress* addr, int o
         .arg1 = *addr,
         .arg2 = taca_imm(offset),
     };
-    return be_push_tace(be, &tace, 8);
+    return be_push_tace(be, &tace, s_sizing_pointer);
 }
 
 static struct TACAddress be_ensure_ref(struct BackEnd* be, const struct TACAddress* in)
@@ -216,19 +237,19 @@ static struct TACAddress be_ensure_ref(struct BackEnd* be, const struct TACAddre
     return be_push_tace(be, &tace, in->sizing);
 }
 
-static struct TACAddress be_alloc_temp(struct BackEnd* be, int32_t sizing)
+static struct TACAddress be_alloc_temp(struct BackEnd* be, Sizing sizing)
 {
     struct TACAddress o = {
         .kind = TACA_FRAME,
         .sizing = sizing,
         .frame_offset = be->frame_size,
     };
-    be->frame_size += sizing < 0 ? -sizing : sizing;
+    be->frame_size += sizing.width;
     if (be->max_frame_size < be->frame_size) be->max_frame_size = be->frame_size;
     return o;
 }
 
-static TACAddress be_deref(struct BackEnd* be, const TACAddress* in, int32_t sizing)
+static TACAddress be_deref(struct BackEnd* be, const TACAddress* in, Sizing sizing)
 {
     if (in->is_addr)
     {
@@ -239,7 +260,7 @@ static TACAddress be_deref(struct BackEnd* be, const TACAddress* in, int32_t siz
     }
     else
     {
-        if (in->sizing != 8) abort();
+        if (!sizing_is_pointer(in->sizing)) abort();
         struct TACAddress out = be_alloc_temp(be, sizing);
         struct TACEntry tace = {
             .op = TACO_LOAD,
@@ -252,13 +273,13 @@ static TACAddress be_deref(struct BackEnd* be, const TACAddress* in, int32_t siz
 }
 
 /// x->field
-static TACAddress be_increment_deref(struct BackEnd* be, const TACAddress* in, int offset, int32_t sizing)
+static TACAddress be_increment_deref(struct BackEnd* be, const TACAddress* in, int offset, Sizing sizing)
 {
     const TACAddress addr1 = be_increment(be, in, offset);
     return be_deref(be, &addr1, sizing);
 }
 
-static int be_dereference(struct BackEnd* be, struct TACAddress* out, int32_t sizing)
+static int be_dereference(struct BackEnd* be, struct TACAddress* out, Sizing sizing)
 {
     *out = be_deref(be, out, sizing);
     return 0;
@@ -267,7 +288,7 @@ static int be_dereference(struct BackEnd* be, struct TACAddress* out, int32_t si
 static int be_compile_stmt(struct BackEnd* be, struct Ast* e);
 static int be_compile_expr(struct BackEnd* be, struct Expr* e, struct TACAddress* out);
 static int be_compile_lvalue(struct BackEnd* be, struct Expr* e, struct TACAddress* out);
-static int be_compile_init(struct BackEnd* be, struct Ast* e, size_t frame_offset, int32_t sizing)
+static int be_compile_init(struct BackEnd* be, struct Ast* e, size_t frame_offset, Sizing sizing)
 {
     int rc = 0;
     if (e->kind == AST_INIT)
@@ -295,7 +316,8 @@ static int be_compile_init(struct BackEnd* be, struct Ast* e, size_t frame_offse
             .rc = &e->tok->rc,
         };
         UNWRAP(be_compile_expr(be, (struct Expr*)e, &assign.arg2));
-        be_push_tace(be, &assign, 0);
+        assign.arg2.sizing = min_sizing(sizing, assign.arg2.sizing);
+        be_push_tace(be, &assign, s_sizing_zero);
     }
 fail:
     return rc;
@@ -421,7 +443,7 @@ static int be_compile_lvalue_ExprRef(struct BackEnd* be, struct ExprRef* e, stru
     Symbol* sym = e->sym;
     *out = sym->addr;
     out->is_addr = 1;
-    out->sizing = 0;
+    out->sizing = s_sizing_zero;
     return 0;
 }
 
@@ -432,7 +454,7 @@ static int be_compile_ExprRef(struct BackEnd* be, struct ExprRef* esym, struct T
     {
         out->kind = TACA_IMM;
         out->imm = esym->sym->enum_value;
-        out->sizing = -4;
+        out->sizing = s_sizing_int;
     }
     else
     {
@@ -460,18 +482,18 @@ static int be_compile_ExprCall(struct BackEnd* be, struct ExprCall* e, struct TA
     UNWRAP(be_compile_expr(be, e->fn, &call.arg1));
 
     int j = 0;
-    if (e->sizing > 8)
+    if (e->sizing.width > 8)
     {
         out->kind = TACA_FRAME;
-        out->frame_offset = be_frame_alloc(be, e->sizing, 8);
+        out->frame_offset = be_frame_alloc(be, e->sizing.width, 8);
         out->sizing = e->sizing;
         TACEntry* tace_arg = array_push_zeroes(&param_addr, sizeof(struct TACEntry));
         tace_arg->op = TACO_ASSIGN;
-        tace_arg->arg1 = taca_reg(s_sysv_arg_reg[0], 0);
+        tace_arg->arg1 = taca_reg(s_sysv_arg_reg[0], s_sizing_zero);
         tace_arg->arg1.is_addr = 1;
         tace_arg->arg2 = *out;
         tace_arg->arg2.is_addr = 1;
-        tace_arg->arg2.sizing = 0;
+        tace_arg->arg2.sizing = s_sizing_zero;
         ++j;
     }
 
@@ -484,7 +506,7 @@ static int be_compile_ExprCall(struct BackEnd* be, struct ExprCall* e, struct TA
         TACEntry* tace_arg = array_push_zeroes(&param_addr, sizeof(struct TACEntry));
         tace_arg->op = TACO_ASSIGN;
         tace_arg->rc = &param->expr->tok->rc;
-        if (param->sizing <= 8 && j < 6)
+        if (param->sizing.width <= 8 && j < 6)
         {
             tace_arg->arg1.kind = TACA_REG;
             tace_arg->arg1.reg = s_sysv_arg_reg[j];
@@ -494,7 +516,7 @@ static int be_compile_ExprCall(struct BackEnd* be, struct ExprCall* e, struct TA
         else
         {
             param_offset = round_to_alignment(param_offset, param->align);
-            param_offset += param->sizing > 0 ? param->sizing : -param->sizing;
+            param_offset += param->sizing.width;
             tace_arg->arg1.kind = TACA_PARAM;
             tace_arg->arg1.param_offset = param_offset;
             tace_arg->arg1.is_addr = 1;
@@ -505,10 +527,10 @@ static int be_compile_ExprCall(struct BackEnd* be, struct ExprCall* e, struct TA
 
     for (size_t i = 0; i < array_size(&param_addr, sizeof(TACEntry)); ++i)
     {
-        be_push_tace(be, (TACEntry*)param_addr.data + i, 0);
+        be_push_tace(be, (TACEntry*)param_addr.data + i, s_sizing_zero);
     }
 
-    if (e->sizing <= 8)
+    if (e->sizing.width <= 8)
     {
         *out = be_push_tace(be, &call, e->sizing);
     }
@@ -529,7 +551,7 @@ static int be_compile_lvalue_ExprCast(struct BackEnd* be, struct ExprCast* e, st
     return be_compile_lvalue(be, e->expr, out);
 }
 
-static int be_compile_add(struct BackEnd* be, struct ExprBinOp* e, int32_t sizing, struct TACAddress* out)
+static int be_compile_add(struct BackEnd* be, struct ExprBinOp* e, Sizing sizing, struct TACAddress* out)
 {
     int rc = 0;
     struct TACEntry tace = {};
@@ -544,7 +566,7 @@ static int be_compile_add(struct BackEnd* be, struct ExprBinOp* e, int32_t sizin
         /* adding to pointer, e->info is size of element */
         tace.op = TACO_MULT;
         tace.arg1 = taca_imm(e->info);
-        tace.arg2 = be_push_tace(be, &tace, 8);
+        tace.arg2 = be_push_tace(be, &tace, s_sizing_pointer);
     }
     tace.op = TACO_ADD;
     UNWRAP(be_compile_expr(be, e->lhs, &tace.arg1));
@@ -604,10 +626,11 @@ static int be_compile_lvalue_ExprBinOp(struct BackEnd* be, struct ExprBinOp* e, 
             UNWRAP(be_compile_expr(be, e->rhs, &tace.arg2));
             UNWRAP(be_compile_lvalue(be, e->lhs, out));
             tace.arg1 = *out;
+            tace.arg2.sizing = min_sizing(e->sizing, tace.arg2.sizing);
             be_push_tace(be, &tace, e->sizing);
             goto fail;
 
-        case TOKEN_SYM1('['): return be_compile_add(be, e, 8, out);
+        case TOKEN_SYM1('['): return be_compile_add(be, e, s_sizing_pointer, out);
         default:
             UNWRAP(parser_tok_error(
                 e->tok, "error: be_compile_lvalue_ExprBinOp unimplemented op (%s)\n", token_str(be->parser, e->tok)));
@@ -661,29 +684,29 @@ static int be_compile_ExprBuiltin(struct BackEnd* be, struct ExprBuiltin* e, str
                     parser_tok_error(e->tok, "error: first argument of __builtin_va_start must be a local variable\n"));
             // gp_offset
             tace.arg1.is_addr = 0;
-            tace.arg1.sizing = 4;
+            tace.arg1.sizing = s_sizing_uint;
             tace.arg2 = taca_imm(be->cur_fn->extent * 8);
-            be_push_tace(be, &tace, 0);
+            be_push_tace(be, &tace, s_sizing_zero);
             // fp_offset
             // TODO: fix floating point
             tace.arg1.frame_offset += 4;
             tace.arg2 = taca_imm(48);
-            be_push_tace(be, &tace, 0);
+            be_push_tace(be, &tace, s_sizing_zero);
             // overflow_arg_area
             tace.arg1.frame_offset += 4;
-            tace.arg1.sizing = 8;
+            tace.arg1.sizing = s_sizing_pointer;
             tace.arg2.kind = TACA_ARG;
             tace.arg2.is_addr = 1;
-            tace.arg2.sizing = 0;
+            tace.arg2.sizing = s_sizing_zero;
             tace.arg2.arg_offset = 0;
-            be_push_tace(be, &tace, 0);
+            be_push_tace(be, &tace, s_sizing_zero);
             // reg_save_area
             tace.arg1.frame_offset += 8;
             tace.arg2.kind = TACA_FRAME;
             tace.arg2.is_addr = 1;
-            tace.arg2.sizing = 0;
+            tace.arg2.sizing = s_sizing_zero;
             tace.arg2.arg_offset = 0;
-            be_push_tace(be, &tace, 0);
+            be_push_tace(be, &tace, s_sizing_zero);
             *out = s_taca_void;
             break;
         case LEX_UUVA_ARG:
@@ -691,12 +714,12 @@ static int be_compile_ExprBuiltin(struct BackEnd* be, struct ExprBuiltin* e, str
             TACAddress va;
             UNWRAP(be_compile_lvalue(be, e->expr1, &va));
             const TACAddress overflow_area_p = be_increment(be, &va, 8);
-            const TACAddress overflow_area = be_deref(be, &overflow_area_p, 8);
+            const TACAddress overflow_area = be_deref(be, &overflow_area_p, s_sizing_pointer);
             const size_t complete_lbl = ++be->next_label;
-            if (e->sizing <= 8)
+            if (e->sizing.width <= 8)
             {
                 // class INTEGER
-                const TACAddress gp_offset = be_deref(be, &va, 4);
+                const TACAddress gp_offset = be_deref(be, &va, s_sizing_int);
                 const TACEntry cmp_gp_offset = {
                     .rc = &e->tok->rc,
                     .op = TACO_LT,
@@ -707,18 +730,18 @@ static int be_compile_ExprBuiltin(struct BackEnd* be, struct ExprBuiltin* e, str
                 const TACEntry jump_stack = {
                     .rc = &e->tok->rc,
                     .op = TACO_BRZ,
-                    .arg1 = be_push_tace(be, &cmp_gp_offset, 8),
+                    .arg1 = be_push_tace(be, &cmp_gp_offset, s_sizing_pointer),
                     .arg2.kind = TACA_ALABEL,
                     .arg2.alabel = use_memory_lbl,
                 };
-                be_push_tace(be, &jump_stack, 0);
+                be_push_tace(be, &jump_stack, s_sizing_zero);
                 const TACEntry calc_addr = {
                     .rc = &e->tok->rc,
                     .op = TACO_ADD,
-                    .arg1 = be_increment_deref(be, &va, 16, 8),
+                    .arg1 = be_increment_deref(be, &va, 16, s_sizing_pointer),
                     .arg2 = gp_offset,
                 };
-                const TACAddress reg_addr = be_push_tace(be, &calc_addr, 8);
+                const TACAddress reg_addr = be_push_tace(be, &calc_addr, s_sizing_pointer);
                 tace.arg2 = be_deref(be, &reg_addr, e->sizing);
                 const TACEntry calc_new_offset = {
                     .rc = &e->tok->rc,
@@ -730,9 +753,9 @@ static int be_compile_ExprBuiltin(struct BackEnd* be, struct ExprBuiltin* e, str
                     .rc = &e->tok->rc,
                     .op = TACO_ASSIGN,
                     .arg1 = va,
-                    .arg2 = be_push_tace(be, &calc_new_offset, -4),
+                    .arg2 = be_push_tace(be, &calc_new_offset, s_sizing_int),
                 };
-                be_push_tace(be, &write_gp_offset, 0);
+                be_push_tace(be, &write_gp_offset, s_sizing_zero);
                 be_push_jump(be, complete_lbl);
                 be_push_label(be, use_memory_lbl);
                 tace.arg1 = be_deref(be, &overflow_area, e->sizing);
@@ -743,7 +766,7 @@ static int be_compile_ExprBuiltin(struct BackEnd* be, struct ExprBuiltin* e, str
                 // class MEMORY
                 *out = be_deref(be, &overflow_area, e->sizing);
             }
-            const size_t inc = round_to_alignment(e->sizing < 0 ? -e->sizing : e->sizing, 8);
+            const size_t inc = round_to_alignment(e->sizing.width, 8);
             const TACEntry calc_new_offset = {
                 .rc = &e->tok->rc,
                 .op = TACO_ADD,
@@ -754,11 +777,11 @@ static int be_compile_ExprBuiltin(struct BackEnd* be, struct ExprBuiltin* e, str
                 .rc = &e->tok->rc,
                 .op = TACO_ASSIGN,
                 .arg1 = overflow_area_p,
-                .arg2 = be_push_tace(be, &calc_new_offset, 8),
+                .arg2 = be_push_tace(be, &calc_new_offset, s_sizing_pointer),
             };
-            be_push_tace(be, &write_gp_offset, 0);
+            be_push_tace(be, &write_gp_offset, s_sizing_zero);
             be_push_label(be, complete_lbl);
-            if (e->sizing <= 8)
+            if (e->sizing.width <= 8)
             {
                 *out = be_push_tace(be, &tace, e->sizing);
             }
@@ -768,7 +791,7 @@ static int be_compile_ExprBuiltin(struct BackEnd* be, struct ExprBuiltin* e, str
             tace.op = TACO_ASSIGN;
             UNWRAP(be_compile_lvalue(be, e->expr1, &tace.arg1));
             UNWRAP(be_compile_expr(be, e->expr2, &tace.arg2));
-            be_push_tace(be, &tace, 0);
+            be_push_tace(be, &tace, s_sizing_zero);
             *out = s_taca_void;
             break;
         case LEX_UUVA_END: *out = s_taca_void; break;
@@ -916,7 +939,7 @@ static int be_compile_ExprBinOp(struct BackEnd* be, struct ExprBinOp* e, struct 
             tace.op = TACO_BRZ;
             tace.arg2.kind = TACA_ALABEL;
             tace.arg2.alabel = on_false;
-            be_push_tace(be, &tace, 0);
+            be_push_tace(be, &tace, s_sizing_zero);
             UNWRAP(be_compile_expr(be, rhs->lhs, &tace.arg1));
             be_push_jump(be, end);
             be_push_label(be, on_false);
@@ -934,7 +957,7 @@ static int be_compile_ExprBinOp(struct BackEnd* be, struct ExprBinOp* e, struct 
             tace.op = e->tok->type == TOKEN_SYM2('&', '&') ? TACO_BRZ : TACO_BRNZ;
             tace.arg2.kind = TACA_ALABEL;
             tace.arg2.alabel = on_false;
-            be_push_tace(be, &tace, 0);
+            be_push_tace(be, &tace, s_sizing_zero);
             struct TACEntry logical = {
                 .op = TACO_NEQ,
                 .arg2 = taca_imm(0),
@@ -980,7 +1003,7 @@ static int be_compile_StmtContinue(struct BackEnd* be, struct StmtContinue* stmt
             },
         .rc = &stmt->tok->rc,
     };
-    be_push_tace(be, &entry, 0);
+    be_push_tace(be, &entry, s_sizing_zero);
     return 0;
 }
 
@@ -995,7 +1018,7 @@ static int be_compile_StmtBreak(struct BackEnd* be, struct StmtBreak* stmt)
             },
         .rc = &stmt->tok->rc,
     };
-    be_push_tace(be, &entry, 0);
+    be_push_tace(be, &entry, s_sizing_zero);
     return 0;
 }
 
@@ -1006,7 +1029,7 @@ static int be_compile_StmtLabel(struct BackEnd* be, struct StmtLabel* stmt)
         .arg1 = taca_llabel(token_str(be->parser, stmt->tok)),
         .rc = &stmt->tok->rc,
     };
-    be_push_tace(be, &entry, 0);
+    be_push_tace(be, &entry, s_sizing_zero);
     return be_compile_stmt(be, stmt->stmt);
 }
 
@@ -1017,7 +1040,7 @@ static int be_compile_StmtGoto(struct BackEnd* be, struct StmtGoto* stmt)
         .arg1 = taca_llabel(token_str(be->parser, stmt->dst)),
         .rc = &stmt->dst->rc,
     };
-    be_push_tace(be, &entry, 0);
+    be_push_tace(be, &entry, s_sizing_zero);
     return 0;
 }
 
@@ -1061,11 +1084,11 @@ static int be_compile_StmtSwitch(struct BackEnd* be, struct StmtSwitch* stmt)
     be_push_label(be, jump_table);
     struct TACEntry load = {
         .op = TACO_ASSIGN,
-        .arg1 = {.kind = TACA_TEMP, .sizing = 8},
+        .arg1 = {.kind = TACA_TEMP, .sizing = s_sizing_pointer},
         .rc = &stmt->tok->rc,
     };
     UNWRAP(be_compile_expr(be, stmt->expr, &load.arg2));
-    be_push_tace(be, &load, 0);
+    be_push_tace(be, &load, s_sizing_zero);
     struct SwitchCase* cases = be->switch_cases.data;
     for (size_t i = switch_case_offset; i < array_size(&be->switch_cases, sizeof(struct SwitchCase)); ++i)
     {
@@ -1074,7 +1097,7 @@ static int be_compile_StmtSwitch(struct BackEnd* be, struct StmtSwitch* stmt)
             .arg1 = taca_imm(cases[i].imm),
             .arg2 = taca_alabel(cases[i].label),
         };
-        be_push_tace(be, &_case, 0);
+        be_push_tace(be, &_case, s_sizing_zero);
     }
     be_push_jump(be, be->default_label);
     be_push_label(be, be->break_label);
@@ -1096,20 +1119,20 @@ static int be_compile_StmtReturn(struct BackEnd* be, struct StmtReturn* stmt)
     };
     if (stmt->expr)
     {
-        if (stmt->expr->sizing > 8)
+        if (stmt->expr->sizing.width > 8)
         {
             struct TACEntry retassign = {
                 .op = TACO_ASSIGN,
-                .arg1 = {TACA_FRAME, .sizing = 8, .frame_offset = 0},
+                .arg1 = {TACA_FRAME, .sizing = s_sizing_pointer, .frame_offset = 0},
             };
             UNWRAP(be_compile_expr(be, stmt->expr, &retassign.arg2));
-            be_push_tace(be, &retassign, 0);
+            be_push_tace(be, &retassign, s_sizing_zero);
             struct TACEntry retval = {
                 .op = TACO_ASSIGN,
                 .arg1 = {TACA_REG, .is_addr = 1, .reg = REG_RAX},
                 .arg2 = retassign.arg1,
             };
-            be_push_tace(be, &retval, 0);
+            be_push_tace(be, &retval, s_sizing_zero);
         }
         else
         {
@@ -1118,10 +1141,10 @@ static int be_compile_StmtReturn(struct BackEnd* be, struct StmtReturn* stmt)
                 .arg1 = {TACA_REG, .is_addr = 1, .reg = REG_RAX},
             };
             UNWRAP(be_compile_expr(be, stmt->expr, &retval.arg2));
-            be_push_tace(be, &retval, 0);
+            be_push_tace(be, &retval, s_sizing_zero);
         }
     }
-    be_push_tace(be, &entry, 0);
+    be_push_tace(be, &entry, s_sizing_zero);
 fail:
     be->frame_size = start_frame_size;
     return rc;
@@ -1137,7 +1160,7 @@ static int be_compile_StmtIf(struct BackEnd* be, struct StmtIf* stmt)
         .arg2 = {.kind = TACA_ALABEL, .alabel = else_lbl},
     };
     UNWRAP(be_compile_expr(be, stmt->cond, &e.arg1));
-    be_push_tace(be, &e, 0);
+    be_push_tace(be, &e, s_sizing_zero);
     be->frame_size = start_frame_size;
     UNWRAP(be_compile_stmt(be, stmt->if_body));
 
@@ -1194,7 +1217,7 @@ static int be_compile_StmtLoop(struct BackEnd* be, struct StmtLoop* stmt)
             .arg2 = {.kind = TACA_ALABEL, .alabel = be->break_label},
         };
         UNWRAP(be_compile_expr(be, stmt->cond, &brz.arg1));
-        be_push_tace(be, &brz, 0);
+        be_push_tace(be, &brz, s_sizing_zero);
         be->frame_size = start_frame_size;
     }
     if (stmt->is_do_while)
@@ -1216,8 +1239,8 @@ static int be_compile_Decl(struct BackEnd* be, struct Decl* decl)
     if (!decl->type) return 0;
 
     int rc = 0;
-    if (decl->sym->size == 0) abort();
-    decl->sym->addr = taca_frame(be_frame_alloc(be, decl->sym->size, decl->sym->align), decl->sym->size);
+    if (decl->sym->size.width == 0) abort();
+    decl->sym->addr = taca_frame(be_frame_alloc(be, decl->sym->size.width, decl->sym->align), decl->sym->size);
 
     if (decl->init)
     {
@@ -1360,7 +1383,13 @@ static int be_compile_stmt(struct BackEnd* be, struct Ast* e)
 static void be_debug_print_taca(const struct TACAddress* addr)
 {
     char buf[64];
-    int i = snprintf(buf, sizeof(buf), "%-15s:%u:%d", taca_to_string(addr->kind), addr->is_addr, addr->sizing);
+    int i = snprintf(buf,
+                     sizeof(buf),
+                     "%-15s:%u:%d:%d",
+                     taca_to_string(addr->kind),
+                     addr->is_addr,
+                     addr->sizing.is_signed,
+                     addr->sizing.width);
     if (i < sizeof(buf))
     {
         switch (addr->kind)
@@ -1416,12 +1445,12 @@ int be_compile_toplevel_decl(struct BackEnd* be, Decl* decl)
             TACEntry save_arg = {
                 .op = TACO_ASSIGN,
                 .arg1 = {TACA_FRAME, .is_addr = 1},
-                .arg2 = {TACA_REG, .sizing = 8, .reg = REG_RDI},
+                .arg2 = {TACA_REG, .sizing = s_sizing_pointer, .reg = REG_RDI},
             };
-            if (sym->fn_ret_sizing > 8)
+            if (sym->fn_ret_sizing.width > 8)
             {
                 be_frame_alloc(be, 8, 8);
-                be_push_tace(be, &save_arg, 0);
+                be_push_tace(be, &save_arg, s_sizing_zero);
                 ++j;
             }
 
@@ -1438,35 +1467,36 @@ int be_compile_toplevel_decl(struct BackEnd* be, Decl* decl)
                 if (arg_ast->kind != AST_DECL) abort();
                 Decl* arg_decl = (void*)arg_ast;
 
-                if (arg_decl->sym->size > 8 || arg_decl->sym->align > 8 || j >= 6)
+                if (arg_decl->sym->size.width > 8 || arg_decl->sym->align > 8 || j >= 6)
                 {
                     // class MEMORY
                     arg_offset = round_to_alignment(arg_offset, arg_decl->sym->align);
                     arg_decl->sym->addr.kind = TACA_ARG;
                     arg_decl->sym->addr.sizing = arg_decl->sym->size;
                     arg_decl->sym->addr.arg_offset = arg_offset;
-                    arg_offset += arg_decl->sym->size;
+                    arg_offset += arg_decl->sym->size.width;
                 }
                 else
                 {
                     // class INTEGER
                     size_t align = declfn->is_varargs ? 8 : arg_decl->sym->align;
-                    save_arg.arg1 = arg_decl->sym->addr = taca_frame(be_frame_alloc(be, arg_decl->sym->size, align), 0);
+                    save_arg.arg1 = arg_decl->sym->addr =
+                        taca_frame(be_frame_alloc(be, arg_decl->sym->size.width, align), s_sizing_zero);
                     save_arg.arg2.sizing = arg_decl->sym->size;
                     save_arg.arg2.reg = s_sysv_arg_reg[j];
-                    be_push_tace(be, &save_arg, 0);
+                    be_push_tace(be, &save_arg, s_sizing_zero);
                     ++j;
                 }
             }
 
             if (declfn->is_varargs)
             {
-                save_arg.arg2.sizing = 8;
+                save_arg.arg2.sizing = s_sizing_pointer;
                 for (; j < 6; ++j)
                 {
-                    save_arg.arg1 = taca_frame(be_frame_alloc(be, 8, 8), 0);
+                    save_arg.arg1 = taca_frame(be_frame_alloc(be, 8, 8), s_sizing_zero);
                     save_arg.arg2.reg = s_sysv_arg_reg[j];
-                    be_push_tace(be, &save_arg, 0);
+                    be_push_tace(be, &save_arg, s_sizing_zero);
                 }
             }
 
@@ -1477,7 +1507,7 @@ int be_compile_toplevel_decl(struct BackEnd* be, Decl* decl)
     {
         // global variable
         struct Array data = {};
-        array_push_zeroes(&data, sym->size);
+        array_push_zeroes(&data, sym->size.width);
         cg_reserve_data(be->cg, sym->name, data.data, data.sz);
     }
 

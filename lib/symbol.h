@@ -16,7 +16,7 @@ typedef struct TypeSymbol
     struct DeclSpecs* def;
     struct Symbol* first_member;
     size_t idx;
-    size_t size;
+    Sizing size;
     size_t align;
 } TypeSymbol;
 
@@ -119,9 +119,9 @@ typedef struct Symbol
     // elaboration information
     TypeStr type;
 
-    int32_t fn_ret_sizing;
+    Sizing fn_ret_sizing;
     size_t field_offset;
-    size_t size;
+    Sizing size;
     size_t align;
 
     int enum_value;

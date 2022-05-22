@@ -5,6 +5,7 @@
 
 #include "compilermacros.h"
 #include "freevar.h"
+#include "sizing.h"
 
 #define X_AST_POOL_KIND(Y)                                                                                             \
     Y(EXPR_REF)                                                                                                        \
@@ -80,7 +81,7 @@ typedef struct Expr
 {
     INHERIT_AST;
 
-    int32_t sizing;
+    Sizing sizing;
 } Expr;
 
 #define INHERIT_EXPR                                                                                                   \
@@ -90,7 +91,7 @@ typedef struct Expr
         struct                                                                                                         \
         {                                                                                                              \
             INHERIT_AST;                                                                                               \
-            int32_t sizing;                                                                                            \
+            Sizing sizing;                                                                                             \
         };                                                                                                             \
     }
 
@@ -193,7 +194,7 @@ typedef struct CallParam
     Expr* expr;
 
     // elaboration info to track implicit conversion
-    int32_t sizing;
+    Sizing sizing;
     int32_t align;
 } CallParam;
 
@@ -214,7 +215,7 @@ typedef struct AstInit
     struct AstInit* next;
 
     uint32_t offset;
-    int32_t sizing;
+    Sizing sizing;
 } AstInit;
 #define AST_STRUCT_AST_INIT AstInit
 #define AST_KIND_AstInit AST_INIT

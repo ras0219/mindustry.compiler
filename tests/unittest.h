@@ -81,6 +81,16 @@ void unittest_print_stack(const struct TestState* state);
             REQUIRE_FAIL("'%s == %s' was '%zu == %zu'", expected_str, actual_str, _expr_a, _expr_b);                   \
     } while (0)
 
+#define REQUIRE_ZU_EQ_IMPL(expected, expected_str, actual, actual_str)                                                 \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        state->assertions++;                                                                                           \
+        size_t _expr_a = (expected);                                                                                   \
+        size_t _expr_b = (actual);                                                                                     \
+        if (_expr_a != _expr_b)                                                                                        \
+            REQUIRE_FAIL("'%s == %s' was '%zu == %zu'", expected_str, actual_str, _expr_a, _expr_b);                   \
+    } while (0)
+
 #define REQUIRE_ZU_EQ(expected, actual) REQUIRE_ZU_EQ_IMPL(expected, #expected, actual, #actual)
 
 #define REQUIRE_PTR_EQ(expected, actual)                                                                               \

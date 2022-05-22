@@ -850,12 +850,12 @@ static size_t typestr_get_size_i(struct Elaborator* elab, const struct TypeStr* 
         case TYPE_BYTE_UNION:
         {
             TypeSymbol* sym = tt_get(elab->types, typestr_get_offset_i(ts, i));
-            if (!sym->size)
+            if (!sym->size.width)
             {
                 typestr_error1(rc, elab->types, "error: unable to get size of incomplete type: %.*s\n", ts);
                 return 1;
             }
-            return sym->size;
+            return sym->size.width;
         }
         case TYPE_BYTE_ENUM: return 4;
         case TYPE_BYTE_POINTER: return 8;
@@ -968,14 +968,12 @@ static size_t typestr_get_elem_size(struct Elaborator* elab, const struct TypeSt
     }
 }
 
-static int32_t typestr_calc_sizing(struct Elaborator* elab, const struct TypeStr* ts, const RowCol* rc)
+static Sizing typestr_calc_sizing(struct Elaborator* elab, const struct TypeStr* ts, const RowCol* rc)
 {
     size_t sz = typestr_get_size(elab, ts, rc);
     if (sz > INT32_MAX) abort();
-    if (typestr_mask(ts) & TYPE_FLAGS_SIGNED)
-        return -(int32_t)sz;
-    else
-        return sz;
+    const Sizing ret = {.width = sz, .is_signed = !!(typestr_mask(ts) & TYPE_FLAGS_SIGNED)};
+    return ret;
 }
 
 static Symbol* find_field_by_name(TypeSymbol* def, const char* fieldname)
@@ -2084,10 +2082,10 @@ static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
                 }
             }
 
-            sym->size = typestr_get_size(elab, &sym->type, decl->tok ? &decl->tok->rc : &decl->specs->tok->rc);
+            sym->size = typestr_calc_sizing(elab, &sym->type, decl->tok ? &decl->tok->rc : &decl->specs->tok->rc);
             sym->align = typestr_get_align(elab, &sym->type);
 
-            if (sym->size == 0)
+            if (sym->size.width == 0)
             {
                 /* type may be incomplete */
                 if (decl->specs->is_extern)
@@ -2127,7 +2125,8 @@ static int elaborate_declspecs(struct Elaborator* elab, struct DeclSpecs* specs)
             arrptr_push(&elab->types->typesyms, specs->sym);
             if (specs->is_enum)
             {
-                specs->sym->size = 4;
+                specs->sym->size.is_signed = 1;
+                specs->sym->size.width = 4;
                 specs->sym->align = 4;
             }
         }
@@ -2202,12 +2201,12 @@ static int elaborate_declspecs(struct Elaborator* elab, struct DeclSpecs* specs)
                         if (specs->is_struct)
                         {
                             field->sym->field_offset = struct_size;
-                            struct_size += field->sym->size;
+                            struct_size += field->sym->size.width;
                         }
                         else
                         {
                             field->sym->field_offset = 0;
-                            if (field->sym->size > struct_size) struct_size = field->sym->size;
+                            if (field->sym->size.width > struct_size) struct_size = field->sym->size.width;
                         }
                         if (struct_align < field->sym->align) struct_align = field->sym->align;
                     }
@@ -2222,7 +2221,7 @@ static int elaborate_declspecs(struct Elaborator* elab, struct DeclSpecs* specs)
             if (struct_size == 0) struct_size = 1;
             struct_size = round_to_alignment(struct_size, struct_align);
             specs->sym->align = struct_align;
-            specs->sym->size = struct_size;
+            specs->sym->size.width = struct_size;
         }
     }
 

@@ -5,7 +5,7 @@
 #include "fwd.h"
 #include "scope.h"
 
-struct BackEnd
+typedef struct BackEnd
 {
     struct Parser* parser;
     struct Elaborator* elab;
@@ -33,7 +33,7 @@ struct BackEnd
     size_t next_label;
 
     unsigned debug_taces : 1;
-};
+} BackEnd;
 
 void be_init(struct BackEnd* be, struct Parser* p, struct Elaborator* e, struct CodeGen* cg);
 int be_compile_toplevel_decl(struct BackEnd* be, struct Decl* decl);

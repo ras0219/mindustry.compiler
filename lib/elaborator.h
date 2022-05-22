@@ -1,17 +1,9 @@
 #pragma once
-#pragma once
 
 #include <stdint.h>
 #include <stdio.h>
 
-#include "array.h"
 #include "fwd.h"
-
-struct ParamConversion
-{
-    int32_t sizing;
-    int32_t align;
-};
 
 typedef struct Elaborator
 {
@@ -21,12 +13,6 @@ typedef struct Elaborator
 
     FILE* fdebug;
 } Elaborator;
-
-struct ArrSpan
-{
-    size_t offset;
-    size_t extent;
-};
 
 struct ElaborateDeclCtx
 {

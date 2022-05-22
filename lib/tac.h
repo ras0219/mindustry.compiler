@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include "fwd.h"
+#include "sizing.h"
 
 #define X_TACO_KIND(Y)                                                                                                 \
     Y(TACO_NOP)                                                                                                        \
@@ -111,7 +112,7 @@ typedef struct TACAddress
 {
     enum TACAKind kind;
     uint8_t is_addr : 1;
-    int32_t sizing;
+    Sizing sizing;
     union
     {
         const char* literal;
