@@ -227,27 +227,41 @@ static TACAddress be_increment(struct BackEnd* be, const TACAddress* addr, int o
     return be_push_tace(be, &tace, s_sizing_pointer);
 }
 
-static struct TACAddress be_ensure_ref(struct BackEnd* be, const struct TACAddress* in)
-{
-    if (in->kind == TACA_REF) return *in;
-    struct TACEntry tace = {
-        .op = TACO_ADD,
-        .arg1 = *in,
-        .arg2 = taca_imm(0),
-    };
-    return be_push_tace(be, &tace, in->sizing);
-}
-
 static struct TACAddress be_alloc_temp(struct BackEnd* be, Sizing sizing)
 {
+    if (sizing.width == 0) abort();
     struct TACAddress o = {
         .kind = TACA_FRAME,
         .sizing = sizing,
-        .frame_offset = be->frame_size,
+        .frame_offset = be_frame_alloc(be, sizing.width, 8),
     };
-    be->frame_size += sizing.width;
-    if (be->max_frame_size < be->frame_size) be->max_frame_size = be->frame_size;
     return o;
+}
+
+static struct TACAddress be_ensure_ref(struct BackEnd* be, const struct TACAddress* in)
+{
+    if (in->kind == TACA_REF) return *in;
+    if (in->is_addr || in->sizing.width <= 8)
+    {
+        struct TACEntry tace = {
+            .op = TACO_ADD,
+            .arg1 = *in,
+            .arg2 = taca_imm(0),
+        };
+        return be_push_tace(be, &tace, in->sizing);
+    }
+    else
+    {
+        const TACAddress ret = be_alloc_temp(be, in->sizing);
+        struct TACEntry tace = {
+            .op = TACO_ASSIGN,
+            .arg1 = ret,
+            .arg2 = *in,
+        };
+        tace.arg1.is_addr = 1;
+        be_push_tace(be, &tace, in->sizing);
+        return ret;
+    }
 }
 
 static TACAddress be_deref(struct BackEnd* be, const TACAddress* in, Sizing sizing)
@@ -692,9 +706,6 @@ static int be_compile_ExprBuiltin(struct BackEnd* be, struct ExprBuiltin* e, str
             // see https://uclibc.org/docs/psABI-x86_64.pdf
             tace.op = TACO_ASSIGN;
             UNWRAP(be_compile_lvalue(be, e->expr1, &tace.arg1));
-            if (tace.arg1.kind != TACA_FRAME || !tace.arg1.is_addr)
-                UNWRAP(
-                    parser_tok_error(e->tok, "error: first argument of __builtin_va_start must be a local variable\n"));
             // gp_offset
             tace.arg1.is_addr = 1;
             tace.arg1.sizing = s_sizing_uint;
@@ -957,13 +968,20 @@ static int be_compile_ExprBinOp(struct BackEnd* be, struct ExprBinOp* e, struct 
             tace.arg2.kind = TACA_ALABEL;
             tace.arg2.alabel = on_false;
             be_push_tace(be, &tace, s_sizing_zero);
-            UNWRAP(be_compile_expr(be, rhs->lhs, &tace.arg1));
+            *out = be_alloc_temp(be, e->sizing);
+            struct TACAddress ret_addr = *out;
+            ret_addr.is_addr = 1;
+            struct TACEntry assign = {
+                .op = TACO_ASSIGN,
+                .arg1 = ret_addr,
+            };
+            UNWRAP(be_compile_expr(be, rhs->lhs, &assign.arg2));
+            be_push_tace(be, &assign, s_sizing_zero);
             be_push_jump(be, end);
             be_push_label(be, on_false);
-            UNWRAP(be_compile_expr(be, rhs->rhs, &tace.arg2));
+            UNWRAP(be_compile_expr(be, rhs->rhs, &assign.arg2));
+            be_push_tace(be, &assign, s_sizing_zero);
             be_push_label(be, end);
-            tace.op = TACO_PHI;
-            *out = be_push_tace(be, &tace, e->sizing);
             break;
         }
         case TOKEN_SYM2('|', '|'):

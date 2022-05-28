@@ -1,5 +1,6 @@
 #include "cg.h"
 
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -172,12 +173,16 @@ static int cg_gen_taca(struct CodeGen* cg, struct TACAddress addr, struct Activa
         case TACA_REG: cg_gen_taca_reg(cg, addr.reg, addr.sizing); break;
         case TACA_CONST: array_appendf(&cg->code, "L_.S%d(%%rip)", addr.const_idx); break;
         case TACA_REF:
+            if (frame->temp_offset + frame->frame_slots[addr.ref] * 8 >= frame->total_frame_size) abort();
             array_appendf(&cg->code, "%zu(%%rsp)", frame->temp_offset + frame->frame_slots[addr.ref] * 8);
             break;
-        case TACA_PARAM: array_appendf(&cg->code, "%zu(%%rsp)", addr.param_offset); break;
+        case TACA_PARAM:
+            if (addr.param_offset >= frame->locals_offset) abort();
+            array_appendf(&cg->code, "%zu(%%rsp)", addr.param_offset);
+            break;
         case TACA_FRAME:
+            if (frame->temp_offset <= frame->locals_offset + addr.frame_offset) abort();
             array_appendf(&cg->code, "%zu(%%rsp)", frame->locals_offset + addr.frame_offset);
-            if (frame->total_frame_size <= frame->locals_offset + addr.frame_offset) abort();
             break;
         case TACA_ARG: array_appendf(&cg->code, "%zu(%%rsp)", 8 + frame->total_frame_size + addr.arg_offset); break;
         default: parser_ferror(NULL, "error: unimplemented TACA: %s\n", taca_to_string(addr.kind)); break;
@@ -688,8 +693,7 @@ int cg_gen_taces(struct CodeGen* cg, const struct TACEntry* taces, size_t n_tace
 
     ++cg->cur_fn_lbl_prefix;
 
-    size_t num_args = 0;
-    size_t max_params = 0;
+    size_t max_param_size = 0;
 
     frame_slots = (unsigned char*)my_malloc(n_taces);
     memset(frame_slots, 0xFF, n_taces);
@@ -723,28 +727,13 @@ int cg_gen_taces(struct CodeGen* cg, const struct TACEntry* taces, size_t n_tace
                 frame_slots[ref] = ffs_pop(&ffs);
             }
         }
-        if (tace->op == TACO_ARG)
+        if (tace->arg1.kind == TACA_PARAM && tace->arg1.param_offset + tace->arg1.sizing.width > max_param_size)
         {
-            ++num_args;
+            max_param_size = tace->arg1.param_offset + tace->arg1.sizing.width;
         }
-        // if (tace->arg2.kind == TACA_PARAM && tace->arg2.param_idx > max_params)
-        // {
-        //     max_params = tace->arg2.param_idx;
-        // }
     }
 
-    size_t frame_size = locals_size + ffs.max_used * 8;
-
-    if (cg->target == CG_TARGET_MACOS_GAS)
-    {
-        // reserve space for incoming reg params and outgoing stack params
-        frame_size += max_params > 6 ? max_params * 8 : 6 * 8;
-    }
-    else
-    {
-        // TODO: ms-abi
-        abort();
-    }
+    size_t frame_size = max_param_size + locals_size + ffs.max_used * 8;
 
     // align stack for calls (32-byte alignment)
     frame_size += 31 - (frame_size + 7) % 32;
@@ -754,7 +743,7 @@ int cg_gen_taces(struct CodeGen* cg, const struct TACEntry* taces, size_t n_tace
         .total_frame_size = frame_size,
     };
     frame.arg_offset = cg->target == CG_TARGET_MACOS_GAS ? 6 * 8 : frame_size + 8;
-    frame.locals_offset = max_params > 6 ? max_params * 8 : 6 * 8;
+    frame.locals_offset = max_param_size;
     frame.temp_offset = frame.locals_offset + locals_size;
 
     // if (n_taces > 0 && taces[0].rc)

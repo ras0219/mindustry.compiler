@@ -1368,7 +1368,7 @@ static const struct Token* parse_decls(Parser* p,
             break;
         }
 
-        if (specs->is_typedef)
+        if (specs->is_typedef && strcmp(token_str(p, pdecl->tok), "__builtin_va_list") != 0)
         {
             PARSER_CHECK_NOT(insert_typedef(p, pdecl));
         }
@@ -1793,7 +1793,7 @@ int parser_parse(struct Parser* p, const struct Token* cur_tok, const char* tk_s
     PARSER_DO(parse_stmt_block(p, cur_tok, &p->top));
     if (cur_tok->type != LEX_EOF)
     {
-        PARSER_FAIL("error: expected EOF");
+        PARSER_FAIL("error: expected EOF\n");
     }
 
 fail:

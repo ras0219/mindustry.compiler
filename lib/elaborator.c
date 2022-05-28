@@ -321,7 +321,6 @@ unsigned int typestr_mask(const struct TypeStr* ts)
 static const struct TypeStr s_type_void = {.buf = {1, TYPE_BYTE_VOID}};
 static const struct TypeStr s_type_literal_int = {.buf = {1, TYPE_BYTE_INT}};
 static const struct TypeStr s_type_mutable_char = {.buf = {1, TYPE_BYTE_CHAR}};
-// static const struct TypeStr s_type_void = {.buf = {1, TYPE_BYTE_VOID}};
 
 __forceinline static uint32_t typestr_get_offset_i(const struct TypeStr* ts, int i)
 {
@@ -362,7 +361,7 @@ static void typestr_fmt_i(const struct TypeTable* tt, const struct TypeStr* ts, 
             case TYPE_BYTE_ULLONG: str = "unsigned long long"; goto append_ret;
             case TYPE_BYTE_FLOAT: str = "float"; goto append_ret;
             case TYPE_BYTE_DOUBLE: str = "double"; goto append_ret;
-            case TYPE_BYTE_UUVALIST: str = "va_list"; goto append_ret;
+            case TYPE_BYTE_UUVALIST: str = "__builtin_va_list"; goto append_ret;
             case TYPE_BYTE_POINTER: str = "pointer to "; goto append_continue;
             case 'c': str = "const "; goto append_continue;
             case 'v': str = "volatile "; goto append_continue;
@@ -843,7 +842,14 @@ __forceinline static void typestr_from_decltype_Decl(const struct Ast* const* ex
                                                      struct TypeStr* s,
                                                      struct Decl* d)
 {
-    return typestr_from_decltype(expr_seqs, tt, s, &d->ast);
+    // if (d->sym && d->sym->name && strcmp(d->sym->name, "va_list") == 0)
+    // {
+    //     s->buf[0] = 1;
+    //     s->buf[1] = TYPE_BYTE_UUVALIST;
+    //     typestr_append_offset(s, 1, TYPE_BYTE_ARRAY);
+    //     return;
+    // }
+    typestr_from_decltype(expr_seqs, tt, s, &d->ast);
 }
 
 static size_t typestr_get_size_i(struct Elaborator* elab, const struct TypeStr* ts, int i, const RowCol* rc)
@@ -866,7 +872,7 @@ static size_t typestr_get_size_i(struct Elaborator* elab, const struct TypeStr* 
         }
         case TYPE_BYTE_ENUM: return 4;
         case TYPE_BYTE_POINTER: return 8;
-        case TYPE_BYTE_UUVALIST: return 8;
+        case TYPE_BYTE_UUVALIST: return 24;
         case TYPE_BYTE_ULLONG:
         case TYPE_BYTE_ULONG:
         case TYPE_BYTE_LLONG:
@@ -920,7 +926,7 @@ static size_t typestr_get_align_i(struct Elaborator* elab, const struct TypeStr*
         }
         case TYPE_BYTE_ENUM: return 4;
         case TYPE_BYTE_POINTER: return 8;
-        case TYPE_BYTE_UUVALIST: return 24;
+        case TYPE_BYTE_UUVALIST: return 8;
         case TYPE_BYTE_ULLONG:
         case TYPE_BYTE_ULONG:
         case TYPE_BYTE_LLONG:
@@ -1315,7 +1321,16 @@ static void elaborate_builtin(struct Elaborator* elab,
         case LEX_UUVA_START:
             elaborate_expr(elab, ctx, e->expr2, rty);
             elaborate_expr(elab, ctx, e->expr1, rty);
-            typestr_implicit_conversion(elab, &e->tok->rc, rty, &s_valist_ptr, e->expr1);
+            if (!typestr_match(rty, &s_valist_ptr))
+            {
+                typestr_error2(
+                    &e->tok->rc,
+                    elab->types,
+                    "error: expected variable of type '%.*s' as first argument to va_start, but got '%.*s'\n",
+                    &s_valist_ptr,
+                    rty);
+            }
+            *rty = s_type_void;
             break;
         case LEX_UUVA_ARG:
             elaborate_expr(elab, ctx, e->expr1, rty);
