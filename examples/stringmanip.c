@@ -9,7 +9,7 @@ typedef struct Buffer
 
 int main()
 {
-    int z = 0;
+    int z = 125;
     Buffer buf = {0, z};
     for (int x = 0; x < sizeof(buf); ++x)
     {

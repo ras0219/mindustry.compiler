@@ -313,7 +313,7 @@ unsigned int typestr_mask(const struct TypeStr* ts)
         case TYPE_BYTE_STRUCT: return TYPE_FLAGS_STRUCT;
         case TYPE_BYTE_UNION: return TYPE_FLAGS_UNION;
         case TYPE_BYTE_FUNCTION: return TYPE_FLAGS_FUNCTION;
-        case TYPE_BYTE_UUVALIST: return TYPE_FLAGS_POINTER;
+        case TYPE_BYTE_UUVALIST: return TYPE_FLAGS_STRUCT;
         default: abort();
     }
 }
@@ -337,7 +337,6 @@ __forceinline static uint32_t typestr_get_offset(const struct TypeStr* ts)
     return typestr_get_offset_i(ts, ts->buf[0]);
 }
 
-static void typestr_fmt(const struct TypeTable* tt, const struct TypeStr* ts, struct Array* buf);
 static void typestr_fmt_i(const struct TypeTable* tt, const struct TypeStr* ts, size_t i, struct Array* buf)
 {
     size_t depth = 0;
@@ -439,7 +438,7 @@ static void typestr_fmt_i(const struct TypeTable* tt, const struct TypeStr* ts, 
     }
 }
 
-static void typestr_fmt(const struct TypeTable* tt, const struct TypeStr* ts, struct Array* buf)
+void typestr_fmt(const struct TypeTable* tt, const struct TypeStr* ts, struct Array* buf)
 {
     typestr_fmt_i(tt, ts, ts->buf[0], buf);
 }
@@ -684,7 +683,8 @@ static void typestr_append_decltype_DeclSpecs(const struct Ast* const* expr_seqs
 {
     if (d->_typedef)
     {
-        typestr_append_decltype(expr_seqs, tt, s, &d->_typedef->last_decl->ast);
+        memcpy(s->buf + s->buf[0] + 1, d->_typedef->type.buf + 1, d->_typedef->type.buf[0]);
+        s->buf[0] += d->_typedef->type.buf[0];
     }
     else if (d->sym)
     {
@@ -757,7 +757,15 @@ top:
     switch (e->kind)
     {
         case EXPR_REF: e = &((struct ExprRef*)e)->sym->last_decl->ast; goto top;
-        case AST_DECL: e = ((struct Decl*)e)->type; goto top;
+        case AST_DECL:
+        {
+            typestr_append_decltype(expr_seqs, tt, s, ((struct Decl*)e)->type);
+            if (((struct Decl*)e)->specs->is_fn_arg > 0)
+            {
+                typestr_decay(s);
+            }
+            return;
+        }
         case AST_DECLSPEC: return typestr_append_decltype_DeclSpecs(expr_seqs, tt, s, (struct DeclSpecs*)e);
         case AST_DECLPTR:
         {
@@ -788,7 +796,6 @@ top:
                 struct TypeStr* arg_ts = array_push_zeroes(&args, sizeof(struct TypeStr));
                 struct StmtDecls* arg_decls = (void*)expr_seqs[d->offset + i];
                 typestr_append_decltype(expr_seqs, tt, arg_ts, expr_seqs[arg_decls->offset]);
-                typestr_decay(arg_ts);
             }
             if (d->is_varargs)
             {
@@ -913,7 +920,7 @@ static size_t typestr_get_align_i(struct Elaborator* elab, const struct TypeStr*
         }
         case TYPE_BYTE_ENUM: return 4;
         case TYPE_BYTE_POINTER: return 8;
-        case TYPE_BYTE_UUVALIST: return 8;
+        case TYPE_BYTE_UUVALIST: return 24;
         case TYPE_BYTE_ULLONG:
         case TYPE_BYTE_ULONG:
         case TYPE_BYTE_LLONG:
@@ -1282,6 +1289,8 @@ static void elaborate_binop(struct Elaborator* elab,
     }
 }
 
+static const TypeStr s_valist_ptr = {2, TYPE_BYTE_UUVALIST, TYPE_BYTE_POINTER};
+
 static void elaborate_builtin(struct Elaborator* elab,
                               struct ElaborateDeclCtx* ctx,
                               struct ExprBuiltin* e,
@@ -1306,6 +1315,7 @@ static void elaborate_builtin(struct Elaborator* elab,
         case LEX_UUVA_START:
             elaborate_expr(elab, ctx, e->expr2, rty);
             elaborate_expr(elab, ctx, e->expr1, rty);
+            typestr_implicit_conversion(elab, &e->tok->rc, rty, &s_valist_ptr, e->expr1);
             break;
         case LEX_UUVA_ARG:
             elaborate_expr(elab, ctx, e->expr1, rty);
@@ -1606,6 +1616,8 @@ static void elaborate_init_ty_AstInit(struct Elaborator* elab, size_t offset, co
         DInitFrame* back = array_back(&iter.stk, sizeof(*back));
         if (init->init->kind == AST_INIT)
         {
+            init->offset = back->offset;
+            init->sizing = typestr_calc_sizing(elab, &back->ty, &init->init->tok->rc);
             elaborate_init_ty_AstInit(elab, back->offset, &back->ty, (AstInit*)init->init);
         }
         else
@@ -1907,6 +1919,9 @@ static void elaborate_expr(struct Elaborator* elab,
                                        "error: expected scalar type in variadic arguments but got '%.*s'\n",
                                        &orig_arg_expr_ty);
                     }
+                    param->sizing.is_signed = 0;
+                    param->sizing.width = 8;
+                    param->align = 8;
                 }
             }
             break;
@@ -1928,7 +1943,7 @@ static void elaborate_expr(struct Elaborator* elab,
                     if (field)
                     {
                         e->sym = field;
-                        typestr_from_decltype(elab->p->expr_seqs.data, elab->types, rty, field->def->type);
+                        typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, rty, field->def);
                         typestr_add_cvr(rty, cvr_mask);
                     }
                     else
@@ -2026,12 +2041,12 @@ static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
     }
     if (!decl->prev_decl)
     {
-        typestr_from_decltype(elab->p->expr_seqs.data, elab->types, &sym->type, decl->type);
+        typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, &sym->type, decl);
     }
     if (sym->def == decl)
     {
         // Refresh symbol's type with concrete definition information
-        typestr_from_decltype(elab->p->expr_seqs.data, elab->types, &sym->type, decl->type);
+        typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, &sym->type, decl);
 
         if (!decl->specs->is_typedef)
         {
@@ -2092,7 +2107,7 @@ static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
                 {
                     /* it's extern -- OK */
                 }
-                else if (sym->arg_index > 0 && !((struct Decl*)decl->specs->parent)->init)
+                else if (decl->specs->is_fn_arg && !((struct Decl*)decl->specs->parent)->init)
                 {
                     /* arg of function prototype -- OK */
                 }

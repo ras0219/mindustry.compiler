@@ -1,39 +1,56 @@
-CFLAGS:=-I ../lib ${CFLAGS}
+SHELL = /bin/sh
+.SUFFIXES:
+.SUFFIXES: .o .asm
+
+srcdir?=$(abspath ..)
 AS?=gcc
 ASFLAGS?=-g -c
 LD?=gcc
+CC?=cc
 
-SRC=array.c ast.c autoheap.c be.c cg.c elaborator.c fe.c hash.c lex.c \
+CFLAGS:=-I $(srcdir)/lib ${CFLAGS}
+
+SRCS:=array.c ast.c autoheap.c be.c cg.c elaborator.c fe.c hash.c lex.c \
 	lex.c main.c parse.c parser_globals.c pool.c poolset.c preproc.c scope.c stringmap.c stringpool.c \
-	symbol.c typestr.c
+	symbol.c typestr.c main.c
 
-all: main.selfbuild
+OBJS:=$(SRCS:.c=.o)
 
-asm: $(SRC:.c=.asm)
+vpath %.c $(srcdir)/lib:$(srcdir)/cli:$(srcdir)/examples
 
-main.asm: ../cli/main.c ${CC}
-	${CC} ${CFLAGS} $< -c -o $@
+all: main
 
-%.asm: ../lib/%.c ${CC}
+stage2/%.asm: %.c main
+	./main ${CFLAGS} $< -c -o $@
+
+stage2: stage2/main
+
+%.asm: %.c $(CC)
 	${CC} ${CFLAGS} $< -c -o $@
 
 %.o: %.asm
 	${AS} ${ASFLAGS} $< -o $@
 
-main.selfbuild: $(SRC:.c=.o)
+main: $(OBJS)
 	${LD} ${LDFLAGS} $^ -o $@
+
+asm: $(notdir $(SRCS:.c=.asm))
 
 clean:
-	rm *.o *.asm main.selfbuild
+	rm -f *.o *.asm main.selfbuild
 
-fibonacci.asm: ../examples/fibonacci.c ${CC}
+EXAMPLES:=fibonacci stringmanip va-example enums
+
+$(addsuffix .asm,$(EXAMPLES)): %.asm: $(srcdir)/examples/%.c $(CC)
 	${CC} ${CFLAGS} $< -c -o $@
 
-fibonacci: fibonacci.o
+$(addsuffix .o,$(EXAMPLES)): %.o: %.asm
+	${AS} ${ASFLAGS} $< -o $@
+
+$(EXAMPLES): %: %.o
 	${LD} ${LDFLAGS} $^ -o $@
 
-stringmanip.asm: ../examples/stringmanip.c ${CC}
-	${CC} ${CFLAGS} $< -c -o $@
+$(addprefix run-,$(EXAMPLES)): run-%: %
+	./$^
 
-stringmanip: stringmanip.o
-	${LD} ${LDFLAGS} $^ -o $@
+examples: $(EXAMPLES)

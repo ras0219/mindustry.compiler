@@ -22,6 +22,7 @@ void cg_destroy(struct CodeGen* cg)
 {
     array_destroy(&cg->const_);
     array_destroy(&cg->code);
+    sm_destroy(&cg->file_numbers);
 }
 
 enum
@@ -38,7 +39,6 @@ enum
     TACA_ARG_IS_MEMORY = 1,
     TACA_ALABEL_IS_MEMORY = 0,
     TACA_LLABEL_IS_MEMORY = 1,
-    TACA_TEMP_IS_MEMORY = 0,
     TACA_REG_IS_MEMORY = 0,
 };
 
@@ -163,23 +163,23 @@ static int cg_gen_taca(struct CodeGen* cg, struct TACAddress addr, struct Activa
                 array_push_byte(&cg->code, '_');
             }
             array_appends(&cg->code, addr.name);
-            if (!addr.is_addr) array_appends(&cg->code, "(%rip)");
+            array_appends(&cg->code, "(%rip)");
             break;
         case TACA_LITERAL: array_appends(&cg->code, addr.literal); break;
         case TACA_IMM: array_appendf(&cg->code, "$%zu", addr.imm); break;
         case TACA_ALABEL: array_appendf(&cg->code, "L$%zu", addr.alabel); break;
         case TACA_LLABEL: array_appendf(&cg->code, "L$%zu_%s", cg->cur_fn_lbl_prefix, addr.literal); break;
-        case TACA_TEMP: array_appends(&cg->code, "%rcx"); break;
         case TACA_REG: cg_gen_taca_reg(cg, addr.reg, addr.sizing); break;
         case TACA_CONST: array_appendf(&cg->code, "L_.S%d(%%rip)", addr.const_idx); break;
         case TACA_REF:
             array_appendf(&cg->code, "%zu(%%rsp)", frame->temp_offset + frame->frame_slots[addr.ref] * 8);
             break;
         case TACA_PARAM: array_appendf(&cg->code, "%zu(%%rsp)", addr.param_offset); break;
-        case TACA_FRAME: array_appendf(&cg->code, "%zu(%%rsp)", frame->locals_offset + addr.frame_offset); break;
-        case TACA_ARG:
-            array_appendf(&cg->code, "%zu(%%rsp)", frame->locals_offset + frame->total_frame_size + addr.arg_offset);
+        case TACA_FRAME:
+            array_appendf(&cg->code, "%zu(%%rsp)", frame->locals_offset + addr.frame_offset);
+            if (frame->total_frame_size <= frame->locals_offset + addr.frame_offset) abort();
             break;
+        case TACA_ARG: array_appendf(&cg->code, "%zu(%%rsp)", 8 + frame->total_frame_size + addr.arg_offset); break;
         default: parser_ferror(NULL, "error: unimplemented TACA: %s\n", taca_to_string(addr.kind)); break;
     }
     return rc;
@@ -213,31 +213,40 @@ static int cg_gen_load(struct CodeGen* cg, struct TACAddress addr, int reg, stru
     return rc;
 
 not_address:;
-    const char* dst;
-    switch (addr.sizing.width)
-    {
-        case 8: dst = s_reg_names[reg]; break;
-        case 4: dst = s_reg_names_4[reg]; break;
-        case 2: dst = s_reg_names_2[reg]; break;
-        case 1: dst = s_reg_names_1[reg]; break;
-        default: abort();
-    }
     if (addr.kind == TACA_NAME)
     {
         addr.is_addr = 1;
         array_appends(&cg->code, "    movq ");
         rc = cg_gen_taca(cg, addr, frame);
         array_appendf(&cg->code, ", %s\n", s_reg_names[reg]);
-        array_appendf(&cg->code, "    mov (%s), %s\n", s_reg_names[reg], dst);
+    }
+
+    if (!addr.sizing.is_signed && addr.sizing.width == 4 || addr.sizing.width == 8)
+    {
+        array_appends(&cg->code, "    mov ");
     }
     else
     {
-        array_appends(&cg->code, "    mov ");
-        rc = cg_gen_taca(cg, addr, frame);
-        array_appendf(&cg->code, ", %s\n", dst);
+        char szch = '\0';
+        switch (addr.sizing.width)
+        {
+            case 4: szch = 'l'; break;
+            case 2: szch = 'w'; break;
+            case 1: szch = 'b'; break;
+            default: abort();
+        }
+        array_appendf(&cg->code, "    mov%c%c ", addr.sizing.is_signed ? 's' : 'z', szch);
     }
-    if (addr.sizing.width != 8 && addr.sizing.width != 4)
-        array_appendf(&cg->code, "    mov%cx %s, %s\n", addr.sizing.is_signed ? 's' : 'z', dst, s_reg_names[reg]);
+    if (addr.kind == TACA_NAME)
+        array_appendf(&cg->code, "(%s)", s_reg_names[reg]);
+    else
+        rc = cg_gen_taca(cg, addr, frame);
+    array_appends(&cg->code, ", ");
+    if (!addr.sizing.is_signed && addr.sizing.width == 4)
+        array_appends(&cg->code, s_reg_names_4[reg]);
+    else
+        array_appends(&cg->code, s_reg_names[reg]);
+    array_push_byte(&cg->code, '\n');
     return rc;
 }
 
@@ -274,10 +283,33 @@ static void ffs_push(struct FreeFrameSlots* ffs, unsigned char s)
 static int cg_gen_store(struct CodeGen* cg, struct TACAddress addr, int reg, struct ActivationRecord* frame)
 {
     array_appends(&cg->code, "    mov ");
-    cg_gen_taca_reg(cg, reg, addr.sizing);
-    array_appends(&cg->code, ", ");
+
+    if (addr.kind == TACA_REG && !addr.is_addr)
+    {
+        cg_gen_taca_reg(cg, reg, addr.sizing);
+        array_appends(&cg->code, ", 0(");
+        array_appends(&cg->code, s_reg_names[addr.reg]);
+        array_appends(&cg->code, ")\n");
+        return 0;
+    }
+
+    if (addr.is_addr)
+    {
+        cg_gen_taca_reg(cg, reg, addr.sizing);
+        array_appends(&cg->code, ", ");
+    }
     int rc = cg_gen_taca(cg, addr, frame);
-    array_push_byte(&cg->code, '\n');
+    if (!addr.is_addr)
+    {
+        array_appends(&cg->code, ", %r10\n");
+        array_appends(&cg->code, "    mov ");
+        cg_gen_taca_reg(cg, reg, addr.sizing);
+        array_appends(&cg->code, ", (%r10)\n");
+    }
+    else
+    {
+        array_push_byte(&cg->code, '\n');
+    }
     return rc;
 }
 
@@ -286,6 +318,7 @@ static int cg_gen_store_frame(struct CodeGen* cg, size_t i, int reg, struct Acti
     if (frame->frame_slots[i] == 255) return 0;
     struct TACAddress addr = {
         .kind = TACA_REF,
+        .is_addr = 1,
         .ref = i,
         .sizing.width = 8,
     };
@@ -297,7 +330,7 @@ static int cg_add(struct CodeGen* cg, size_t i, const struct TACEntry* taces, st
     int rc = 0;
     UNWRAP(cg_gen_load(cg, taces[i].arg1, REG_R10, frame));
     UNWRAP(cg_gen_load(cg, taces[i].arg2, REG_R11, frame));
-    array_appends(&cg->code, "add %r11, %r10\n");
+    array_appends(&cg->code, "    add %r11, %r10\n");
     UNWRAP(cg_gen_store_frame(cg, i, REG_R10, frame));
 fail:
     return rc;
@@ -313,91 +346,154 @@ static int cg_memcpy(
         arg1.sizing = sizing;
         arg2.is_addr = 0;
         arg2.sizing = sizing;
-        UNWRAP(cg_gen_load(cg, arg2, REG_RCX, frame));
-        UNWRAP(cg_gen_store(cg, arg1, REG_RCX, frame));
+        UNWRAP(cg_gen_load(cg, arg2, REG_R11, frame));
+        UNWRAP(cg_gen_store(cg, arg1, REG_R11, frame));
         goto fail;
     }
-
-    UNWRAP(cg_gen_load(cg, arg2, REG_RAX, frame));
-    UNWRAP(cg_gen_load(cg, arg1, REG_RDX, frame));
-    int32_t j = 0;
+    UNWRAP(cg_gen_load(cg, arg2, REG_R10, frame));
+    UNWRAP(cg_gen_load(cg, arg1, REG_R11, frame));
+    array_appends(&cg->code, "    push %r12\n");
+    uint32_t j = 0;
     for (; j + 8 < sizing.width; j += 8)
     {
-        array_appendf(&cg->code, "    movq %d(%%rax), %%rcx\n", j);
-        array_appendf(&cg->code, "    movq %%rcx, %d(%%rdx)\n", j);
+        array_appendf(&cg->code, "    movq %u(%%r10), %%r12\n", j);
+        array_appendf(&cg->code, "    movq %%r12, %u(%%r11)\n", j);
     }
     switch (sizing.width - j)
     {
         case 8:
-        case -8:
-            array_appendf(&cg->code, "    movq %d(%%rax), %%rcx\n", j);
-            array_appendf(&cg->code, "    movq %%rcx, %d(%%rdx)\n", j);
+            array_appendf(&cg->code, "    movq %u(%%r10), %%r12\n", j);
+            array_appendf(&cg->code, "    movq %%r12, %u(%%r11)\n", j);
             break;
         case 4:
-        case -4:
-            array_appendf(&cg->code, "    movl %d(%%rax), %%ecx\n", j);
-            array_appendf(&cg->code, "    movl %%ecx, %d(%%rdx)\n", j);
+            array_appendf(&cg->code, "    movl %u(%%r10), %%r12d\n", j);
+            array_appendf(&cg->code, "    movl %%r12d, %u(%%r11)\n", j);
             break;
         case 2:
-        case -2:
-            array_appendf(&cg->code, "    movw %d(%%rax), %%cx\n", j);
-            array_appendf(&cg->code, "    movw %%cx, %d(%%rdx)\n", j);
+            array_appendf(&cg->code, "    movw %u(%%r10), %%r12w\n", j);
+            array_appendf(&cg->code, "    movw %%r12w, %u(%%r11)\n", j);
             break;
         case 1:
-        case -1:
-            array_appendf(&cg->code, "    movb %d(%%rax), %%cl\n", j);
-            array_appendf(&cg->code, "    movb %%cl, %d(%%rdx)\n", j);
+            array_appendf(&cg->code, "    movb %u(%%r10), %%r12b\n", j);
+            array_appendf(&cg->code, "    movb %%r12b, %u(%%r11)\n", j);
             break;
-        default: UNWRAP(parser_ferror(NULL, "error: invalid sizing: %d\n", sizing.width - j));
+        default: UNWRAP(parser_ferror(NULL, "error: invalid sizing: %u\n", sizing.width - j));
     }
+    array_appends(&cg->code, "    pop %r12\n");
 fail:
     return rc;
 }
 
-static const Sizing s_sizing_pointer = {.width = 8};
+static void cg_extend_reg(struct CodeGen* cg, int src_reg, Sizing src, int dst_reg, Sizing dst)
+{
+    if (src.width < dst.width)
+    {
+        if (src.is_signed)
+            array_appends(&cg->code, "    movsx ");
+        else
+            array_appends(&cg->code, "    movzx ");
+        cg_gen_taca_reg(cg, src_reg, src);
+        array_appends(&cg->code, ", ");
+        cg_gen_taca_reg(cg, dst_reg, dst);
+        array_push_byte(&cg->code, '\n');
+    }
+}
+
+static char sizing_suffix(int width)
+{
+    switch (width)
+    {
+        case 8: return 'q';
+        case 4: return 'l';
+        case 2: return 'w';
+        case 1: return 'b';
+        default: return '\0';
+    }
+}
+
+static int is_suffix_size(uint32_t i) { return i == 8 || i == 4 || i == 2 || i == 1; }
+
 static int cg_assign(struct CodeGen* cg, struct TACAddress arg1, struct TACAddress arg2, struct ActivationRecord* frame)
 {
     int rc = 0;
-    if (!arg1.is_addr && arg1.kind == TACA_REG)
-    {
-        if (arg2.is_addr)
-        {
-            UNWRAP(cg_gen_load(cg, arg2, REG_R11, frame));
-            array_appends(&cg->code, "    mov ");
-            cg_gen_taca_reg(cg, REG_R11, s_sizing_pointer);
-        }
-        else
-        {
-            array_appends(&cg->code, "    mov ");
-            UNWRAP(cg_gen_taca(cg, arg2, frame));
-        }
-        array_appends(&cg->code, ", 0(");
-        cg_gen_taca_reg(cg, arg1.reg, arg1.sizing);
-        array_appends(&cg->code, ")\n");
-        goto fail;
-    }
-    if (arg1.is_addr && arg1.kind == TACA_REG)
+    if (arg1.kind == TACA_REG && arg1.is_addr)
     {
         UNWRAP(cg_gen_load(cg, arg2, arg1.reg, frame));
-        goto fail;
     }
-    if (!arg2.is_addr)
+    else if (arg2.kind == TACA_REG)
     {
-        if (arg2.kind == TACA_REG)
+        if (arg2.is_addr) abort();
+        if (arg1.sizing.width > arg2.sizing.width)
         {
-            // todo: fix cg_gen_store to dereference first argument
-            arg1.sizing = arg2.sizing;
-            arg1.is_addr = 0;
-            UNWRAP(cg_gen_store(cg, arg1, arg2.reg, frame));
+            cg_extend_reg(cg, arg2.reg, arg2.sizing, REG_R11, arg1.sizing);
+            UNWRAP(cg_gen_store(cg, arg1, REG_R11, frame));
         }
         else
         {
-            arg2.is_addr = 1;
-            UNWRAP(cg_memcpy(cg, arg1, arg2, arg2.sizing, frame));
+            UNWRAP(cg_gen_store(cg, arg1, arg2.reg, frame));
         }
-        goto fail;
     }
-    UNWRAP(cg_gen_load(cg, arg2, REG_RAX, frame));
+    else if (arg2.kind == TACA_IMM)
+    {
+        const Sizing bytes = arg1.sizing;
+        arg1.sizing.width = 8;
+        char ch = sizing_suffix(bytes.width);
+        if (!ch || !arg1.is_addr)
+        {
+            UNWRAP(cg_gen_load(cg, arg1, REG_R11, frame));
+        }
+
+        if (ch)
+        {
+            array_appendf(&cg->code, "    mov%c $%zu, ", sizing_suffix(bytes.width), arg2.imm);
+            if (arg1.is_addr)
+            {
+                UNWRAP(cg_gen_taca(cg, arg1, frame));
+                array_appends(&cg->code, "\n");
+            }
+            else
+            {
+                array_appends(&cg->code, "(%r11)\n");
+            }
+        }
+        else
+        {
+            // Storing immediates of non-power-of-two size is not implemented
+            if (arg2.imm != 0) abort();
+            size_t width = bytes.width;
+            while (width >= 8)
+            {
+                array_appendf(&cg->code, "    movq $0, %d(%%r11)\n", bytes.width - width);
+                width -= 8;
+            }
+            if (width & 4)
+            {
+                array_appendf(&cg->code, "    movl $0, %d(%%r11)\n", bytes.width - width);
+                width -= 4;
+            }
+            if (width & 2)
+            {
+                array_appendf(&cg->code, "    movw $0, %d(%%r11)\n", bytes.width - width);
+                width -= 2;
+            }
+            if (width & 1)
+            {
+                array_appendf(&cg->code, "    movb $0, %d(%%r11)\n", bytes.width - width);
+            }
+        }
+    }
+    else if (arg2.is_addr || is_suffix_size(arg1.sizing.width))
+    {
+        UNWRAP(cg_gen_load(cg, arg2, REG_R11, frame));
+        UNWRAP(cg_gen_store(cg, arg1, REG_R11, frame));
+    }
+    else
+    {
+        arg2.is_addr = 1;
+        Sizing s = arg1.sizing;
+        arg1.sizing.width = 8;
+        UNWRAP(cg_memcpy(cg, arg1, arg2, s, frame));
+    }
 fail:
     return rc;
 }
@@ -465,11 +561,19 @@ static int cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t 
         case TACO_CALL:
             array_appends(&cg->code, "    movb $0, %al\n");
             array_appends(&cg->code, "    callq ");
-            if (taca_is_memory(&tace->arg1))
+            if ((tace->arg1.kind == TACA_LNAME || tace->arg1.kind == TACA_NAME) && tace->arg1.is_addr)
             {
-                array_push_byte(&cg->code, '*');
+                array_push_byte(&cg->code, '_');
+                array_appends(&cg->code, tace->arg1.name);
             }
-            UNWRAP(cg_gen_taca(cg, tace->arg1, frame));
+            else
+            {
+                if (taca_is_memory(&tace->arg1))
+                {
+                    array_push_byte(&cg->code, '*');
+                }
+                UNWRAP(cg_gen_taca(cg, tace->arg1, frame));
+            }
             array_push_byte(&cg->code, '\n');
             UNWRAP(cg_gen_store_frame(cg, i, REG_RAX, frame));
             break;
@@ -517,7 +621,7 @@ static int cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t 
             else
             {
                 UNWRAP(cg_gen_load(cg, tace->arg1, REG_RAX, frame));
-                array_appends(&cg->code, "cmp $0, %rax\n");
+                array_appends(&cg->code, "    cmp $0, %rax\n");
                 UNWRAP(cg_gen_inst_a(cg, "jz ", tace->arg2, frame));
             }
             break;
@@ -529,13 +633,13 @@ static int cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t 
             else
             {
                 UNWRAP(cg_gen_load(cg, tace->arg1, REG_RAX, frame));
-                array_appends(&cg->code, "cmp $0, %rax\n");
+                array_appends(&cg->code, "    cmp $0, %rax\n");
                 UNWRAP(cg_gen_inst_a(cg, "jnz ", tace->arg2, frame));
             }
             break;
         case TACO_CTBZ:
             if (tace->arg1.kind != TACA_IMM) abort();
-            array_appendf(&cg->code, "cmp $%zu, %%rcx\n", tace->arg1.imm);
+            array_appendf(&cg->code, "    cmp $%zu, %%rcx\n", tace->arg1.imm);
             UNWRAP(cg_gen_inst_a(cg, "jz ", tace->arg2, frame));
             break;
         case TACO_LABEL:
@@ -547,6 +651,30 @@ static int cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t 
     }
 fail:
     return rc;
+}
+
+static void cg_emit_rc(struct CodeGen* cg, const RowCol* rc, const char* opts)
+{
+    static size_t next_file_num = 0;
+    const char* filename = rc->file;
+    size_t* file_idx = sm_get(&cg->file_numbers, filename);
+    if (!file_idx)
+    {
+        ++next_file_num;
+        sm_insert(&cg->file_numbers, filename, next_file_num);
+        array_appendf(&cg->code, "    .file %zu \"%s\"\n", next_file_num, filename);
+        file_idx = &next_file_num;
+    }
+
+    array_appendf(&cg->code,
+                  "    .loc %zu %d %d %s ## %s:%d:%d\n",
+                  *file_idx,
+                  rc->row,
+                  rc->col,
+                  opts,
+                  filename,
+                  rc->row,
+                  rc->col);
 }
 
 int cg_gen_taces(struct CodeGen* cg, const struct TACEntry* taces, size_t n_taces, size_t locals_size)
@@ -629,6 +757,11 @@ int cg_gen_taces(struct CodeGen* cg, const struct TACEntry* taces, size_t n_tace
     frame.locals_offset = max_params > 6 ? max_params * 8 : 6 * 8;
     frame.temp_offset = frame.locals_offset + locals_size;
 
+    // if (n_taces > 0 && taces[0].rc)
+    // {
+    //     cg_emit_rc(cg, taces[0].rc, "prologue_end");
+    // }
+
     array_appendf(&cg->code,
                   "    .cfi_startproc\n"
                   "    subq $%zu, %%rsp\n"
@@ -640,23 +773,11 @@ int cg_gen_taces(struct CodeGen* cg, const struct TACEntry* taces, size_t n_tace
     {
         if (taces[i].rc)
         {
-            array_appendf(&cg->code,
-                          //                          "    .file 1 \"\" \"%s\"\n"
-                          "    .loc 1 %d %d ## %s:%d:%d\n",
-                          //                          taces[i].rc->file,
-                          taces[i].rc->row,
-                          taces[i].rc->col,
-                          taces[i].rc->file,
-                          taces[i].rc->row,
-                          taces[i].rc->col);
+            cg_emit_rc(cg, taces[i].rc, "");
         }
-        array_appendf(&cg->code,
-                      "    ## TAC %zu: (%s, %s, %s) -> %d\n",
-                      i,
-                      taco_to_string(taces[i].op),
-                      taca_to_string(taces[i].arg1.kind),
-                      taca_to_string(taces[i].arg2.kind),
-                      frame_slots[i]);
+        array_appendf(&cg->code, "    ## TAC %zu: ", i);
+        debug_tace(&cg->code, taces + i);
+        array_appendf(&cg->code, " -> %d\n", frame_slots[i]);
 
         UNWRAP(cg_gen_tace(cg, taces, i, &frame));
     }
@@ -717,7 +838,48 @@ int cg_emit(struct CodeGen* cg, FILE* fout)
             UNWRAP(fputs("\n.code\n\n", fout) < 0);
         else
             UNWRAP(fputs("\n.section __TEXT,__text,regular,pure_instructions\n\n", fout) < 0);
+        UNWRAP(fputs("Lfunc_begin0:\n", fout) < 0);
         UNWRAP(!fwrite(cg->code.data, cg->code.sz, 1, fout));
+        UNWRAP(fputs("Lfunc_end0:\n", fout) < 0);
+        if (strnstr(cg->code.data, "main.c", cg->code.sz) != NULL)
+            UNWRAP(fprintf(fout,
+                           "\n.section __DWARF,__debug_abbrev,regular,debug\n"
+                           ".byte	1                               ## Abbreviation Code\n"
+                           ".byte	17                              ## DW_TAG_compile_unit\n"
+                           ".byte	1                               ## DW_CHILDREN_yes\n"
+                           ".byte	19                              ## DW_AT_language\n"
+                           ".byte	5                               ## DW_FORM_data2\n"
+                           ".byte	3                               ## DW_AT_name\n"
+                           ".byte	8                               ## DW_FORM_string\n"
+                           ".byte	16                              ## DW_AT_stmt_list\n"
+                           ".byte	23                              ## DW_FORM_sec_offset\n"
+                           ".byte	17                              ## DW_AT_low_pc\n"
+                           ".byte	1                               ## DW_FORM_addr\n"
+                           ".byte	18                              ## DW_AT_high_pc\n"
+                           ".byte	6                               ## DW_FORM_data4\n"
+                           ".byte	0                               ## EOM(1)\n"
+                           ".byte	0                               ## EOM(2)\n"
+                           ".section __DWARF,__debug_info,regular,debug\n"
+                           ".set Lset0, Ldebug_info_end0-Ldebug_info_start0 ## Length of Unit\n"
+                           ".long	Lset0 ## section length\n"
+                           "Ldebug_info_start0:\n"
+                           ".short 4 ## dwarf v4\n"
+                           ".long 0 ## offset into abbrev\n"
+                           ".byte 8 ## addr size\n"
+                           ".byte 1 ## abbrev[1]: compile unit\n"
+                           ".short	12                              ## DW_AT_language\n"
+                           ".asciz	\"%s\"                             ## DW_AT_name\n"
+                           ".long	0            ## DW_AT_stmt_list\n"
+                           ".quad	Lfunc_begin0                    ## DW_AT_low_pc\n"
+                           ".set Lset3, Lfunc_end0-Lfunc_begin0     ## DW_AT_high_pc\n"
+                           ".long	Lset3\n"
+                           "Ldebug_info_end0:\n",
+                           "/opt/src/mindustry.compiler/cli/main.c") < 0);
+        UNWRAP(fprintf(fout,
+                       ".subsections_via_symbols\n"
+                       ".section __DWARF,__debug_line,regular,debug\n"
+                       "Lsection_line:\n"
+                       "Lline_table_start0:\n") < 0);
     }
 
     if (cg->target == CG_TARGET_WIN_MASM) UNWRAP(0 > fputs("END\n", fout));

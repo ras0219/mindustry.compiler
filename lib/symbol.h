@@ -51,6 +51,7 @@ typedef struct DeclSpecs
     unsigned int is_static : 1;
     unsigned int is_typedef : 1;
     unsigned int is_stdcall : 1;
+    unsigned int is_fn_arg : 1;
 } DeclSpecs;
 
 #define AST_STRUCT_AST_DECLSPEC DeclSpecs
@@ -75,6 +76,9 @@ typedef struct DeclFn
     size_t offset;
     size_t extent;
 } DeclFn;
+
+#define AST_STRUCT_AST_DECLFN DeclFn
+#define AST_KIND_DeclFn AST_DECLFN
 
 typedef struct DeclArr
 {
@@ -112,9 +116,6 @@ typedef struct Symbol
     Decl* def;
     struct Symbol* next_field;
     unsigned int is_enum_constant : 1;
-
-    // 0 means not an argument, 1 means first argument, etc
-    unsigned int arg_index;
 
     // elaboration information
     TypeStr type;

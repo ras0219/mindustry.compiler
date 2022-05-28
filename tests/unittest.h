@@ -60,16 +60,17 @@ void unittest_print_stack(const struct TestState* state);
 
 #define REQUIRE(expr) REQUIRE_IMPL(expr, #expr)
 
-#define REQUIRE_EQ_IMPL(expected, expected_str, actual, actual_str)                                                    \
+#define REQUIRE_EQ_IMPL(file, line, expected, expected_str, actual, actual_str)                                        \
     do                                                                                                                 \
     {                                                                                                                  \
         state->assertions++;                                                                                           \
         int _expr_a = (expected);                                                                                      \
         int _expr_b = (actual);                                                                                        \
-        if (_expr_a != _expr_b) REQUIRE_FAIL("'%s == %s' was '%d == %d'", expected_str, actual_str, _expr_a, _expr_b); \
+        if (_expr_a != _expr_b)                                                                                        \
+            REQUIRE_FAIL_IMPL(file, line, "'%s == %s' was '%d == %d'", expected_str, actual_str, _expr_a, _expr_b);    \
     } while (0)
 
-#define REQUIRE_EQ(expected, actual) REQUIRE_EQ_IMPL(expected, #expected, actual, #actual)
+#define REQUIRE_EQ(expected, actual) REQUIRE_EQ_IMPL(__FILE__, __LINE__, expected, #expected, actual, #actual)
 
 #define REQUIRE_ZU_EQ_IMPL(expected, expected_str, actual, actual_str)                                                 \
     do                                                                                                                 \
@@ -195,8 +196,12 @@ void unittest_print_stack(const struct TestState* state);
                 _with_ast_start##N:;                                                                                   \
                 struct _expr_type* _with_ast_e##N = (_expr);                                                           \
                 REQUIRE_IMPL(_with_ast_e##N, _expr_str);                                                               \
-                REQUIRE_EQ_IMPL(                                                                                       \
-                    AST_KIND_##_type, STRINGIFY(AST_KIND_##_type), _with_ast_e##N->kind, "(" _expr_str ")->kind");     \
+                REQUIRE_EQ_IMPL(__FILE__,                                                                              \
+                                __LINE__,                                                                              \
+                                AST_KIND_##_type,                                                                      \
+                                STRINGIFY(AST_KIND_##_type),                                                           \
+                                _with_ast_e##N->kind,                                                                  \
+                                "(" _expr_str ")->kind");                                                              \
                 _var = (struct _type*)_with_ast_e##N;                                                                  \
                 goto _with_ast_body##N;                                                                                \
             }                                                                                                          \

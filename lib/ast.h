@@ -293,6 +293,9 @@ struct StmtBlock
     size_t offset;
     size_t extent;
 };
+#define AST_STRUCT_STMT_BLOCK StmtBlock
+#define AST_KIND_StmtBlock STMT_BLOCK
+
 // TODO: represent designator-list
 struct ASTDInit
 {

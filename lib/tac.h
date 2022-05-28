@@ -50,7 +50,6 @@
     Y(TACA_LLABEL)                                                                                                     \
     Y(TACA_FRAME)                                                                                                      \
     Y(TACA_ARG)                                                                                                        \
-    Y(TACA_TEMP)                                                                                                       \
     Y(TACA_REF)                                                                                                        \
     Y(TACA_CONST)                                                                                                      \
     Y(TACA_PARAM)                                                                                                      \
@@ -128,9 +127,13 @@ typedef struct TACAddress
     };
 } TACAddress;
 
+void debug_taca(struct Array* arr, const TACAddress* addr);
+
 typedef struct TACEntry
 {
     enum TACOKind op;
     struct TACAddress arg1, arg2;
     const struct RowCol* rc;
 } TACEntry;
+
+void debug_tace(struct Array* arr, const TACEntry* tace);

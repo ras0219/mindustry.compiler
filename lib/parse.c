@@ -679,7 +679,7 @@ static const struct Token* parse_declspecs(Parser* p, const struct Token* cur_to
             specs.tok = cur_tok;
             specs.name = token_str(p, cur_tok);
             struct Binding* const cur_bind = scope_find(&p->typedef_scope, specs.name);
-            if (!cur_bind)
+            if (!cur_bind || !cur_bind->sym)
             {
                 PARSER_FAIL("error: expected type but found identifier: %s\n", specs.name);
                 break;
@@ -899,6 +899,7 @@ static const struct Token* parse_declarator_fnargs(Parser* p, const struct Token
             struct DeclSpecs* arg_specs;
 
             PARSER_DO(parse_declspecs(p, cur_tok, &arg_specs));
+            arg_specs->is_fn_arg = 1;
             struct Decl* arg_decl = parse_alloc_decl(p, arg_specs);
             PARSER_DO(parse_declarator(p, cur_tok, arg_decl));
             arrptr_push(&args_array, push_stmt_decl(p, arg_specs, arg_decl));
@@ -1371,8 +1372,7 @@ static const struct Token* parse_decls(Parser* p,
         {
             PARSER_CHECK_NOT(insert_typedef(p, pdecl));
         }
-
-        if (!specs->is_extern && pdecl->type->kind != AST_DECLFN)
+        else if (!specs->is_extern && pdecl->type->kind != AST_DECLFN)
         {
             PARSER_CHECK_NOT(insert_definition(p, pdecl));
         }

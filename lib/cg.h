@@ -5,6 +5,7 @@
 
 #include "array.h"
 #include "fwd.h"
+#include "stringmap.h"
 
 enum CGTarget
 {
@@ -21,6 +22,7 @@ struct CodeGen
     struct Array const_;
     struct Array data;
     struct Array code;
+    struct StringMap file_numbers;
 
     size_t next_label;
 

@@ -451,7 +451,11 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
                 }
             }
             break;
-        default: rc = parser_ferror(&l->rc, "error: unknown lexer state %u\n", l->state);
+        default:
+            parser_print_errors(stderr);
+            fflush(NULL);
+            abort();
+            rc = parser_ferror(&l->rc, "error: unknown lexer state %u\n", l->state);
     }
 fail:
     return rc;
