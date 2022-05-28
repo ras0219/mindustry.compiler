@@ -795,7 +795,7 @@ fail:
     return rc || parser_has_errors();
 }
 
-int cg_emit(struct CodeGen* cg, FILE* fout)
+int cg_emit(struct CodeGen* cg, const char* src_filename, FILE* fout)
 {
     int rc = 0;
     cg_debug(cg, "cg_emit():\n");
@@ -841,40 +841,40 @@ int cg_emit(struct CodeGen* cg, FILE* fout)
         UNWRAP(fputs("Lfunc_begin0:\n", fout) < 0);
         UNWRAP(!fwrite(cg->code.data, cg->code.sz, 1, fout));
         UNWRAP(fputs("Lfunc_end0:\n", fout) < 0);
-        if (strnstr(cg->code.data, "main.c", cg->code.sz) != NULL)
-            UNWRAP(fprintf(fout,
-                           "\n.section __DWARF,__debug_abbrev,regular,debug\n"
-                           ".byte	1                               ## Abbreviation Code\n"
-                           ".byte	17                              ## DW_TAG_compile_unit\n"
-                           ".byte	1                               ## DW_CHILDREN_yes\n"
-                           ".byte	19                              ## DW_AT_language\n"
-                           ".byte	5                               ## DW_FORM_data2\n"
-                           ".byte	3                               ## DW_AT_name\n"
-                           ".byte	8                               ## DW_FORM_string\n"
-                           ".byte	16                              ## DW_AT_stmt_list\n"
-                           ".byte	23                              ## DW_FORM_sec_offset\n"
-                           ".byte	17                              ## DW_AT_low_pc\n"
-                           ".byte	1                               ## DW_FORM_addr\n"
-                           ".byte	18                              ## DW_AT_high_pc\n"
-                           ".byte	6                               ## DW_FORM_data4\n"
-                           ".byte	0                               ## EOM(1)\n"
-                           ".byte	0                               ## EOM(2)\n"
-                           ".section __DWARF,__debug_info,regular,debug\n"
-                           ".set Lset0, Ldebug_info_end0-Ldebug_info_start0 ## Length of Unit\n"
-                           ".long	Lset0 ## section length\n"
-                           "Ldebug_info_start0:\n"
-                           ".short 4 ## dwarf v4\n"
-                           ".long 0 ## offset into abbrev\n"
-                           ".byte 8 ## addr size\n"
-                           ".byte 1 ## abbrev[1]: compile unit\n"
-                           ".short	12                              ## DW_AT_language\n"
-                           ".asciz	\"%s\"                             ## DW_AT_name\n"
-                           ".long	0            ## DW_AT_stmt_list\n"
-                           ".quad	Lfunc_begin0                    ## DW_AT_low_pc\n"
-                           ".set Lset3, Lfunc_end0-Lfunc_begin0     ## DW_AT_high_pc\n"
-                           ".long	Lset3\n"
-                           "Ldebug_info_end0:\n",
-                           "/opt/src/mindustry.compiler/cli/main.c") < 0);
+        UNWRAP(fprintf(fout,
+                       "\n.section __DWARF,__debug_abbrev,regular,debug\n"
+                       ".byte	1                               ## Abbreviation Code\n"
+                       ".byte	17                              ## DW_TAG_compile_unit\n"
+                       ".byte	1                               ## DW_CHILDREN_yes\n"
+                       ".byte	19                              ## DW_AT_language\n"
+                       ".byte	5                               ## DW_FORM_data2\n"
+                       ".byte	3                               ## DW_AT_name\n"
+                       ".byte	8                               ## DW_FORM_string\n"
+                       ".byte	16                              ## DW_AT_stmt_list\n"
+                       ".byte	23                              ## DW_FORM_sec_offset\n"
+                       ".byte	17                              ## DW_AT_low_pc\n"
+                       ".byte	1                               ## DW_FORM_addr\n"
+                       ".byte	18                              ## DW_AT_high_pc\n"
+                       ".byte	6                               ## DW_FORM_data4\n"
+                       ".byte	0                               ## EOM(1)\n"
+                       ".byte	0                               ## EOM(2)\n"
+                       ".section __DWARF,__debug_info,regular,debug\n"
+                       ".set Lset0, Ldebug_info_end0-Ldebug_info_start0 ## Length of Unit\n"
+                       ".long	Lset0 ## section length\n"
+                       "Ldebug_info_start0:\n"
+                       ".short 4 ## dwarf v4\n"
+                       ".long 0 ## offset into abbrev\n"
+                       ".byte 8 ## addr size\n"
+                       ".byte 1 ## abbrev[1]: compile unit\n"
+                       ".short	12                              ## DW_AT_language\n"
+                       ".asciz	\"%s\"                             ## DW_AT_name\n"
+                       ".long	0            ## DW_AT_stmt_list\n"
+                       ".quad	Lfunc_begin0                    ## DW_AT_low_pc\n"
+                       ".set Lset3, Lfunc_end0-Lfunc_begin0     ## DW_AT_high_pc\n"
+                       ".long	Lset3\n"
+                       ".byte	0                               ## End of Children\n"
+                       "Ldebug_info_end0:\n",
+                       src_filename) < 0);
         UNWRAP(fprintf(fout,
                        ".subsections_via_symbols\n"
                        ".section __DWARF,__debug_line,regular,debug\n"

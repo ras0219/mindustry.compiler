@@ -307,7 +307,7 @@ int main(int argc, const char* const* argv)
         UNWRAP(1);
     }
 
-    UNWRAP(cg_emit(fe.cg, fe.fout));
+    UNWRAP(cg_emit(fe.cg, args.input, fe.fout));
     fclose(fe.fout);
     fe.fout = NULL;
     UNWRAP(parser_has_errors());
