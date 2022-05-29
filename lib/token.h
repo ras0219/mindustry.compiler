@@ -12,6 +12,7 @@ struct Token
     unsigned int basic_type : 7;
     unsigned int noreplace : 1;
     unsigned int type : 24;
+    unsigned int tok_len;
     ptrdiff_t sp_offset;
 };
 

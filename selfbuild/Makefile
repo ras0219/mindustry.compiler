@@ -39,7 +39,7 @@ asm: $(notdir $(SRCS:.c=.asm))
 clean:
 	rm -f *.o *.asm main.selfbuild
 
-EXAMPLES:=fibonacci stringmanip va-example enums
+EXAMPLES:=fibonacci stringmanip va-example enums relations parsenum
 
 $(addsuffix .asm,$(EXAMPLES)): %.asm: $(srcdir)/examples/%.c $(CC)
 	${CC} ${CFLAGS} $< -c -o $@
@@ -54,3 +54,12 @@ $(addprefix run-,$(EXAMPLES)): run-%: %
 	./$^
 
 examples: $(EXAMPLES)
+
+.PHONY: ../out.tracing/main main.diff
+
+export CFLAGS
+main.diff: ../out.tracing/main main
+	$(MAKE) -f Makefile.stage2 main.diff
+
+../out.tracing/main:
+	$(MAKE) -C ../out.tracing main

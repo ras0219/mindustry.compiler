@@ -100,10 +100,24 @@ void cg_mark_alabel(struct CodeGen* cg, size_t n)
 
 size_t cg_next_alabel(struct CodeGen* cg) { return cg->next_label++; }
 
-void cg_string_constant(struct CodeGen* cg, size_t cidx, const char* str)
+static int needs_escape(char ch) { return !(ch >= 32 && ch < 127 && ch != '"' && ch != '\\'); }
+
+void cg_string_constant(struct CodeGen* cg, size_t cidx, const char* str, size_t sz)
 {
-    cg_debug(cg, "   : strconst %d: %s\n", cidx, str);
-    array_appendf(&cg->const_, "L_.S%d: .asciz \"%s\"\n", cidx, str);
+    // cg_debug(cg, "   : strconst %d: %s\n", cidx, str);
+    array_appendf(&cg->const_, "L_.S%d: .asciz \"", cidx);
+    for (size_t i = 0; i < sz; ++i)
+    {
+        if (needs_escape(str[i]))
+        {
+            array_appendf(&cg->const_, "\\x%02x", (unsigned char)str[i]);
+        }
+        else
+        {
+            array_push_byte(&cg->const_, str[i]);
+        }
+    }
+    array_appends(&cg->const_, "\"\n");
 }
 void cg_reserve_data(struct CodeGen* cg, const char* name, const char* data, size_t sz)
 {
@@ -112,9 +126,14 @@ void cg_reserve_data(struct CodeGen* cg, const char* name, const char* data, siz
     array_appendf(&cg->data, "%u", data[0]);
     for (size_t i = 1; i < sz; ++i)
     {
-        array_appendf(&cg->data, ",%u", data[i]);
+        array_appendf(&cg->data, ",%u", (unsigned char)data[i]);
     }
     array_push_byte(&cg->data, '\n');
+}
+void cg_reserve_zeroes(struct CodeGen* cg, const char* name, size_t sz)
+{
+    if (sz == 0) abort();
+    array_appendf(&cg->data, "_%s: .skip %zu\n", name, sz);
 }
 
 static const char* const s_reg_names[] = {"%rax", "%rbx", "%rcx", "%rdx", "%rdi", "%rsi", "%r8", "%r9", "%r10", "%r11"};
@@ -550,13 +569,10 @@ static int cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t 
         case TACO_SHR:
             inst = "shr";
         shift:
-            if (tace->arg2.kind != TACA_IMM)
-            {
-                UNWRAP(cg_gen_load(cg, tace->arg1, REG_RAX, frame));
-                UNWRAP(cg_gen_load(cg, tace->arg2, REG_RCX, frame));
-                array_appends(&cg->code, "    shl %cl, %rax\n");
-                UNWRAP(cg_gen_store_frame(cg, i, REG_RAX, frame));
-            }
+            UNWRAP(cg_gen_load(cg, tace->arg1, REG_RAX, frame));
+            UNWRAP(cg_gen_load(cg, tace->arg2, REG_RCX, frame));
+            array_appendf(&cg->code, "    %s %%cl, %%rax\n", inst);
+            UNWRAP(cg_gen_store_frame(cg, i, REG_RAX, frame));
             break;
         case TACO_BNOT:
             UNWRAP(cg_gen_load(cg, tace->arg1, REG_RAX, frame));
@@ -682,20 +698,25 @@ static void cg_emit_rc(struct CodeGen* cg, const RowCol* rc, const char* opts)
                   rc->col);
 }
 
+static __forceinline size_t round_to_alignment(size_t size, size_t align)
+{
+    size_t n = size + align - 1;
+    return n - (n % align);
+}
+
 int cg_gen_taces(struct CodeGen* cg, const struct TACEntry* taces, size_t n_taces, size_t locals_size)
 {
     int rc = 0;
 
     struct Array param_stack = {};
 
-    unsigned char* frame_slots = NULL;
+    unsigned char* frame_slots = my_malloc(n_taces);
     struct FreeFrameSlots ffs = {};
 
     ++cg->cur_fn_lbl_prefix;
 
     size_t max_param_size = 0;
 
-    frame_slots = (unsigned char*)my_malloc(n_taces);
     memset(frame_slots, 0xFF, n_taces);
     for (size_t i = 0; i < n_taces; ++i)
     {
@@ -733,30 +754,21 @@ int cg_gen_taces(struct CodeGen* cg, const struct TACEntry* taces, size_t n_tace
         }
     }
 
-    size_t frame_size = max_param_size + locals_size + ffs.max_used * 8;
-
-    // align stack for calls (32-byte alignment)
-    frame_size += 31 - (frame_size + 7) % 32;
-
     struct ActivationRecord frame = {
         .frame_slots = frame_slots,
-        .total_frame_size = frame_size,
     };
-    frame.arg_offset = cg->target == CG_TARGET_MACOS_GAS ? 6 * 8 : frame_size + 8;
-    frame.locals_offset = max_param_size;
-    frame.temp_offset = frame.locals_offset + locals_size;
-
-    // if (n_taces > 0 && taces[0].rc)
-    // {
-    //     cg_emit_rc(cg, taces[0].rc, "prologue_end");
-    // }
+    frame.locals_offset = round_to_alignment(max_param_size, 8);
+    frame.temp_offset = round_to_alignment(frame.locals_offset + locals_size, 8);
+    // align stack for calls (32-byte alignment)
+    frame.total_frame_size = round_to_alignment(frame.temp_offset + ffs.max_used * 8 + 8, 32) - 8;
+    frame.arg_offset = frame.total_frame_size + 8;
 
     array_appendf(&cg->code,
                   "    .cfi_startproc\n"
                   "    subq $%zu, %%rsp\n"
                   "    .cfi_def_cfa rsp, %zu\n",
-                  frame_size,
-                  frame_size + 8);
+                  frame.total_frame_size,
+                  frame.total_frame_size + 8);
 
     for (size_t i = 0; i < n_taces; ++i)
     {
@@ -776,7 +788,7 @@ int cg_gen_taces(struct CodeGen* cg, const struct TACEntry* taces, size_t n_tace
                   "    .cfi_def_cfa rsp, 8\n"
                   "    ret\n"
                   "    .cfi_endproc\n",
-                  frame_size);
+                  frame.total_frame_size);
 
 fail:
     my_free(frame_slots);

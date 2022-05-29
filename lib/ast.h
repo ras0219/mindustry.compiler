@@ -5,6 +5,7 @@
 
 #include "compilermacros.h"
 #include "freevar.h"
+#include "litsuffix.h"
 #include "sizing.h"
 
 #define X_AST_POOL_KIND(Y)                                                                                             \
@@ -101,6 +102,7 @@ typedef struct ExprLit
 
     const char* text;
     uint64_t numeric;
+    enum LitSuffix suffix;
 } ExprLit;
 
 #define AST_STRUCT_EXPR_LIT ExprLit
@@ -174,7 +176,8 @@ struct ExprUnOp
     // additional info for certain operations
     //  * '++'/'--', 1 if postfix
     //  * 'sizeof', size of decl
-    int info;
+    uint32_t postfix : 1;
+    uint32_t sizeof_;
 };
 #define AST_STRUCT_EXPR_UNOP ExprUnOp
 #define AST_KIND_ExprUnOp EXPR_UNOP
@@ -214,8 +217,9 @@ typedef struct AstInit
     size_t designator_extent;
     struct AstInit* next;
 
-    uint32_t offset;
     Sizing sizing;
+    uint32_t offset;
+    uint8_t is_char_arr;
 } AstInit;
 #define AST_STRUCT_AST_INIT AstInit
 #define AST_KIND_AstInit AST_INIT

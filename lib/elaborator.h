@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include "array.h"
 #include "fwd.h"
 
 struct TypeStr;
@@ -12,6 +13,10 @@ typedef struct Elaborator
     struct Parser* p;
 
     struct TypeTable* types;
+
+    struct Array constinit;
+
+    struct Decl* cur_decl;
 
     FILE* fdebug;
 } Elaborator;

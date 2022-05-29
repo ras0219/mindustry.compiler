@@ -16,6 +16,10 @@ static int emit_token(Lexer* l)
     struct RowCol tmp = l->rc;
     l->rc = l->tok_rc;
     l->tok[l->sz] = 0;
+#if defined(TRACING_LEX)
+    fprintf(stderr, "emit_token() = %d, '%s' / %d\n", l->state, l->tok, l->sz);
+    fflush(stderr);
+#endif
     int rc = l->f_on_token(l);
     l->ws_before = 0;
     l->not_first = 1;
@@ -97,6 +101,9 @@ __forceinline static int handle_backslash_nl(struct Lexer* const l, const char* 
         const char ch = buf[i];
         if (ch == '\\')
         {
+#if defined(TRACING_LEX)
+            fprintf(stderr, "handle_backslash_nl('%c'): LEX_START\n", ch);
+#endif
             if (sz == i + 1)
             {
                 l->backslash = 1;
@@ -132,6 +139,14 @@ __forceinline static int handle_backslash_nl(struct Lexer* const l, const char* 
     {                                                                                                                  \
         if (handle_backslash_nl(l, buf, sz, &i)) return 0;                                                             \
     } while (0)
+
+static const signed char s_map_escapes[256] = {
+    ['n'] = '\n' - 'n',
+    ['b'] = '\b' - 'b',
+    ['r'] = '\r' - 'r',
+    ['t'] = '\t' - 't',
+    ['0'] = '\0' - '0',
+};
 
 int lex(Lexer* const l, const char* const buf, size_t const sz)
 {
@@ -177,6 +192,9 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
                     l->not_first = 0;
                     continue;
                 }
+#if defined(TRACING_LEX)
+                fprintf(stderr, "lex('%c'): LEX_START\n", ch);
+#endif
                 l->tok_rc = l->rc;
                 if (l->expect_header)
                 {
@@ -253,6 +271,9 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
             {
                 HANDLE_BACKSLASH_NL();
                 const char ch = buf[i];
+#if defined(TRACING_LEX)
+                fprintf(stderr, "lex('%c'): LEX_SYMBOL\n", ch);
+#endif
                 if (l->sz == 1)
                 {
                     if (l->tok[0] == '/' && ch == '*')
@@ -301,6 +322,9 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
             {
                 HANDLE_BACKSLASH_NL();
                 const char ch = buf[i];
+#if defined(TRACING_LEX)
+                fprintf(stderr, "lex('%c'): LEX_CHARLIT\n", ch);
+#endif
                 if (ch == '\n')
                 {
                     return parser_ferror(&l->rc, "error: unexpected end of line in character literal\n");
@@ -308,8 +332,7 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
                 else if (l->escape)
                 {
                     l->escape = 0;
-                    // TODO: handle escape characters
-                    UNWRAP(push_tok_char(l, ch));
+                    UNWRAP(push_tok_char(l, ch + s_map_escapes[(int)ch]));
                 }
                 else if (ch == '\'')
                 {
@@ -321,7 +344,6 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
                 else if (ch == '\\')
                 {
                     l->escape = 1;
-                    UNWRAP(push_tok_char(l, ch));
                 }
                 else
                 {
@@ -336,6 +358,9 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
             {
                 HANDLE_BACKSLASH_NL();
                 const char ch = buf[i];
+#if defined(TRACING_LEX)
+                fprintf(stderr, "lex('%c'): LEX_STRING\n", ch);
+#endif
                 if (ch == '\n')
                 {
                     return parser_ferror(&l->rc, "error: unexpected end of line in string literal\n");
@@ -343,8 +368,7 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
                 else if (l->escape)
                 {
                     l->escape = 0;
-                    // TODO: handle escape characters
-                    UNWRAP(push_tok_char(l, ch));
+                    UNWRAP(push_tok_char(l, ch + s_map_escapes[(int)ch]));
                 }
                 else if (ch == '"')
                 {
@@ -356,7 +380,6 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
                 else if (ch == '\\')
                 {
                     l->escape = 1;
-                    UNWRAP(push_tok_char(l, ch));
                 }
                 else
                 {
@@ -410,6 +433,9 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
             {
                 HANDLE_BACKSLASH_NL();
                 const char ch = buf[i];
+#if defined(TRACING_LEX)
+                fprintf(stderr, "lex('%c'): LEX_IDENT\n", ch);
+#endif
                 if (is_ascii_alnumu(ch))
                 {
                     UNWRAP(push_tok_char(l, ch));
@@ -421,6 +447,9 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
                 }
             }
             break;
+#if defined(TRACING_LEX)
+            fprintf(stderr, "unreachable\n");
+#endif
         LEX_NUMBER:
             l->state = LEX_NUMBER;
         case LEX_NUMBER:
@@ -428,6 +457,9 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
             {
                 HANDLE_BACKSLASH_NL();
                 const char ch = buf[i];
+#if defined(TRACING_LEX)
+                fprintf(stderr, "lex('%c'): LEX_NUMBER\n", ch);
+#endif
                 if (is_ascii_alnumu(ch))
                 {
                     UNWRAP(push_tok_char(l, ch));
@@ -501,8 +533,9 @@ const char* lexstate_to_string(unsigned int s)
     }
 }
 
-int lit_to_uint64(const char* s, uint64_t* out, const struct RowCol* rc)
+int lit_to_uint64(const char* s, uint64_t* out, LitSuffix* out_suffix, const struct RowCol* rc)
 {
+    enum LitSuffix suffix = LIT_SUFFIX_NONE;
     uint64_t v = 0;
     size_t i = 0;
     if (s[0] == '0')
@@ -513,13 +546,23 @@ int lit_to_uint64(const char* s, uint64_t* out, const struct RowCol* rc)
             // hex
             for (i = 2; s[i]; ++i)
             {
-                v = (((v & (UINT64_MAX >> 4))) << 4);
                 if (s[i] >= '0' && s[i] <= '9')
-                    v += s[i] - '0';
+                {
+                    if ((UINT64_MAX >> 4) < v) abort();
+                    v = (v << 4) + s[i] - '0';
+                }
                 else if (s[i] >= 'a' && s[i] <= 'f')
-                    v += s[i] - 'a' + 10;
+                {
+                    if ((UINT64_MAX >> 4) < v) abort();
+                    v = (v << 4) + s[i] - 'a' + 10;
+                }
                 else if (s[i] >= 'A' && s[i] <= 'F')
-                    v += s[i] - 'A' + 10;
+                {
+                    if ((UINT64_MAX >> 4) < v) abort();
+                    v = (v << 4) + s[i] - 'A' + 10;
+                }
+                else if (s[i] == '\'')
+                    continue;
                 else
                     break;
             }
@@ -529,11 +572,18 @@ int lit_to_uint64(const char* s, uint64_t* out, const struct RowCol* rc)
             // binary
             for (i = 2; s[i]; ++i)
             {
-                v = (((v & (UINT64_MAX >> 1))) << 1);
                 if (s[i] == '0')
-                    ;
+                {
+                    if ((UINT64_MAX >> 1) < v) abort();
+                    v <<= 1;
+                }
                 else if (s[i] == '1')
-                    v += 1;
+                {
+                    if ((UINT64_MAX >> 1) < v) abort();
+                    v = (v << 1) + 1;
+                }
+                else if (s[i] == '\'')
+                    continue;
                 else
                     break;
             }
@@ -543,9 +593,13 @@ int lit_to_uint64(const char* s, uint64_t* out, const struct RowCol* rc)
             // octal
             for (i = 1; s[i]; ++i)
             {
-                v = (((v & (UINT64_MAX >> 3))) << 3);
                 if (s[i] >= '0' && s[i] <= '7')
-                    v += s[i] - '0';
+                {
+                    if ((UINT64_MAX >> 3) < v) abort();
+                    v = (v << 3) + s[i] - '0';
+                }
+                else if (s[i] == '\'')
+                    continue;
                 else
                     break;
             }
@@ -557,32 +611,39 @@ int lit_to_uint64(const char* s, uint64_t* out, const struct RowCol* rc)
     }
     else
     {
+        suffix = LIT_SUFFIX_NONE_DECIMAL;
         for (; s[i]; ++i)
         {
-            v = (((v & (UINT64_MAX >> 4))) * 10);
             if (s[i] >= '0' && s[i] <= '9')
-                v += s[i] - '0';
+            {
+                size_t w = s[i] - '0';
+                if ((UINT64_MAX - w) / 10 < v) abort();
+                v = v * 10 + w;
+            }
+            else if (s[i] == '\'')
+                continue;
             else
                 break;
         }
     }
-    if (s[i] == 'U')
+next_suffix:
+    if (!(suffix & 1) && s[i] == 'U')
     {
         ++i;
+        ++suffix;
     }
-    if (s[i] == 'L' || s[i] == 'l')
+    if (!(suffix & 4) && (s[i] == 'L' || s[i] == 'l'))
     {
         ++i;
-    }
-    if (s[i] == 'L' || s[i] == 'l')
-    {
-        ++i;
+        suffix += 2;
+        goto next_suffix;
     }
     if (s[i] != '\0')
     {
         return parser_ferror(rc, "error: unexpected character in number literal: '%c'\n", s[i]);
     }
 
+    *out_suffix = suffix;
     *out = v;
     return 0;
 }

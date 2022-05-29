@@ -1,5 +1,6 @@
 #include "stringpool.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "stringpoolview.h"
@@ -47,9 +48,11 @@ size_t sp_insert(struct StringPool* sp, const char* s, size_t len)
         }
         prev_end = ends[i];
     }
-
     void* idx = array_push(&sp->data, s, len);
     size_t r = idx - sp->data.data;
     arrsz_push(&sp->ends, sp->data.sz);
+#if defined(TRACING_PREPROC)
+    fprintf(stderr, "sp_insert('%s',%zu) = %zu\n", s, len, r);
+#endif
     return r;
 }

@@ -195,16 +195,16 @@ static size_t pp_sp_alloc(struct Preprocessor* p, const char* s, size_t n)
     return sp_insert(&p->stringpool, s, n + 1);
 }
 
-static size_t pp_sp_alloc_concat(struct Preprocessor* p, size_t o1, size_t o2)
+static void pp_token_append(struct Preprocessor* p, struct Token* dst, const struct Token* src)
 {
-    const char* s1 = pp_sp_str(p, o1);
-    const char* s2 = pp_sp_str(p, o2);
-    size_t n1 = strlen(s1);
-    size_t n2 = strlen(s2);
-    char* tmp = malloc(n1 + n2 + 1);
-    memcpy(tmp, s1, n1);
-    memcpy(tmp + n1, s2, n2 + 1);
-    return pp_sp_alloc(p, tmp, n1 + n2);
+    const char* s1 = pp_sp_str(p, dst->sp_offset);
+    const char* s2 = pp_sp_str(p, src->sp_offset);
+    char* tmp = my_malloc(dst->tok_len + src->tok_len + 1);
+    memcpy(tmp, s1, dst->tok_len);
+    memcpy(tmp + dst->tok_len, s2, src->tok_len + 1);
+    dst->sp_offset = pp_sp_alloc(p, tmp, dst->tok_len + src->tok_len);
+    dst->tok_len += src->tok_len;
+    my_free(tmp);
 }
 
 struct KeywordEntry
@@ -225,6 +225,7 @@ static void pp_form_token(struct Preprocessor* p, struct Lexer* l, struct Token*
     tk->type = l->state;
     tk->rc = l->tok_rc;
     tk->sp_offset = pp_sp_alloc(p, l->tok, l->sz);
+    tk->tok_len = l->sz;
 
     if (l->state == LEX_IDENT)
     {
@@ -364,6 +365,17 @@ static const struct Token* pp_parse_if_expr(struct Preprocessor* pp, const struc
     int and_value = 1;
     int invert = 0;
 top:
+#if defined(TRACING_PREPROC)
+    fprintf(stderr,
+            "pp_parse_if_expr(): *out_value = %d, cur = %d '%s' %s:%d:%d\n",
+            *out_value,
+            cur->type,
+            pp_token_str(pp, cur),
+            cur->rc.file,
+            cur->rc.row,
+            cur->rc.col);
+    fflush(stderr);
+#endif
     if (cur->type == TOKEN_SYM1('('))
     {
         cur = pp_parse_if_expr(pp, cur + 1, out_value);
@@ -377,8 +389,9 @@ top:
     }
     else if (cur->type == LEX_NUMBER)
     {
+        LitSuffix suffix;
         uint64_t u;
-        if (lit_to_uint64(pp_token_str(pp, cur), &u, &cur->rc)) return NULL;
+        if (lit_to_uint64(pp_token_str(pp, cur), &u, &suffix, &cur->rc)) return NULL;
         if (u > INT_MAX) return parser_tok_error(cur, "error: literal value exceeded INT_MAX: %llu\n", u), NULL;
         *out_value = u;
         ++cur;
@@ -399,6 +412,18 @@ top:
         parser_tok_error(cur, "error: expected primary expression in macro condition\n");
         return NULL;
     }
+
+#if defined(TRACING_PREPROC)
+    fprintf(stderr,
+            "pp_parse_if_expr(): *out_value = %d, cur = %d '%s' %s:%d:%d\n",
+            *out_value,
+            cur->type,
+            pp_token_str(pp, cur),
+            cur->rc.file,
+            cur->rc.row,
+            cur->rc.col);
+    fflush(stderr);
+#endif
 
     if (invert)
     {
@@ -572,6 +597,9 @@ static int pp_flush_expr(struct Preprocessor* pp)
         {
             UNWRAP(parser_tok_error(cur, "error: expected end of macro condition\n"));
         }
+#if defined(TRACING_PREPROC)
+        fprintf(stderr, "pp_flush_expr(): %d\n", value);
+#endif
 
         if (value)
             ++pp->if_true_depth;
@@ -588,6 +616,9 @@ fail:
 }
 static int pp_handle_directive(struct Preprocessor* pp, Lexer* l)
 {
+#if defined(TRACING_PREPROC)
+    fprintf(stderr, "l->state = %d, '%s'\n", l->state, l->tok);
+#endif
     switch (pp->preproc)
     {
         case PP_INIT:
@@ -1031,14 +1062,15 @@ static int pp_concat_token(struct Preprocessor* pp, struct Token* dst, const str
     {
         if (dst->basic_type == LEX_NUMBER || dst->basic_type == LEX_IDENT)
         {
-            dst->sp_offset = pp_sp_alloc_concat(pp, dst->sp_offset, src->sp_offset);
+            pp_token_append(pp, dst, src);
+
             return 0;
         }
         return parser_tok_error(src, "error: pasting formed an invalid preprocessing token\n");
     }
     else if (src->basic_type == LEX_IDENT && dst->basic_type == LEX_IDENT)
     {
-        dst->sp_offset = pp_sp_alloc_concat(pp, dst->sp_offset, src->sp_offset);
+        pp_token_append(pp, dst, src);
         return 0;
     }
     else if (src->basic_type == LEX_SYMBOL && dst->basic_type == LEX_SYMBOL)
@@ -1049,7 +1081,7 @@ static int pp_concat_token(struct Preprocessor* pp, struct Token* dst, const str
             return parser_tok_error(src, "error: pasting formed an invalid preprocessing token\n");
         }
         dst->type = ((dst->type & 0x7F7F7F) << (8 * token_symlen(src->type))) | src->type;
-        dst->sp_offset = pp_sp_alloc_concat(pp, dst->sp_offset, src->sp_offset);
+        pp_token_append(pp, dst, src);
         return 0;
     }
     else
@@ -1061,7 +1093,7 @@ static int pp_concat_token(struct Preprocessor* pp, struct Token* dst, const str
 static int pp_complete_fn_macro(struct Preprocessor* pp)
 {
     int rc = 0;
-    struct Array tmp = {};
+    struct Array tmp = {0};
     struct MacroExpand exp = pp->exp;
     pp->exp.prev_macrodef_idx_p1 = 0;
     pp->exp.macro_arg_offsets_start = array_size(&pp->macro_arg_offsets, sizeof(size_t));
@@ -1101,11 +1133,11 @@ static int pp_complete_fn_macro(struct Preprocessor* pp)
             if (i > 0 && data[i - 1].type == TOKEN_SYM1('#'))
             {
                 // stringify tokens
-                struct Array str = {};
+                struct Array str = {0};
                 for (size_t i = macro_arg_data[arg_idx]; i < macro_arg_data[arg_idx + 1] - 1; ++i)
                 {
                     if (str.sz) array_push_byte(&str, ' ');
-                    array_appends(&str, pp_token_str(pp, toks + i));
+                    array_push(&str, pp_token_str(pp, toks + i), toks[i].tok_len);
                 }
                 array_push_byte(&str, 0);
                 struct Token* tgt = array_alloc(&tmp, sizeof(struct Token));
@@ -1114,6 +1146,7 @@ static int pp_complete_fn_macro(struct Preprocessor* pp)
                 tgt->noreplace = 0;
                 tgt->type = LEX_STRING;
                 tgt->sp_offset = pp_sp_alloc(pp, str.data, str.sz - 1);
+                tgt->tok_len = str.sz - 1;
                 array_destroy(&str);
             }
             else if (i > 0 && data[i - 1].type == TOKEN_SYM2('#', '#'))
@@ -1256,6 +1289,7 @@ static int pp_handle_tok(struct Preprocessor* pp)
             {
                 tok[-1].sp_offset = pp_sp_alloc(pp, "0", 1);
             }
+            tok[-1].tok_len = 1;
             array_pop(&pp->toks, sizeof(struct Token));
             return 0;
         }
@@ -1277,6 +1311,7 @@ static int pp_handle_tok(struct Preprocessor* pp)
             {
                 tok[-2].sp_offset = pp_sp_alloc(pp, "0", 1);
             }
+            tok[-2].tok_len = 1;
             pp->exp.prev_was_defined_paren_id = 1;
             return 0;
         }
@@ -1402,11 +1437,12 @@ static int pp_sublex_on_token(Lexer* l)
         pp->in_directive = 0;
         UNWRAP(pp_flush_directive(pp, l));
     }
-
+#if !defined(TRACING_PREPROC)
     if (pp->debug_print_tokens)
+#endif
     {
         fprintf(stderr,
-                "%s:%d:%d: %10s: %u, %u, %u, %s\n",
+                "%s:%d:%d: %20s: %u, %u, %u, %s\n",
                 l->tok_rc.file,
                 l->tok_rc.row,
                 l->tok_rc.col,
@@ -1467,6 +1503,7 @@ struct Preprocessor* preproc_alloc(const char* include_paths)
     tok_one->basic_type = LEX_NUMBER;
     tok_one->rc.file = "<builtin>";
     tok_one->sp_offset = '0' * 2;
+    tok_one->tok_len = 1;
     return pp;
 }
 
@@ -1595,6 +1632,7 @@ static void preproc_merge_strings(struct Preprocessor* pp)
             }
             array_push_byte(&buf, '\0');
             toks[i - 1].sp_offset = sp_insert(&pp->stringpool, buf.data, buf.sz);
+            toks[i - 1].tok_len = buf.sz - 1;
             array_clear(&buf);
         }
         toks[i] = toks[j];
@@ -1652,12 +1690,13 @@ void preproc_dump(const struct Preprocessor* pp)
     const struct Token* data = preproc_tokens(pp);
     do
     {
-        printf("%40s:%04d:%04d: %-10s %d : %s\n",
+        printf("%40s:%04d:%04d: %-10s %d : %zd='%s'\n",
                data->rc.file,
                data->rc.row,
                data->rc.col,
                lexstate_to_string(data->basic_type),
                data->noreplace,
+               data->sp_offset,
                pp_token_str(pp, data));
         if (data->basic_type == LEX_EOF) break;
         ++data;

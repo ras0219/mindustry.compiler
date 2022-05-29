@@ -125,8 +125,8 @@ void unittest_print_stack(const struct TestState* state);
             REQUIRE_FAIL_IMPL(file,                                                                                    \
                               line,                                                                                    \
                               "'%.*s' != '%.*s'\n"                                                                     \
-                              "    expected:      \"%.*s\"\n"                                                          \
-                              "    actual:        \"%.*s\"\n"                                                          \
+                              "    expected:      \"%.*s\"(%d)\n"                                                      \
+                              "    actual:        \"%.*s\"(%d)\n"                                                      \
                               "    expected-expr: %s\n"                                                                \
                               "    actual-expr:   %s\n",                                                               \
                               _len_a,                                                                                  \
@@ -135,8 +135,10 @@ void unittest_print_stack(const struct TestState* state);
                               _expr_b,                                                                                 \
                               _len_a,                                                                                  \
                               _expr_a,                                                                                 \
+                              _len_a,                                                                                  \
                               _len_b,                                                                                  \
                               _expr_b,                                                                                 \
+                              _len_b,                                                                                  \
                               #expected,                                                                               \
                               #actual);                                                                                \
     } while (0)

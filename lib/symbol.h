@@ -118,6 +118,7 @@ typedef struct Symbol
     unsigned int is_enum_constant : 1;
 
     // elaboration information
+    unsigned int is_char_array : 1;
     TypeStr type;
 
     Sizing fn_ret_sizing;
@@ -125,6 +126,7 @@ typedef struct Symbol
     Sizing size;
     size_t align;
 
+    size_t constinit_offset;
     int enum_value;
 
     // backend information

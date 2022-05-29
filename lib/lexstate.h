@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 #include "fwd.h"
+#include "litsuffix.h"
 
 #define X_LEX_TYPE_KEYWORDS(Y)                                                                                         \
     Y(LEX_INT, "int")                                                                                                  \
@@ -96,4 +97,4 @@ enum LexerState
 
 const char* lexstate_to_string(unsigned int s);
 
-int lit_to_uint64(const char* s, uint64_t* out, const struct RowCol* rc);
+int lit_to_uint64(const char* s, uint64_t* out, LitSuffix* out_litsuffix, const struct RowCol* rc);

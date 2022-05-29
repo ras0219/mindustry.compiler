@@ -268,7 +268,7 @@ top:;
     if (cur_tok->type == TOKEN_SYM2('+', '+') || cur_tok->type == TOKEN_SYM2('-', '-'))
     {
         struct ExprUnOp* e = parse_alloc_unop(p, cur_tok, lhs);
-        e->info = 1;
+        e->postfix = 1;
         lhs = &e->expr_base;
         ++cur_tok;
         goto top;
@@ -404,18 +404,12 @@ top:
             struct ExprLit* lhs_expr = parse_alloc_expr_lit(p, cur_tok++);
             if (lhs_expr->tok->type == LEX_NUMBER)
             {
-                lit_to_uint64(token_str(p, lhs_expr->tok), &lhs_expr->numeric, &lhs_expr->tok->rc);
+                lit_to_uint64(token_str(p, lhs_expr->tok), &lhs_expr->numeric, &lhs_expr->suffix, &lhs_expr->tok->rc);
             }
             if (lhs_expr->tok->type == LEX_CHARLIT)
             {
                 const char* s = token_str(p, lhs_expr->tok);
-                if (s[0] == '\\')
-                {
-                    // handle escape
-                    lhs_expr->numeric = s[1];
-                }
-                else
-                    lhs_expr->numeric = s[0];
+                lhs_expr->numeric = s[0];
             }
             return parse_expr_post_unary(p, cur_tok, (struct Expr*)lhs_expr, ppe);
         }

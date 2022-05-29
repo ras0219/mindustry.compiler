@@ -31,215 +31,6 @@ __forceinline static TypeSymbol* tt_get(const TypeTable* tt, uint32_t i)
     return ((TypeSymbol**)tt->typesyms.data)[i];
 }
 
-static int32_t eval_constant(struct Elaborator* elab, const Expr* e)
-{
-    switch (e->kind)
-    {
-        case EXPR_LIT:
-        {
-            struct ExprLit* lit = (struct ExprLit*)e;
-            if (lit->tok->type == LEX_NUMBER || lit->tok->type == LEX_CHARLIT)
-            {
-                if (lit->numeric > INT32_MAX)
-                {
-                    parser_tok_error(e->tok, "error: integer constant exceeded INT32_MAX: %llu\n", lit->numeric);
-                    return 0;
-                }
-                return lit->numeric;
-            }
-            parser_tok_error(e->tok, "error: expected integer constant literal\n");
-            return 0;
-        }
-        case EXPR_REF:
-        {
-            struct ExprRef* ref = (void*)e;
-            if (ref->sym->is_enum_constant)
-            {
-                return ref->sym->enum_value;
-            }
-            parser_tok_error(ref->tok, "error: expected integer constant expression\n");
-            return 0;
-        }
-        case EXPR_BINOP:
-        {
-            struct ExprBinOp* op = (struct ExprBinOp*)e;
-            int32_t l = eval_constant(elab, op->lhs);
-            int32_t r = eval_constant(elab, op->rhs);
-            switch (op->tok->type)
-            {
-                case TOKEN_SYM1('*'):
-                {
-                    int64_t p = (int64_t)l * (int64_t)r;
-                    if (p > INT32_MAX || p < INT32_MIN)
-                        return parser_tok_error(op->tok, "error: integer constant exceeded INT32_MAX\n"), 0;
-                    return (int32_t)p;
-                }
-                case TOKEN_SYM1('|'):
-                {
-                    int64_t p = (int64_t)l | (int64_t)r;
-                    if (p > INT32_MAX || p < INT32_MIN)
-                        return parser_tok_error(op->tok, "error: integer constant exceeded INT32_MAX\n"), 0;
-                    return (int32_t)p;
-                }
-                case TOKEN_SYM1('-'):
-                {
-                    int64_t p = (int64_t)l - (int64_t)r;
-                    if (p > INT32_MAX || p < INT32_MIN)
-                        return parser_tok_error(op->tok, "error: integer constant exceeded INT32_MAX\n"), 0;
-                    return (int32_t)p;
-                }
-                case TOKEN_SYM1('+'):
-                {
-                    int64_t p = (int64_t)l + (int64_t)r;
-                    if (p > INT32_MAX || p < INT32_MIN)
-                        return parser_tok_error(op->tok, "error: integer constant exceeded INT32_MAX\n"), 0;
-                    return (int32_t)p;
-                }
-                case TOKEN_SYM2('<', '<'):
-                {
-                    if (r < 0 || r > 32)
-                        return parser_tok_error(op->tok, "error: right hand side of '<<' was invalid: %d\n", r), 0;
-                    int64_t p = (int64_t)l << r;
-                    if (p > INT32_MAX || p < INT32_MIN)
-                        return parser_tok_error(op->tok, "error: integer constant exceeded INT32_MAX\n"), 0;
-                    return (int32_t)p;
-                }
-                default: break;
-            }
-            parser_tok_error(
-                op->tok, "error: unimplemented op '%s' in integer constant expression\n", token_str(elab->p, op->tok));
-            return 0;
-        }
-        case EXPR_UNOP:
-        {
-            struct ExprUnOp* expr = (void*)e;
-            if (expr->tok->type == TOKEN_SYM1('-'))
-            {
-                return -eval_constant(elab, expr->lhs);
-            }
-            else if (expr->tok->type == TOKEN_SYM1('+'))
-            {
-                return eval_constant(elab, expr->lhs);
-            }
-            parser_tok_error(e->tok,
-                             "error: unimplemented unary op for integer constant expression (%s)\n",
-                             token_str(elab->p, e->tok));
-            return 0;
-        }
-        case EXPR_CAST:
-        {
-            struct ExprCast* expr = (void*)e;
-            return eval_constant(elab, expr->expr);
-        }
-        default:
-            parser_tok_error(
-                e->tok, "error: expected integer constant expression (not %s)\n", ast_kind_to_string(e->kind));
-            return 0;
-    }
-}
-
-/// \returns nonzero if \c e was a constant expression
-static int try_eval_constant(struct Elaborator* elab, const Expr* e, int32_t* out_value)
-{
-    switch (e->kind)
-    {
-        case EXPR_LIT:
-        {
-            struct ExprLit* lit = (struct ExprLit*)e;
-            if (lit->tok->type == LEX_NUMBER || lit->tok->type == LEX_CHARLIT)
-            {
-                if (lit->numeric > INT32_MAX)
-                {
-                    return 0;
-                }
-                *out_value = lit->numeric;
-                return 1;
-            }
-            return 0;
-        }
-        case EXPR_REF:
-        {
-            struct ExprRef* ref = (void*)e;
-            if (ref->sym->is_enum_constant)
-            {
-                *out_value = ref->sym->enum_value;
-                return 1;
-            }
-            return 0;
-        }
-        case EXPR_BINOP:
-        {
-            struct ExprBinOp* op = (struct ExprBinOp*)e;
-            int32_t l, r;
-            if (!try_eval_constant(elab, op->lhs, &l)) return 0;
-            if (!try_eval_constant(elab, op->rhs, &r)) return 0;
-            switch (op->tok->type)
-            {
-                case TOKEN_SYM1('*'):
-                {
-                    int64_t p = (int64_t)l * (int64_t)r;
-                    if (p > INT32_MAX || p < INT32_MIN) return 0;
-                    *out_value = (int32_t)p;
-                    return 1;
-                }
-                case TOKEN_SYM1('|'):
-                {
-                    int64_t p = (int64_t)l | (int64_t)r;
-                    if (p > INT32_MAX || p < INT32_MIN) return 0;
-                    *out_value = (int32_t)p;
-                    return 1;
-                }
-                case TOKEN_SYM1('-'):
-                {
-                    int64_t p = (int64_t)l - (int64_t)r;
-                    if (p > INT32_MAX || p < INT32_MIN) return 0;
-                    *out_value = (int32_t)p;
-                    return 1;
-                }
-                case TOKEN_SYM1('+'):
-                {
-                    int64_t p = (int64_t)l + (int64_t)r;
-                    if (p > INT32_MAX || p < INT32_MIN) return 0;
-                    *out_value = (int32_t)p;
-                    return 1;
-                }
-                case TOKEN_SYM2('<', '<'):
-                {
-                    if (r < 0 || r > 32) return 0;
-                    int64_t p = (int64_t)l << r;
-                    if (p > INT32_MAX || p < INT32_MIN) return 0;
-                    *out_value = (int32_t)p;
-                    return 1;
-                }
-                default: break;
-            }
-            return 0;
-        }
-        case EXPR_UNOP:
-        {
-            struct ExprUnOp* expr = (void*)e;
-            if (expr->tok->type == TOKEN_SYM1('-'))
-            {
-                if (!try_eval_constant(elab, expr->lhs, out_value)) return 0;
-                if (*out_value == INT32_MIN) return 0;
-                *out_value = -*out_value;
-                return 1;
-            }
-            else if (expr->tok->type == TOKEN_SYM1('+'))
-            {
-                return try_eval_constant(elab, expr->lhs, out_value);
-            }
-            return 0;
-        }
-        case EXPR_CAST:
-        {
-            struct ExprCast* expr = (void*)e;
-            return try_eval_constant(elab, expr->expr, out_value);
-        }
-        default: return 0;
-    }
-}
-
 #if 0
 static int get_primitive_declspec_size(struct DeclSpecs* d)
 {
@@ -277,6 +68,7 @@ enum
     TYPE_FLAGS_FLOAT = 1 << 8,
     TYPE_FLAGS_ARRAY = 1 << 9,
     TYPE_FLAGS_SIGNED = 1 << 10,
+    TYPE_FLAGS_PROMOTE_INT = 1 << 11,
 
     TYPE_MASK_HAS_FIELDS = TYPE_FLAGS_UNION | TYPE_FLAGS_STRUCT,
     TYPE_MASK_ARITH = TYPE_FLAGS_FLOAT | TYPE_FLAGS_INT,
@@ -293,15 +85,15 @@ unsigned int typestr_mask(const struct TypeStr* ts)
         case TYPE_BYTE_VARIADIC: return TYPE_FLAGS_VAR;
         case TYPE_BYTE_VOID: return TYPE_FLAGS_VOID;
         case TYPE_BYTE_CHAR:
-        case TYPE_BYTE_SCHAR: return TYPE_FLAGS_CHAR | TYPE_FLAGS_INT | TYPE_FLAGS_SIGNED;
-        case TYPE_BYTE_UCHAR: return TYPE_FLAGS_CHAR | TYPE_FLAGS_INT;
+        case TYPE_BYTE_SCHAR: return TYPE_FLAGS_CHAR | TYPE_FLAGS_INT | TYPE_FLAGS_SIGNED | TYPE_FLAGS_PROMOTE_INT;
+        case TYPE_BYTE_UCHAR: return TYPE_FLAGS_CHAR | TYPE_FLAGS_INT | TYPE_FLAGS_PROMOTE_INT;
         case TYPE_BYTE_ENUM:
         case TYPE_BYTE_INT:
-        case TYPE_BYTE_SHORT:
+        case TYPE_BYTE_SHORT: return TYPE_FLAGS_INT | TYPE_FLAGS_SIGNED | TYPE_FLAGS_PROMOTE_INT;
         case TYPE_BYTE_LONG:
         case TYPE_BYTE_LLONG: return TYPE_FLAGS_INT | TYPE_FLAGS_SIGNED;
         case TYPE_BYTE_UINT:
-        case TYPE_BYTE_USHORT:
+        case TYPE_BYTE_USHORT: return TYPE_FLAGS_INT | TYPE_FLAGS_PROMOTE_INT;
         case TYPE_BYTE_ULONG:
         case TYPE_BYTE_ULLONG: return TYPE_FLAGS_INT;
         case TYPE_BYTE_FLOAT:
@@ -457,7 +249,7 @@ static __forceinline int typestr_is_variadic(const struct TypeStr* ts)
 static __forceinline int typestr_is_aggregate(const struct TypeStr* ts)
 {
     char ch = typestr_byte(ts);
-    return ch == TYPE_BYTE_STRUCT || ch == TYPE_BYTE_ARRAY || ch == TYPE_BYTE_UNION;
+    return ch == TYPE_BYTE_STRUCT || ch == TYPE_BYTE_ARRAY || ch == TYPE_BYTE_UNION || ch == TYPE_BYTE_UNK_ARRAY;
 }
 
 enum
@@ -571,13 +363,7 @@ static void typestr_decay(struct TypeStr* t)
         default: return;
     }
 }
-
-static int is_zero_constant(Elaborator* elab, const Expr* e)
-{
-    int32_t i;
-    return try_eval_constant(elab, e, &i) && i == 0;
-}
-
+static int is_zero_constant(Elaborator* elab, const Expr* e);
 static void typestr_implicit_conversion(Elaborator* elab,
                                         const struct RowCol* rc,
                                         const struct TypeStr* orig_from,
@@ -675,6 +461,13 @@ static void typestr_append_decltype(const struct Ast* const* expr_seqs,
                                     struct TypeStr* s,
                                     const struct Ast* e);
 
+static void typestr_append_typestr(TypeStr* out, const TypeStr* in)
+{
+    if (out->buf[0] + in->buf[0] >= sizeof(out->buf)) abort();
+    memcpy(out->buf + out->buf[0] + 1, in->buf + 1, in->buf[0]);
+    out->buf[0] += in->buf[0];
+}
+
 static void typestr_append_decltype_DeclSpecs(const struct Ast* const* expr_seqs,
                                               struct TypeTable* tt,
                                               struct TypeStr* s,
@@ -682,8 +475,7 @@ static void typestr_append_decltype_DeclSpecs(const struct Ast* const* expr_seqs
 {
     if (d->_typedef)
     {
-        memcpy(s->buf + s->buf[0] + 1, d->_typedef->type.buf + 1, d->_typedef->type.buf[0]);
-        s->buf[0] += d->_typedef->type.buf[0];
+        typestr_append_typestr(s, &d->_typedef->type);
     }
     else if (d->sym)
     {
@@ -751,11 +543,14 @@ static void typestr_append_decltype(const struct Ast* const* expr_seqs,
                                     struct TypeStr* s,
                                     const struct Ast* e)
 {
-top:
     if (!e) abort();
     switch (e->kind)
     {
-        case EXPR_REF: e = &((struct ExprRef*)e)->sym->last_decl->ast; goto top;
+        case EXPR_REF:
+        {
+            typestr_append_typestr(s, &((struct ExprRef*)e)->sym->type);
+            return;
+        }
         case AST_DECL:
         {
             typestr_append_decltype(expr_seqs, tt, s, ((struct Decl*)e)->type);
@@ -989,6 +784,233 @@ static Sizing typestr_calc_sizing(struct Elaborator* elab, const struct TypeStr*
     return ret;
 }
 
+static int32_t eval_constant(struct Elaborator* elab, const Expr* e)
+{
+    switch (e->kind)
+    {
+        case EXPR_LIT:
+        {
+            struct ExprLit* lit = (struct ExprLit*)e;
+            if (lit->tok->type == LEX_NUMBER || lit->tok->type == LEX_CHARLIT)
+            {
+                if (lit->numeric > INT32_MAX)
+                {
+                    parser_tok_error(e->tok, "error: integer constant exceeded INT32_MAX: %llu\n", lit->numeric);
+                    return 0;
+                }
+                return lit->numeric;
+            }
+            parser_tok_error(e->tok, "error: expected integer constant literal\n");
+            return 0;
+        }
+        case EXPR_REF:
+        {
+            struct ExprRef* ref = (void*)e;
+            if (ref->sym->is_enum_constant)
+            {
+                return ref->sym->enum_value;
+            }
+            parser_tok_error(ref->tok, "error: expected integer constant expression\n");
+            return 0;
+        }
+        case EXPR_BINOP:
+        {
+            struct ExprBinOp* op = (struct ExprBinOp*)e;
+            int32_t l = eval_constant(elab, op->lhs);
+            int32_t r = eval_constant(elab, op->rhs);
+            switch (op->tok->type)
+            {
+                case TOKEN_SYM1('*'):
+                {
+                    int64_t p = (int64_t)l * (int64_t)r;
+                    if (p > INT32_MAX || p < INT32_MIN)
+                        return parser_tok_error(op->tok, "error: integer constant exceeded INT32_MAX\n"), 0;
+                    return (int32_t)p;
+                }
+                case TOKEN_SYM1('|'):
+                {
+                    int64_t p = (int64_t)l | (int64_t)r;
+                    if (p > INT32_MAX || p < INT32_MIN)
+                        return parser_tok_error(op->tok, "error: integer constant exceeded INT32_MAX\n"), 0;
+                    return (int32_t)p;
+                }
+                case TOKEN_SYM1('-'):
+                {
+                    int64_t p = (int64_t)l - (int64_t)r;
+                    if (p > INT32_MAX || p < INT32_MIN)
+                        return parser_tok_error(op->tok, "error: integer constant exceeded INT32_MAX\n"), 0;
+                    return (int32_t)p;
+                }
+                case TOKEN_SYM1('+'):
+                {
+                    int64_t p = (int64_t)l + (int64_t)r;
+                    if (p > INT32_MAX || p < INT32_MIN)
+                        return parser_tok_error(op->tok, "error: integer constant exceeded INT32_MAX\n"), 0;
+                    return (int32_t)p;
+                }
+                case TOKEN_SYM2('<', '<'):
+                {
+                    if (r < 0 || r > 32)
+                        return parser_tok_error(op->tok, "error: right hand side of '<<' was invalid: %d\n", r), 0;
+                    int64_t p = (int64_t)l << r;
+                    if (p > INT32_MAX || p < INT32_MIN)
+                        return parser_tok_error(op->tok, "error: integer constant exceeded INT32_MAX\n"), 0;
+                    return (int32_t)p;
+                }
+                default: break;
+            }
+            parser_tok_error(
+                op->tok, "error: unimplemented op '%s' in integer constant expression\n", token_str(elab->p, op->tok));
+            return 0;
+        }
+        case EXPR_UNOP:
+        {
+            struct ExprUnOp* expr = (void*)e;
+            if (expr->tok->type == TOKEN_SYM1('-'))
+            {
+                return -eval_constant(elab, expr->lhs);
+            }
+            else if (expr->tok->type == TOKEN_SYM1('+'))
+            {
+                return eval_constant(elab, expr->lhs);
+            }
+            parser_tok_error(e->tok,
+                             "error: unimplemented unary op for integer constant expression (%s)\n",
+                             token_str(elab->p, e->tok));
+            return 0;
+        }
+        case EXPR_CAST:
+        {
+            struct ExprCast* expr = (void*)e;
+            return eval_constant(elab, expr->expr);
+        }
+        case EXPR_BUILTIN:
+        {
+            struct ExprBuiltin* expr = (void*)e;
+            if (expr->tok->type == LEX_SIZEOF)
+            {
+                return expr->sizeof_size;
+            }
+            parser_tok_error(e->tok,
+                             "error: unimplemented unary op for integer constant expression (%s)\n",
+                             token_str(elab->p, e->tok));
+            return 0;
+        }
+        default:
+            parser_tok_error(
+                e->tok, "error: expected integer constant expression (not %s)\n", ast_kind_to_string(e->kind));
+            return 0;
+    }
+}
+
+/// \returns nonzero if \c e was a constant expression
+static int try_eval_constant(struct Elaborator* elab, const Expr* e, int32_t* out_value)
+{
+    switch (e->kind)
+    {
+        case EXPR_LIT:
+        {
+            struct ExprLit* lit = (struct ExprLit*)e;
+            if (lit->tok->type == LEX_NUMBER || lit->tok->type == LEX_CHARLIT)
+            {
+                if (lit->numeric > INT32_MAX)
+                {
+                    return 0;
+                }
+                *out_value = lit->numeric;
+                return 1;
+            }
+            return 0;
+        }
+        case EXPR_REF:
+        {
+            struct ExprRef* ref = (void*)e;
+            if (ref->sym->is_enum_constant)
+            {
+                *out_value = ref->sym->enum_value;
+                return 1;
+            }
+            return 0;
+        }
+        case EXPR_BINOP:
+        {
+            struct ExprBinOp* op = (struct ExprBinOp*)e;
+            int32_t l, r;
+            if (!try_eval_constant(elab, op->lhs, &l)) return 0;
+            if (!try_eval_constant(elab, op->rhs, &r)) return 0;
+            switch (op->tok->type)
+            {
+                case TOKEN_SYM1('*'):
+                {
+                    int64_t p = (int64_t)l * (int64_t)r;
+                    if (p > INT32_MAX || p < INT32_MIN) return 0;
+                    *out_value = (int32_t)p;
+                    return 1;
+                }
+                case TOKEN_SYM1('|'):
+                {
+                    int64_t p = (int64_t)l | (int64_t)r;
+                    if (p > INT32_MAX || p < INT32_MIN) return 0;
+                    *out_value = (int32_t)p;
+                    return 1;
+                }
+                case TOKEN_SYM1('-'):
+                {
+                    int64_t p = (int64_t)l - (int64_t)r;
+                    if (p > INT32_MAX || p < INT32_MIN) return 0;
+                    *out_value = (int32_t)p;
+                    return 1;
+                }
+                case TOKEN_SYM1('+'):
+                {
+                    int64_t p = (int64_t)l + (int64_t)r;
+                    if (p > INT32_MAX || p < INT32_MIN) return 0;
+                    *out_value = (int32_t)p;
+                    return 1;
+                }
+                case TOKEN_SYM2('<', '<'):
+                {
+                    if (r < 0 || r > 32) return 0;
+                    int64_t p = (int64_t)l << r;
+                    if (p > INT32_MAX || p < INT32_MIN) return 0;
+                    *out_value = (int32_t)p;
+                    return 1;
+                }
+                default: break;
+            }
+            return 0;
+        }
+        case EXPR_UNOP:
+        {
+            struct ExprUnOp* expr = (void*)e;
+            if (expr->tok->type == TOKEN_SYM1('-'))
+            {
+                if (!try_eval_constant(elab, expr->lhs, out_value)) return 0;
+                if (*out_value == INT32_MIN) return 0;
+                *out_value = -*out_value;
+                return 1;
+            }
+            else if (expr->tok->type == TOKEN_SYM1('+'))
+            {
+                return try_eval_constant(elab, expr->lhs, out_value);
+            }
+            return 0;
+        }
+        case EXPR_CAST:
+        {
+            struct ExprCast* expr = (void*)e;
+            return try_eval_constant(elab, expr->expr, out_value);
+        }
+        default: return 0;
+    }
+}
+
+static int is_zero_constant(Elaborator* elab, const Expr* e)
+{
+    int32_t i;
+    return try_eval_constant(elab, e, &i) && i == 0;
+}
+
 static Symbol* find_field_by_name(TypeSymbol* def, const char* fieldname)
 {
     for (Symbol* field = def->first_member; field; field = field->next_field)
@@ -1017,6 +1039,14 @@ static void elaborate_expr(struct Elaborator* elab,
                            struct ElaborateDeclCtx* ctx,
                            struct Expr* top_expr,
                            struct TypeStr* rty);
+
+static void typestr_promote_integer(struct TypeStr* rty)
+{
+    if (typestr_mask(rty) & TYPE_FLAGS_PROMOTE_INT)
+    {
+        *rty = s_type_literal_int;
+    }
+}
 
 static void elaborate_binop(struct Elaborator* elab,
                             struct ElaborateDeclCtx* ctx,
@@ -1052,6 +1082,7 @@ static void elaborate_binop(struct Elaborator* elab,
                                &orig_lhs);
                 *rty = s_type_literal_int;
             }
+            typestr_promote_integer(rty);
             break;
         case TOKEN_SYM1('/'):
         case TOKEN_SYM1('*'):
@@ -1061,7 +1092,9 @@ static void elaborate_binop(struct Elaborator* elab,
                                elab->types,
                                "error: expected arithmetic type in first argument but got '%.*s'\n",
                                &orig_lhs);
+                *rty = s_type_literal_int;
             }
+            typestr_promote_integer(rty);
             break;
         case TOKEN_SYM2('|', '|'):
         case TOKEN_SYM2('&', '&'):
@@ -1321,6 +1354,7 @@ static void elaborate_builtin(struct Elaborator* elab,
         case LEX_UUVA_START:
             elaborate_expr(elab, ctx, e->expr2, rty);
             elaborate_expr(elab, ctx, e->expr1, rty);
+            typestr_decay(rty);
             if (!typestr_match(rty, &s_valist_ptr))
             {
                 typestr_error2(
@@ -1396,7 +1430,24 @@ static void elaborate_unop(struct Elaborator* elab,
             break;
         }
         case TOKEN_SYM2('+', '+'):
-        case TOKEN_SYM2('-', '-'): break;
+        case TOKEN_SYM2('-', '-'):
+            if (!(lhs_mask & TYPE_MASK_SCALAR))
+            {
+                typestr_error1(&e->tok->rc,
+                               elab->types,
+                               "error: expected scalar type in first argument but got '%.*s'\n",
+                               &orig_lhs);
+                *rty = s_type_unknown;
+            }
+            else if (lhs_mask & TYPE_FLAGS_POINTER)
+            {
+                e->sizeof_ = typestr_get_elem_size(elab, rty, &e->tok->rc);
+            }
+            else
+            {
+                e->sizeof_ = 1;
+            }
+            break;
         case TOKEN_SYM1('~'):
             if (!(lhs_mask & TYPE_FLAGS_INT))
             {
@@ -1644,17 +1695,20 @@ static void elaborate_init_ty_AstInit(struct Elaborator* elab, size_t offset, co
             }
             Expr* expr = (Expr*)init->init;
             // standard expression initialization
-            struct TypeStr ts;
+            struct TypeStr ts, ts_decay;
             elaborate_expr(elab, NULL, expr, &ts);
-            typestr_decay(&ts);
+            ts_decay = ts;
+            typestr_decay(&ts_decay);
 
             while (typestr_is_aggregate(&back->ty))
             {
                 if (typestr_match(&back->ty, &ts)) break;
+                if (typestr_match(&back->ty, &ts_decay)) break;
                 if (di_enter(&iter, elab, &init->tok->rc)) goto fail;
                 back = array_back(&iter.stk, sizeof(*back));
             }
             typestr_implicit_conversion(elab, &init->init->tok->rc, &ts, &back->ty, expr);
+            init->is_char_arr = typestr_is_aggregate(&back->ty);
             init->offset = back->offset;
             init->sizing = typestr_calc_sizing(elab, &back->ty, &init->init->tok->rc);
         }
@@ -1753,6 +1807,9 @@ static void elaborate_stmt(struct Elaborator* elab, struct ElaborateDeclCtx* ctx
             {
                 struct TypeStr ts;
                 elaborate_expr(elab, ctx, stmt->expr, &ts);
+                struct TypeStr fn = elab->cur_decl->sym->type;
+                typestr_pop_offset(&fn);
+                typestr_implicit_conversion(elab, &stmt->tok->rc, &ts, &fn, stmt->expr);
             }
 
             return;
@@ -1773,10 +1830,10 @@ static void elaborate_stmt(struct Elaborator* elab, struct ElaborateDeclCtx* ctx
         {
             struct StmtLoop* e = top;
             struct TypeStr ts;
-            elaborate_stmt(elab, ctx, e->body);
-            if (e->advance) elaborate_expr(elab, ctx, e->advance, &ts);
-            if (e->cond) elaborate_expr(elab, ctx, e->cond, &ts);
             if (e->init) elaborate_stmt(elab, ctx, e->init);
+            if (e->cond) elaborate_expr(elab, ctx, e->cond, &ts);
+            if (e->advance) elaborate_expr(elab, ctx, e->advance, &ts);
+            elaborate_stmt(elab, ctx, e->body);
             return;
         }
         case AST_DECL:
@@ -1819,6 +1876,14 @@ static void elaborate_stmt(struct Elaborator* elab, struct ElaborateDeclCtx* ctx
     }
 }
 
+static const size_t s_mint_maximums[] = {INT_MAX, UINT_MAX, LONG_MAX, ULONG_MAX, LLONG_MAX, ULLONG_MAX};
+static const char s_uint_types[] = {
+    TYPE_BYTE_UINT, TYPE_BYTE_UINT, TYPE_BYTE_ULONG, TYPE_BYTE_ULONG, TYPE_BYTE_ULLONG, TYPE_BYTE_ULLONG};
+static const char s_sint_types[] = {
+    TYPE_BYTE_INT, TYPE_BYTE_LONG, TYPE_BYTE_LONG, TYPE_BYTE_LLONG, TYPE_BYTE_LLONG, TYPE_BYTE_ULLONG};
+static const char s_mint_types[] = {
+    TYPE_BYTE_INT, TYPE_BYTE_UINT, TYPE_BYTE_LONG, TYPE_BYTE_ULONG, TYPE_BYTE_LLONG, TYPE_BYTE_ULLONG};
+
 static void elaborate_expr(struct Elaborator* elab,
                            struct ElaborateDeclCtx* ctx,
                            struct Expr* top_expr,
@@ -1831,7 +1896,29 @@ static void elaborate_expr(struct Elaborator* elab,
         {
             struct ExprLit* expr = top;
             if (expr->tok->type == LEX_NUMBER)
-                *rty = s_type_literal_int;
+            {
+                rty->buf[0] = 1;
+                int x = 0;
+                for (; x < 6; ++x)
+                {
+                    if (expr->numeric <= s_mint_maximums[x]) break;
+                }
+                int min = expr->suffix & 6;
+                if (x < min) x = min;
+
+                if (expr->suffix & 1)
+                {
+                    rty->buf[1] = s_uint_types[x];
+                }
+                else if (expr->suffix & LIT_SUFFIX_NONE_DECIMAL)
+                {
+                    rty->buf[1] = s_sint_types[x];
+                }
+                else
+                {
+                    rty->buf[1] = s_mint_types[x];
+                }
+            }
             else if (expr->tok->type == LEX_CHARLIT)
                 *rty = s_type_literal_int;
             else if (expr->tok->type == LEX_STRING)
@@ -1850,8 +1937,7 @@ static void elaborate_expr(struct Elaborator* elab,
         case EXPR_REF:
         {
             struct ExprRef* esym = top;
-            typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, rty, esym->sym->last_decl);
-            typestr_decay(rty);
+            *rty = esym->sym->type;
             break;
         }
         case EXPR_CAST:
@@ -2021,7 +2107,13 @@ static void elaborate_decltype(struct Elaborator* elab, struct Ast* ast)
             elaborate_decltype(elab, arr->type);
             if (arr->arity != NULL)
             {
+                elaborate_stmt(elab, NULL, &arr->arity->ast);
                 arr->integer_arity = eval_constant(elab, arr->arity);
+                if (arr->integer_arity == 0)
+                {
+                    parser_tok_error(arr->arity->tok, "error: array must have positive extent\n");
+                    arr->integer_arity = 1;
+                }
             }
             break;
         }
@@ -2043,6 +2135,46 @@ static void elaborate_decltype(struct Elaborator* elab, struct Ast* ast)
     }
 }
 
+static int elaborate_constinit(Elaborator* elab, char* bytes, size_t sz, const Ast* ast, uint8_t is_char_arr)
+{
+    int rc = 0;
+    if (ast->kind == AST_INIT)
+    {
+        memset(bytes, 0, sz);
+        AstInit* init = (void*)ast;
+        while (init->init)
+        {
+            UNWRAP(elaborate_constinit(elab, bytes + init->offset, init->sizing.width, init->init, init->is_char_arr));
+            init = init->next;
+        }
+    }
+    else
+    {
+        if (is_char_arr && ast->kind == EXPR_LIT && ast->tok->type == LEX_STRING)
+        {
+            ExprLit* lit = (void*)ast;
+            size_t n = sz;
+            if (n > ast->tok->tok_len + 1) n = ast->tok->tok_len + 1;
+            memcpy(bytes, lit->text, n);
+            if (sz > n)
+            {
+                memset(bytes + n, 0, sz - n);
+            }
+        }
+        else if (sz > 8)
+        {
+            return parser_tok_error(ast->tok, "error: cannot constant initialize large member from expression\n");
+        }
+        else
+        {
+            uint64_t e = eval_constant(elab, (Expr*)ast);
+            memcpy(bytes, &e, sz);
+        }
+    }
+fail:
+    return rc;
+}
+
 static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
 {
     int rc = 0;
@@ -2057,6 +2189,7 @@ static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
     if (!decl->prev_decl)
     {
         typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, &sym->type, decl);
+        sym->is_char_array = typestr_is_aggregate(&sym->type);
     }
     if (sym->def == decl)
     {
@@ -2076,7 +2209,10 @@ static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
             }
             if (decl->init && !sym->is_enum_constant)
             {
+                Decl* prev = elab->cur_decl;
+                elab->cur_decl = decl;
                 elaborate_init(elab, 0, decl, decl->init);
+                elab->cur_decl = prev;
             }
             if (tyb == TYPE_BYTE_UNK_ARRAY)
             {
@@ -2131,6 +2267,21 @@ static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
                     parser_tok_error(decl->tok, "error: definition of object with incomplete size\n");
                     return 0;
                 }
+            }
+
+            UNWRAP(parser_has_errors());
+
+            if (!(struct Decl*)decl->specs->parent && !decl->specs->is_extern && tyb != TYPE_BYTE_FUNCTION &&
+                decl->init)
+            {
+                // global object with initializer -- constinit
+                sym->constinit_offset = elab->constinit.sz;
+                array_push_zeroes(&elab->constinit, sym->size.width);
+                UNWRAP(elaborate_constinit(elab,
+                                           (char*)elab->constinit.data + sym->constinit_offset,
+                                           sym->size.width,
+                                           decl->init,
+                                           sym->is_char_array));
             }
         }
     }
