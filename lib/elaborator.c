@@ -903,9 +903,19 @@ static int32_t eval_constant(struct Elaborator* elab, const Expr* e)
     }
 }
 
-/// \returns nonzero if \c e was a constant expression
-static int try_eval_constant(struct Elaborator* elab, const Expr* e, int32_t* out_value)
+typedef struct ConstValue
 {
+    Symbol* base;
+    uint64_t byte_offset;
+    uint32_t elem_size;
+} ConstValue;
+
+/// \returns zero if \c e was a constant expression, nonzero on error
+static int try_eval_constant(struct Elaborator* elab, const Expr* e, ConstValue* out)
+{
+    out->base = NULL;
+    out->byte_offset = 0;
+    out->elem_size = 1;
     switch (e->kind)
     {
         case EXPR_LIT:
@@ -913,93 +923,83 @@ static int try_eval_constant(struct Elaborator* elab, const Expr* e, int32_t* ou
             struct ExprLit* lit = (struct ExprLit*)e;
             if (lit->tok->type == LEX_NUMBER || lit->tok->type == LEX_CHARLIT)
             {
-                if (lit->numeric > INT32_MAX)
-                {
-                    return 0;
-                }
-                *out_value = lit->numeric;
-                return 1;
+                out->byte_offset = lit->numeric;
+                return 0;
             }
-            return 0;
+            return 1;
         }
         case EXPR_REF:
         {
             struct ExprRef* ref = (void*)e;
             if (ref->sym->is_enum_constant)
             {
-                *out_value = ref->sym->enum_value;
-                return 1;
+                out->byte_offset = ref->sym->enum_value;
+                return 0;
             }
-            return 0;
+            return 1;
         }
         case EXPR_BINOP:
         {
             struct ExprBinOp* op = (struct ExprBinOp*)e;
-            int32_t l, r;
-            if (!try_eval_constant(elab, op->lhs, &l)) return 0;
-            if (!try_eval_constant(elab, op->rhs, &r)) return 0;
+            ConstValue l, r;
+            if (try_eval_constant(elab, op->lhs, &l)) return 1;
+            if (try_eval_constant(elab, op->rhs, &r)) return 1;
             switch (op->tok->type)
             {
                 case TOKEN_SYM1('*'):
                 {
-                    int64_t p = (int64_t)l * (int64_t)r;
-                    if (p > INT32_MAX || p < INT32_MIN) return 0;
-                    *out_value = (int32_t)p;
-                    return 1;
+                    if (l.base || r.base) return 1;
+                    out->byte_offset = l.byte_offset * r.byte_offset;
+                    return 0;
                 }
                 case TOKEN_SYM1('|'):
                 {
-                    int64_t p = (int64_t)l | (int64_t)r;
-                    if (p > INT32_MAX || p < INT32_MIN) return 0;
-                    *out_value = (int32_t)p;
-                    return 1;
+                    if (l.base || r.base) return 1;
+                    out->byte_offset = l.byte_offset | r.byte_offset;
+                    return 0;
                 }
                 case TOKEN_SYM1('-'):
                 {
-                    int64_t p = (int64_t)l - (int64_t)r;
-                    if (p > INT32_MAX || p < INT32_MIN) return 0;
-                    *out_value = (int32_t)p;
-                    return 1;
+                    if (l.base || r.base) return 1;
+                    out->byte_offset = l.byte_offset - r.byte_offset;
+                    return 0;
                 }
                 case TOKEN_SYM1('+'):
                 {
-                    int64_t p = (int64_t)l + (int64_t)r;
-                    if (p > INT32_MAX || p < INT32_MIN) return 0;
-                    *out_value = (int32_t)p;
-                    return 1;
+                    if (l.base || r.base) return 1;
+                    out->byte_offset = l.byte_offset + r.byte_offset;
+                    return 0;
                 }
                 case TOKEN_SYM2('<', '<'):
                 {
-                    if (r < 0 || r > 32) return 0;
-                    int64_t p = (int64_t)l << r;
-                    if (p > INT32_MAX || p < INT32_MIN) return 0;
-                    *out_value = (int32_t)p;
-                    return 1;
+                    if (l.base || r.base || r.byte_offset >= 64) return 1;
+                    out->byte_offset = l.byte_offset << r.byte_offset;
+                    return 0;
+                }
+                case TOKEN_SYM2('>', '>'):
+                {
+                    if (l.base || r.base || r.byte_offset >= 64) return 1;
+                    out->byte_offset = l.byte_offset << r.byte_offset;
+                    return 0;
                 }
                 default: break;
             }
-            return 0;
+            return 1;
         }
         case EXPR_UNOP:
         {
             struct ExprUnOp* expr = (void*)e;
             if (expr->tok->type == TOKEN_SYM1('-'))
             {
-                if (!try_eval_constant(elab, expr->lhs, out_value)) return 0;
-                if (*out_value == INT32_MIN) return 0;
-                *out_value = -*out_value;
-                return 1;
+                if (try_eval_constant(elab, expr->lhs, out)) return 1;
+                out->byte_offset = -out->byte_offset;
+                return 0;
             }
             else if (expr->tok->type == TOKEN_SYM1('+'))
             {
-                return try_eval_constant(elab, expr->lhs, out_value);
+                return try_eval_constant(elab, expr->lhs, out);
             }
-            return 0;
-        }
-        case EXPR_CAST:
-        {
-            struct ExprCast* expr = (void*)e;
-            return try_eval_constant(elab, expr->expr, out_value);
+            return 1;
         }
         default: return 0;
     }
@@ -1007,8 +1007,8 @@ static int try_eval_constant(struct Elaborator* elab, const Expr* e, int32_t* ou
 
 static int is_zero_constant(Elaborator* elab, const Expr* e)
 {
-    int32_t i;
-    return try_eval_constant(elab, e, &i) && i == 0;
+    ConstValue cv;
+    return !try_eval_constant(elab, e, &cv) && cv.base == NULL && cv.byte_offset == 0;
 }
 
 static Symbol* find_field_by_name(TypeSymbol* def, const char* fieldname)
