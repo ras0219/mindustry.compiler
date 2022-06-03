@@ -105,7 +105,7 @@ static int needs_escape(char ch) { return !(ch >= 32 && ch < 127 && ch != '"' &&
 void cg_string_constant(struct CodeGen* cg, size_t cidx, const char* str, size_t sz)
 {
     // cg_debug(cg, "   : strconst %d: %s\n", cidx, str);
-    array_appendf(&cg->const_, "L_.S%d: .asciz \"", cidx);
+    array_appendf(&cg->const_, "L_.S%zu: .asciz \"", cidx);
     for (size_t i = 0; i < sz; ++i)
     {
         if (needs_escape(str[i]))
@@ -119,14 +119,26 @@ void cg_string_constant(struct CodeGen* cg, size_t cidx, const char* str, size_t
     }
     array_appends(&cg->const_, "\"\n");
 }
-void cg_reserve_data(struct CodeGen* cg, const char* name, const char* data, size_t sz)
+void cg_reserve_data(struct CodeGen* cg, const char* name, const char* data, const char* bases, size_t sz)
 {
     if (sz == 0) abort();
-    array_appendf(&cg->data, "_%s: .byte ", name);
-    array_appendf(&cg->data, "%u", data[0]);
-    for (size_t i = 1; i < sz; ++i)
+    array_appendf(&cg->data, "_%s:\n", name);
+    for (size_t i = 0; i < sz; ++i)
     {
-        array_appendf(&cg->data, ",%u", (unsigned char)data[i]);
+        if (sz - i >= 8 && i % 8 == 0)
+        {
+            size_t base;
+            memcpy(&base, bases + i, 8);
+            if (base)
+            {
+                size_t offset;
+                memcpy(&offset, data + i, 8);
+                array_appendf(&cg->data, ".quad L_.S%zu + %zu\n", base - 1, offset);
+                i += 7;
+                continue;
+            }
+        }
+        array_appendf(&cg->data, ".byte %u\n", (unsigned char)data[i]);
     }
     array_push_byte(&cg->data, '\n');
 }
@@ -361,49 +373,41 @@ fail:
 }
 
 static int cg_memcpy(
-    struct CodeGen* cg, struct TACAddress arg1, struct TACAddress arg2, Sizing sizing, struct ActivationRecord* frame)
+    struct CodeGen* cg, struct TACAddress arg1, struct TACAddress arg2, size_t bytes, struct ActivationRecord* frame)
 {
     int rc = 0;
-    if (sizing.width <= 8 && arg1.is_addr && arg2.is_addr)
+    if (bytes <= 8 && arg1.is_addr && arg2.is_addr)
     {
         arg1.is_addr = 0;
-        arg1.sizing = sizing;
+        arg1.sizing.width = bytes;
         arg2.is_addr = 0;
-        arg2.sizing = sizing;
+        arg2.sizing.width = bytes;
         UNWRAP(cg_gen_load(cg, arg2, REG_R11, frame));
         UNWRAP(cg_gen_store(cg, arg1, REG_R11, frame));
         goto fail;
     }
-    UNWRAP(cg_gen_load(cg, arg2, REG_R10, frame));
-    UNWRAP(cg_gen_load(cg, arg1, REG_R11, frame));
-    array_appends(&cg->code, "    push %r12\n");
-    uint32_t j = 0;
-    for (; j + 8 < sizing.width; j += 8)
+    UNWRAP(cg_gen_load(cg, arg2, REG_RSI, frame));
+    UNWRAP(cg_gen_load(cg, arg1, REG_RDI, frame));
+    if (bytes == 8)
     {
-        array_appendf(&cg->code, "    movq %u(%%r10), %%r12\n", j);
-        array_appendf(&cg->code, "    movq %%r12, %u(%%r11)\n", j);
+        array_appendf(&cg->code, "    movsq\n");
     }
-    switch (sizing.width - j)
+    else if (bytes == 4)
     {
-        case 8:
-            array_appendf(&cg->code, "    movq %u(%%r10), %%r12\n", j);
-            array_appendf(&cg->code, "    movq %%r12, %u(%%r11)\n", j);
-            break;
-        case 4:
-            array_appendf(&cg->code, "    movl %u(%%r10), %%r12d\n", j);
-            array_appendf(&cg->code, "    movl %%r12d, %u(%%r11)\n", j);
-            break;
-        case 2:
-            array_appendf(&cg->code, "    movw %u(%%r10), %%r12w\n", j);
-            array_appendf(&cg->code, "    movw %%r12w, %u(%%r11)\n", j);
-            break;
-        case 1:
-            array_appendf(&cg->code, "    movb %u(%%r10), %%r12b\n", j);
-            array_appendf(&cg->code, "    movb %%r12b, %u(%%r11)\n", j);
-            break;
-        default: UNWRAP(parser_ferror(NULL, "error: invalid sizing: %u\n", sizing.width - j));
+        array_appendf(&cg->code, "    movsd\n");
     }
-    array_appends(&cg->code, "    pop %r12\n");
+    else if (bytes == 2)
+    {
+        array_appendf(&cg->code, "    movsw\n");
+    }
+    else if (bytes == 1)
+    {
+        array_appendf(&cg->code, "    movsb\n");
+    }
+    else
+    {
+        array_appendf(&cg->code, "    mov $%zu, %%rcx\n    cld\n    rep movsb\n", bytes);
+    }
 fail:
     return rc;
 }
@@ -464,7 +468,7 @@ static int cg_assign(struct CodeGen* cg, struct TACAddress arg1, struct TACAddre
         char ch = sizing_suffix(bytes.width);
         if (!ch || !arg1.is_addr)
         {
-            UNWRAP(cg_gen_load(cg, arg1, REG_R11, frame));
+            UNWRAP(cg_gen_load(cg, arg1, REG_RDI, frame));
         }
 
         if (ch)
@@ -477,33 +481,17 @@ static int cg_assign(struct CodeGen* cg, struct TACAddress arg1, struct TACAddre
             }
             else
             {
-                array_appends(&cg->code, "(%r11)\n");
+                array_appends(&cg->code, "(%rdi)\n");
             }
         }
         else
         {
             // Storing immediates of non-power-of-two size is not implemented
             if (arg2.imm != 0) abort();
-            size_t width = bytes.width;
-            while (width >= 8)
-            {
-                array_appendf(&cg->code, "    movq $0, %d(%%r11)\n", bytes.width - width);
-                width -= 8;
-            }
-            if (width & 4)
-            {
-                array_appendf(&cg->code, "    movl $0, %d(%%r11)\n", bytes.width - width);
-                width -= 4;
-            }
-            if (width & 2)
-            {
-                array_appendf(&cg->code, "    movw $0, %d(%%r11)\n", bytes.width - width);
-                width -= 2;
-            }
-            if (width & 1)
-            {
-                array_appendf(&cg->code, "    movb $0, %d(%%r11)\n", bytes.width - width);
-            }
+            array_appendf(&cg->code, "    mov $%zu, %%rcx\n", bytes.width);
+            array_appends(&cg->code,
+                          "    xor %rax, %rax\n"
+                          "    rep stosb\n");
         }
     }
     else if (arg2.is_addr || is_suffix_size(arg1.sizing.width))
@@ -514,9 +502,9 @@ static int cg_assign(struct CodeGen* cg, struct TACAddress arg1, struct TACAddre
     else
     {
         arg2.is_addr = 1;
-        Sizing s = arg1.sizing;
+        size_t bytes = arg1.sizing.width;
         arg1.sizing.width = 8;
-        UNWRAP(cg_memcpy(cg, arg1, arg2, s, frame));
+        UNWRAP(cg_memcpy(cg, arg1, arg2, bytes, frame));
     }
 fail:
     return rc;
@@ -554,13 +542,13 @@ static int cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t 
         case TACO_DIV:
         case TACO_MOD:
             UNWRAP(cg_gen_load(cg, tace->arg1, REG_RAX, frame));
-            UNWRAP(cg_gen_load(cg, tace->arg2, REG_RCX, frame));
+            UNWRAP(cg_gen_load(cg, tace->arg2, REG_R10, frame));
             array_appends(&cg->code, "    movq $0, %rdx\n");
-            array_appends(&cg->code, "    idivq %rcx\n");
+            array_appends(&cg->code, "    idivq %r10\n");
             if (tace->op == TACO_DIV)
                 UNWRAP(cg_gen_store_frame(cg, i, REG_RAX, frame));
             else
-                UNWRAP(cg_gen_store_frame(cg, i, REG_RCX, frame));
+                UNWRAP(cg_gen_store_frame(cg, i, REG_RDX, frame));
             break;
         case TACO_BAND: inst = "and"; goto simple_binary;
         case TACO_BOR: inst = "or"; goto simple_binary;
@@ -602,7 +590,7 @@ static int cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t 
         {
             struct TACAddress arg1 = tace->arg1;
             arg1.is_addr = 1;
-            UNWRAP(cg_memcpy(cg, arg1, tace->arg2, arg1.sizing, frame));
+            UNWRAP(cg_memcpy(cg, arg1, tace->arg2, arg1.sizing.width, frame));
             break;
         }
         simple_binary:
@@ -628,7 +616,7 @@ static int cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t 
                         .kind = TACA_PARAM,
                         .is_addr = 1,
                     };
-                    UNWRAP(cg_memcpy(cg, arg1, arg2, arg1.sizing, frame));
+                    UNWRAP(cg_memcpy(cg, arg1, arg2, arg1.sizing.width, frame));
                 }
             }
             array_appendf(&cg->code, "\n    addq $%zu, %%rsp\n    ret\n", frame->total_frame_size);

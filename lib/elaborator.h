@@ -15,6 +15,7 @@ typedef struct Elaborator
     struct TypeTable* types;
 
     struct Array constinit;
+    struct Array constinit_bases;
 
     struct Decl* cur_decl;
 

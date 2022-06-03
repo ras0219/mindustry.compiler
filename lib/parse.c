@@ -120,6 +120,7 @@ static struct ExprBinOp* parse_alloc_binop(Parser* p, const struct Token* tok, s
     e->tok = tok;
     e->lhs = lhs;
     e->rhs = rhs;
+    if (!tok) abort();
     return e;
 }
 
@@ -129,6 +130,7 @@ static struct ExprUnOp* parse_alloc_unop(Parser* p, const struct Token* tok, str
     e->kind = EXPR_UNOP;
     e->tok = tok;
     e->lhs = lhs;
+    if (!tok) abort();
     return e;
 }
 
@@ -143,12 +145,13 @@ static struct ExprBuiltin* parse_alloc_builtin(
         .specs = specs,
         .type = decl,
     };
+    if (!tok) abort();
     return pool_push(&p->ast_pools[e.kind], &e, sizeof(e));
 }
 
 static struct ExprRef* parse_alloc_expr_ref(Parser* p, const struct Token* tok, Symbol* sym)
 {
-    struct ExprRef* e = (struct ExprRef*)pool_alloc(&p->ast_pools[EXPR_REF], sizeof(struct ExprRef));
+    struct ExprRef* e = pool_alloc_zeroes(&p->ast_pools[EXPR_REF], sizeof(struct ExprRef));
     e->kind = EXPR_REF;
     e->tok = tok;
     e->sym = sym;
@@ -156,7 +159,7 @@ static struct ExprRef* parse_alloc_expr_ref(Parser* p, const struct Token* tok, 
 }
 static struct ExprLit* parse_alloc_expr_lit(Parser* p, const struct Token* tok)
 {
-    struct ExprLit* e = (struct ExprLit*)pool_alloc(&p->ast_pools[EXPR_LIT], sizeof(struct ExprLit));
+    struct ExprLit* e = pool_alloc_zeroes(&p->ast_pools[EXPR_LIT], sizeof(struct ExprLit));
     e->kind = EXPR_LIT;
     e->tok = tok;
     e->text = token_str(p, tok);
@@ -164,7 +167,7 @@ static struct ExprLit* parse_alloc_expr_lit(Parser* p, const struct Token* tok)
 }
 static struct ExprCast* parse_alloc_expr_cast(Parser* p, struct Decl* type, struct Expr* expr)
 {
-    struct ExprCast* e = (struct ExprCast*)pool_alloc_zeroes(&p->ast_pools[EXPR_CAST], sizeof(struct ExprCast));
+    struct ExprCast* e = pool_alloc_zeroes(&p->ast_pools[EXPR_CAST], sizeof(struct ExprCast));
     e->kind = EXPR_CAST;
     e->expr = expr;
     e->type = type;
@@ -173,7 +176,7 @@ static struct ExprCast* parse_alloc_expr_cast(Parser* p, struct Decl* type, stru
 static struct ExprCall* parse_alloc_expr_call(
     Parser* p, const struct Token* tok, struct Expr* fn, size_t off, size_t ext)
 {
-    struct ExprCall* e = (struct ExprCall*)pool_alloc(&p->ast_pools[EXPR_CALL], sizeof(struct ExprCall));
+    struct ExprCall* e = pool_alloc_zeroes(&p->ast_pools[EXPR_CALL], sizeof(struct ExprCall));
     e->kind = EXPR_CALL;
     e->tok = tok;
     e->fn = fn;
@@ -192,6 +195,7 @@ static struct Decl* parse_alloc_decl(Parser* p, struct DeclSpecs* specs)
 
 static __forceinline void parse_push_expr_seq_arr(struct Parser* p, struct Array* arr)
 {
+    if (arr->sz == 0) return;
     for (size_t i = 0; i < array_size(arr, sizeof(void*)); ++i)
     {
         if (((struct Ast**)arr->data)[i]->kind == -1) abort();
@@ -200,6 +204,7 @@ static __forceinline void parse_push_expr_seq_arr(struct Parser* p, struct Array
 }
 static __forceinline void parse_push_decl_seq(struct Parser* p, struct Decl** data, size_t n)
 {
+    if (n == 0) return;
     for (size_t i = 0; i < n; ++i)
     {
         if (data[i]->kind == -1) abort();
@@ -654,16 +659,20 @@ static const struct Token* parse_declspecs(Parser* p, const struct Token* cur_to
         .parent = p->parent,
     };
 
+    if ((uintptr_t)cur_tok % 8 != 0) abort();
     do
     {
+        if ((uintptr_t)cur_tok % 8 != 0) abort();
         if (cur_tok->type == LEX_ATTRIBUTE)
         {
             PARSER_DO(parse_attribute_plist(p, cur_tok + 1, &specs.attr));
+            if ((uintptr_t)cur_tok % 8 != 0) abort();
             continue;
         }
         else if (cur_tok->type == LEX_DECLSPEC)
         {
             PARSER_DO(parse_msdeclspec(p, cur_tok + 1, &specs.attr));
+            if ((uintptr_t)cur_tok % 8 != 0) abort();
             continue;
         }
         else if (cur_tok->type == LEX_IDENT)
@@ -684,6 +693,7 @@ static const struct Token* parse_declspecs(Parser* p, const struct Token* cur_to
         {
             specs.is_struct = 1;
             specs.tok = cur_tok++;
+            if ((uintptr_t)cur_tok % 8 != 0) abort();
             if (cur_tok->type != LEX_IDENT) continue;
             specs.tok = cur_tok;
             specs.name = token_str(p, cur_tok);
@@ -692,6 +702,7 @@ static const struct Token* parse_declspecs(Parser* p, const struct Token* cur_to
         {
             specs.is_enum = 1;
             specs.tok = cur_tok++;
+            if ((uintptr_t)cur_tok % 8 != 0) abort();
             if (cur_tok->type != LEX_IDENT) continue;
             specs.tok = cur_tok;
             specs.name = token_str(p, cur_tok);
@@ -700,6 +711,7 @@ static const struct Token* parse_declspecs(Parser* p, const struct Token* cur_to
         {
             specs.is_union = 1;
             specs.tok = cur_tok++;
+            if ((uintptr_t)cur_tok % 8 != 0) abort();
             if (cur_tok->type != LEX_IDENT) continue;
             specs.tok = cur_tok;
             specs.name = token_str(p, cur_tok);
@@ -755,7 +767,9 @@ static const struct Token* parse_declspecs(Parser* p, const struct Token* cur_to
             if (len == 0) abort();
 
             specs.tok = cur_tok + len - 1;
+            if ((uintptr_t)cur_tok % 8 != 0) abort();
             cur_tok += len;
+            if ((uintptr_t)cur_tok % 8 != 0) abort();
             continue;
         }
         else if (cur_tok->type == LEX_CONST)
@@ -812,7 +826,9 @@ static const struct Token* parse_declspecs(Parser* p, const struct Token* cur_to
             }
             break;
         }
+        if ((uintptr_t)cur_tok % 8 != 0) abort();
         ++cur_tok;
+        if ((uintptr_t)cur_tok % 8 != 0) abort();
     } while (1);
 
     *pspecs = pool_push(&p->ast_pools[AST_DECLSPEC], &specs, sizeof(specs));
@@ -1156,7 +1172,7 @@ static const struct Token* parse_enum_body(struct Parser* p, const struct Token*
             break;
         }
     }
-    specs->enum_init = push_stmt_decls(p, specs, &decls);
+    specs->enum_init = push_stmt_decls(p, NULL, &decls);
 fail:
     array_destroy(&decls);
     return cur_tok;
@@ -1362,6 +1378,8 @@ static const struct Token* parse_decls(Parser* p,
             break;
         }
 
+        if (specs->is_typedef && !pdecl->tok) abort();
+
         if (specs->is_typedef && strcmp(token_str(p, pdecl->tok), "__builtin_va_list") != 0)
         {
             PARSER_CHECK_NOT(insert_typedef(p, pdecl));
@@ -1437,7 +1455,10 @@ static const struct Token* parse_stmt_decl(Parser* p, const struct Token* cur_to
 {
     struct Array arr_decls = {};
     struct DeclSpecs* specs;
+    uintptr_t x = (uintptr_t)cur_tok % 8;
+    if (x != 0) abort();
     PARSER_DO(parse_declspecs(p, cur_tok, &specs));
+    if ((uintptr_t)cur_tok % 8 != 0) abort();
     if (specs->is_struct || specs->is_union || specs->is_enum)
     {
         if (token_is_sym(p, cur_tok, '{'))
@@ -1474,6 +1495,7 @@ static const struct Token* parse_stmt_decl(Parser* p, const struct Token* cur_to
             goto finish;
         }
     }
+    if ((uintptr_t)cur_tok % 8 != 0) abort();
     PARSER_DO(parse_decls(p, cur_tok, specs, &arr_decls));
 finish:
     *past = &push_stmt_decls(p, specs, &arr_decls)->ast;
@@ -1484,7 +1506,7 @@ fail:
 
 static const struct Token* parse_stmts(Parser* p, const struct Token* cur_tok, size_t* p_offset, size_t* p_extent)
 {
-    struct Array arr_stmts = {};
+    struct Array arr_stmts = {0};
     do
     {
         if (cur_tok->type == LEX_EOF || token_is_sym(p, cur_tok, '}')) break;
@@ -1782,6 +1804,7 @@ int parser_parse(struct Parser* p, const struct Token* cur_tok, const char* tk_s
 {
     int rc = 0;
     p->tk_strdata = tk_strs;
+    p->tok_data = cur_tok;
 
     scope_push_subscope(&p->scope);
     PARSER_DO(parse_stmt_block(p, cur_tok, &p->top));
@@ -1802,4 +1825,342 @@ void parser_debug_check(struct Parser* p)
     {
         if ((unsigned)expr_seqs[i]->kind > AST_KIND_END) abort();
     }
+}
+
+static void nl_indent(FILE* f, int depth)
+{
+    fputc('\n', f);
+    for (int x = 0; x < depth; ++x)
+        fputc(' ', f);
+}
+
+static void parser_dump_ast(struct Parser* p, FILE* f, Ast* ast, int depth);
+static void parser_dump_type_ast(struct Parser* p, FILE* f, Ast* ast, int depth)
+{
+    if (ast->kind != AST_DECLSPEC)
+        parser_dump_ast(p, f, ast, depth);
+    else
+        fprintf(f, "/**/");
+}
+static void parser_dump_ast(struct Parser* p, FILE* f, Ast* ast, int depth)
+{
+    if (depth > 2000) abort();
+    switch (ast->kind)
+    {
+        case STMT_BLOCK:
+        {
+            struct StmtBlock* blk = (void*)ast;
+            fprintf(f, "(STMT_BLOCK");
+            for (size_t i = 0; i < blk->extent; ++i)
+            {
+                nl_indent(f, depth);
+                parser_dump_ast(p, f, ((Ast**)p->expr_seqs.data)[blk->offset + i], depth + 1);
+            }
+            fprintf(f, ")");
+            break;
+        }
+        case STMT_DECLS:
+        {
+            struct StmtDecls* blk = (void*)ast;
+            fprintf(f, "(STMT_DECLS");
+            if (blk->specs)
+            {
+                nl_indent(f, depth);
+                parser_dump_ast(p, f, &blk->specs->ast, depth + 1);
+            }
+            for (size_t i = 0; i < blk->extent; ++i)
+            {
+                nl_indent(f, depth);
+                parser_dump_ast(p, f, ((Ast**)p->expr_seqs.data)[blk->offset + i], depth + 1);
+            }
+            fprintf(f, ")");
+            break;
+        }
+        case STMT_LOOP:
+        {
+            struct StmtLoop* blk = (void*)ast;
+            fprintf(f, "(STMT_LOOP");
+            if (blk->init)
+            {
+                nl_indent(f, depth);
+                fprintf(f, "init=");
+                parser_dump_ast(p, f, blk->init, depth + 1);
+            }
+            if (blk->cond)
+            {
+                nl_indent(f, depth);
+                fprintf(f, "cond=");
+                parser_dump_ast(p, f, &blk->cond->ast, depth + 1);
+            }
+            if (blk->advance)
+            {
+                nl_indent(f, depth);
+                fprintf(f, "advance=");
+                parser_dump_ast(p, f, &blk->advance->ast, depth + 1);
+            }
+            if (blk->body)
+            {
+                nl_indent(f, depth);
+                fprintf(f, "body=");
+                parser_dump_ast(p, f, blk->body, depth + 1);
+            }
+            fprintf(f, ")");
+            break;
+        }
+        case STMT_IF:
+        {
+            struct StmtIf* blk = (void*)ast;
+            fprintf(f, "(STMT_IF");
+            if (blk->cond)
+            {
+                nl_indent(f, depth);
+                fprintf(f, "cond=");
+                parser_dump_ast(p, f, &blk->cond->ast, depth + 1);
+            }
+            if (blk->if_body)
+            {
+                nl_indent(f, depth);
+                fprintf(f, "if_body=");
+                parser_dump_ast(p, f, blk->if_body, depth + 1);
+            }
+            if (blk->else_body)
+            {
+                nl_indent(f, depth);
+                fprintf(f, "else_body=");
+                parser_dump_ast(p, f, blk->else_body, depth + 1);
+            }
+            fprintf(f, ")");
+            break;
+        }
+        case STMT_RETURN:
+        {
+            struct StmtReturn* blk = (void*)ast;
+            fprintf(f, "(STMT_RETURN");
+            if (blk->expr)
+            {
+                parser_dump_ast(p, f, &blk->expr->ast, depth + 1);
+            }
+            fprintf(f, ")");
+            break;
+        }
+        case AST_DECL:
+        {
+            struct Decl* blk = (void*)ast;
+            fprintf(f, "(AST_DECL");
+            if (blk->tok)
+            {
+                fprintf(f, " tok='%s'", token_str(p, blk->tok));
+            }
+            if (blk->type)
+            {
+                fprintf(f, " type=");
+                parser_dump_type_ast(p, f, blk->type, depth + 1);
+            }
+            if (blk->init)
+            {
+                nl_indent(f, depth);
+                parser_dump_ast(p, f, blk->init, depth + 1);
+            }
+            fprintf(f, ")");
+            break;
+        }
+        case AST_DECLSPEC:
+        {
+            DeclSpecs* blk = (void*)ast;
+            fprintf(f, "(AST_DECLSPEC");
+            if (blk->is_typedef) fprintf(f, " typedef");
+            if (blk->tok) fprintf(f, " tok='%s'", token_str(p, blk->tok));
+            if (blk->name)
+            {
+                fprintf(f, " name=%s", blk->name);
+            }
+            if (blk->suinit)
+            {
+                fprintf(f, " suinit=");
+                parser_dump_ast(p, f, &blk->suinit->ast, depth + 1);
+            }
+            if (blk->enum_init)
+            {
+                fprintf(f, " enum_init=");
+                parser_dump_ast(p, f, &blk->enum_init->ast, depth + 1);
+            }
+            fprintf(f, ")");
+            break;
+        }
+        case AST_DECLFN:
+        {
+            DeclFn* blk = (void*)ast;
+            fprintf(f, "(AST_DECLFN");
+            if (blk->tok) fprintf(f, " tok='%s'", token_str(p, blk->tok));
+            if (blk->is_varargs) fprintf(f, " is_varargs");
+            if (blk->type)
+            {
+                nl_indent(f, depth);
+                parser_dump_type_ast(p, f, blk->type, depth + 1);
+            }
+            fprintf(f, ")");
+            break;
+        }
+        case AST_DECLARR:
+        {
+            struct DeclArr* blk = (void*)ast;
+            fprintf(f, "(AST_DECLARR");
+            if (blk->arity)
+            {
+                nl_indent(f, depth);
+                parser_dump_ast(p, f, &blk->arity->ast, depth + 1);
+            }
+            nl_indent(f, depth);
+            parser_dump_type_ast(p, f, blk->type, depth + 1);
+            fprintf(f, ")");
+            break;
+        }
+        case AST_DECLPTR:
+        {
+            struct DeclPtr* blk = (void*)ast;
+            fprintf(f, "(AST_DECLPTR ");
+            parser_dump_type_ast(p, f, blk->type, depth + 1);
+            fprintf(f, ")");
+            break;
+        }
+        case EXPR_BINOP:
+        {
+            struct ExprBinOp* blk = (void*)ast;
+            fprintf(f, "(EXPR_BINOP");
+            if (blk->tok) fprintf(f, " tok='%s'", token_str(p, blk->tok));
+            if (blk->lhs)
+            {
+                nl_indent(f, depth);
+                parser_dump_ast(p, f, &blk->lhs->ast, depth + 1);
+            }
+
+            if (blk->rhs)
+            {
+                nl_indent(f, depth);
+                parser_dump_ast(p, f, &blk->rhs->ast, depth + 1);
+            }
+            fprintf(f, ")");
+            break;
+        }
+        case EXPR_LIT:
+        {
+            struct ExprLit* blk = (void*)ast;
+            fprintf(f, "(EXPR_LIT");
+            if (blk->tok) fprintf(f, " tok='%s'", token_str(p, blk->tok));
+            if (blk->numeric)
+            {
+                fprintf(f, " numeric=%llu", blk->numeric);
+            }
+            fprintf(f, ")");
+            break;
+        }
+        case EXPR_UNOP:
+        {
+            struct ExprUnOp* blk = (void*)ast;
+            fprintf(f, "(EXPR_UNOP");
+            if (blk->tok) fprintf(f, " tok='%s'|%zd", token_str(p, blk->tok), blk->tok - p->tok_data);
+            if (blk->postfix) fprintf(f, " postfix");
+            if (blk->sizeof_) fprintf(f, " sizeof_=%u", blk->sizeof_);
+            if (blk->lhs)
+            {
+                nl_indent(f, depth);
+                parser_dump_ast(p, f, &blk->lhs->ast, depth + 1);
+            }
+            fprintf(f, ")");
+            break;
+        }
+        case EXPR_FIELD:
+        {
+            struct ExprField* blk = (void*)ast;
+            fprintf(f, "(EXPR_FIELD");
+            if (blk->tok) fprintf(f, " tok='%s'|%zd", token_str(p, blk->tok), blk->tok - p->tok_data);
+            if (blk->fieldname) fprintf(f, " %s", blk->fieldname);
+            if (blk->lhs)
+            {
+                nl_indent(f, depth);
+                parser_dump_ast(p, f, &blk->lhs->ast, depth + 1);
+            }
+            fprintf(f, ")");
+            break;
+        }
+        case EXPR_CAST:
+        {
+            struct ExprCast* blk = (void*)ast;
+            fprintf(f, "(EXPR_CAST");
+            if (blk->type)
+            {
+                nl_indent(f, depth);
+                parser_dump_ast(p, f, &blk->type->ast, depth + 1);
+            }
+            if (blk->expr)
+            {
+                nl_indent(f, depth);
+                parser_dump_ast(p, f, &blk->expr->ast, depth + 1);
+            }
+            fprintf(f, ")");
+            break;
+        }
+        case EXPR_REF:
+        {
+            struct ExprRef* blk = (void*)ast;
+            fprintf(f, "(EXPR_REF");
+            if (blk->tok) fprintf(f, " tok='%s'", token_str(p, blk->tok));
+            fprintf(f, ")");
+            break;
+        }
+        case EXPR_CALL:
+        {
+            struct ExprCall* blk = (void*)ast;
+            fprintf(f, "(EXPR_CALL");
+            if (blk->tok) fprintf(f, " tok='%s'", token_str(p, blk->tok));
+            if (blk->fn)
+            {
+                nl_indent(f, depth);
+                parser_dump_ast(p, f, &blk->fn->ast, depth + 1);
+            }
+            for (size_t i = 0; i < blk->param_extent; ++i)
+            {
+                nl_indent(f, depth);
+                parser_dump_ast(p, f, &((CallParam*)p->callparams.data)[blk->param_offset + i].expr->ast, depth + 1);
+            }
+            fprintf(f, ")");
+            break;
+        }
+        case EXPR_BUILTIN:
+        {
+            struct ExprBuiltin* blk = (void*)ast;
+            fprintf(f, "(EXPR_BUILTIN");
+            if (blk->tok) fprintf(f, " tok='%s'", token_str(p, blk->tok));
+            if (blk->specs)
+            {
+                nl_indent(f, depth);
+                parser_dump_ast(p, f, &blk->specs->ast, depth + 1);
+            }
+            if (blk->type)
+            {
+                nl_indent(f, depth);
+                parser_dump_ast(p, f, &blk->type->ast, depth + 1);
+            }
+            if (blk->expr1)
+            {
+                nl_indent(f, depth);
+                parser_dump_ast(p, f, &blk->expr1->ast, depth + 1);
+            }
+            if (blk->expr2)
+            {
+                nl_indent(f, depth);
+                parser_dump_ast(p, f, &blk->expr2->ast, depth + 1);
+            }
+            if (blk->sizeof_size) fprintf(f, " sizeof_size=%zu", blk->sizeof_size);
+            fprintf(f, ")");
+            break;
+        }
+        default: fprintf(f, "?%d?", ast->kind); break;
+    }
+}
+
+void parser_dump(struct Parser* p, FILE* f)
+{
+    parser_dump_ast(p, f, &p->top->ast, 1);
+    fputc('\n', f);
 }

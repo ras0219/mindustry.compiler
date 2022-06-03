@@ -18,7 +18,9 @@ void* array_alloc(struct Array* arr, size_t sz)
         } while (arr->sz > arr->cap);
         arr->data = my_realloc(arr->data, arr->cap);
     }
-    return (char*)arr->data + arr->sz - sz;
+    void* ret = (char*)arr->data + arr->sz - sz;
+    memset(ret, 0, sz);
+    return ret;
 }
 void* array_push(struct Array* arr, const void* src, size_t sz)
 {
@@ -35,7 +37,6 @@ void* array_push_byte(struct Array* arr, char ch)
 void* array_push_zeroes(struct Array* arr, size_t sz)
 {
     void* dst = array_alloc(arr, sz);
-    memset(dst, 0, sz);
     return dst;
 }
 void array_reserve(struct Array* arr, size_t cap)

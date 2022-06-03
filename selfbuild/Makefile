@@ -1,65 +1,56 @@
 SHELL = /bin/sh
 .SUFFIXES:
-.SUFFIXES: .o .asm
+#.DELETE_ON_ERROR:
 
-srcdir?=$(abspath ..)
-AS?=gcc
-ASFLAGS?=-g -c
-LD?=gcc
-CC?=cc
+MAKEFLAGS += --no-builtin-rules
+MAKEFLAGS += --no-builtin-variables
 
-CFLAGS:=-I $(srcdir)/lib ${CFLAGS}
+srcdir:=$(abspath ..)
 
-SRCS:=array.c ast.c autoheap.c be.c cg.c elaborator.c fe.c hash.c lex.c \
-	lex.c main.c parse.c parser_globals.c pool.c poolset.c preproc.c scope.c stringmap.c stringpool.c \
-	symbol.c typestr.c main.c
+AS:=as
+CC:=$(shell which clang)
+LD:=${CC}
+ASFLAGS:=-target x86_64-apple-darwin20.3.0 -g -c
+LDFLAGS:=-target x86_64-apple-darwin20.3.0 -mcpu=x86-64
+CFLAGS:= \
+    -target x86_64-apple-darwin20.3.0 \
+    -Wno-parentheses \
+    -g \
+    -S \
 
-OBJS:=$(SRCS:.c=.o)
+all: stage3/main
 
-vpath %.c $(srcdir)/lib:$(srcdir)/cli:$(srcdir)/examples
+outdir:=stage1
+intdir:=stage1
+include $(srcdir)/main.mk
 
-all: main
+CC:=stage1/main
+CFLAGS:= \
+    -I /Library/Developer/CommandLineTools/SDKs/MacOSX11.3.sdk/usr/include \
+    -I /Library/Developer/CommandLineTools/usr/lib/clang/13.0.0/include \
 
-stage2/%.asm: %.c main
-	./main ${CFLAGS} $< -c -o $@
+outdir:=stage2
+intdir:=stage2
+include $(srcdir)/main.mk
 
-stage2: stage2/main
+CC:=stage2/main
+outdir:=stage3
+intdir:=stage3
+include $(srcdir)/main.mk
 
-%.asm: %.c $(CC)
-	${CC} ${CFLAGS} $< -c -o $@
-
-%.o: %.asm
-	${AS} ${ASFLAGS} $< -o $@
-
-main: $(OBJS)
-	${LD} ${LDFLAGS} $^ -o $@
-
-asm: $(notdir $(SRCS:.c=.asm))
+stage1 stage2 stage3:
+	mkdir -p $@
 
 clean:
-	rm -f *.o *.asm main.selfbuild
+	rm -rf stage1 stage2 stage3
 
-EXAMPLES:=fibonacci stringmanip va-example enums relations parsenum
+srcs:=${wildcard ${srcdir}/lib/*.c}
+basenames:=${basename ${notdir ${srcs}}}
+stage3bases:=$(addprefix stage3/,$(basenames))
 
-$(addsuffix .asm,$(EXAMPLES)): %.asm: $(srcdir)/examples/%.c $(CC)
-	${CC} ${CFLAGS} $< -c -o $@
+$(addsuffix .i.diff,$(stage3bases)) $(addsuffix .ast.diff,$(stage3bases)): stage3/%.diff: stage2/% stage3/%
+	diff -u $^ >$@ | true
 
-$(addsuffix .o,$(EXAMPLES)): %.o: %.asm
-	${AS} ${ASFLAGS} $< -o $@
+.PHONY: ast.diffs
 
-$(EXAMPLES): %: %.o
-	${LD} ${LDFLAGS} $^ -o $@
-
-$(addprefix run-,$(EXAMPLES)): run-%: %
-	./$^
-
-examples: $(EXAMPLES)
-
-.PHONY: ../out.tracing/main main.diff
-
-export CFLAGS
-main.diff: ../out.tracing/main main
-	$(MAKE) -f Makefile.stage2 main.diff
-
-../out.tracing/main:
-	$(MAKE) -C ../out.tracing main
+ast.diffs: $(addsuffix .ast.diff,$(stage3bases))

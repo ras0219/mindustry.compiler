@@ -76,6 +76,7 @@ int usage(const char* self)
             "  -I <dir>                          Add directory to the include search path.\n"
             "  -o <path>                         Specify output path.\n"
             "  --debug-be                        Emit backend tracing information\n"
+            "  --debug-parse                     Emit parse tree.\n"
             "",
             self);
     return 1;
@@ -89,6 +90,7 @@ struct Arguments
     struct Array inc;
     unsigned fCompile : 1;
     unsigned fPreprocOnly : 1;
+    unsigned fParseOnly : 1;
     unsigned fDebugBE : 1;
     struct Array macro_name;
 };
@@ -110,6 +112,10 @@ static int parse_arguments(int argc, const char* const* argv, struct Arguments* 
             else if (strcmp(argv[i] + 1, "E") == 0)
             {
                 out->fPreprocOnly = 1;
+            }
+            else if (strcmp(argv[i] + 1, "-debug-parse") == 0)
+            {
+                out->fParseOnly = 1;
             }
             else if (strcmp(argv[i] + 1, "-debug-be") == 0)
             {
@@ -281,6 +287,12 @@ int main(int argc, const char* const* argv)
     UNWRAP(parser_parse(fe.parser, preproc_tokens(fe.pp), preproc_stringpool(fe.pp)));
     parser_debug_check(fe.parser);
     UNWRAP(parser_has_errors());
+
+    if (args.fParseOnly)
+    {
+        parser_dump(fe.parser, stdout);
+        goto fail;
+    }
 
     fe.elab = (struct Elaborator*)my_malloc(sizeof(struct Elaborator));
     elaborator_init(fe.elab, fe.parser);

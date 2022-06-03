@@ -39,7 +39,7 @@ void cg_declare_public(struct CodeGen* cg, const char* sym);
 void cg_start_function(struct CodeGen* cg, const char* sym);
 void cg_mark_label(struct CodeGen* cg, const char* sym);
 void cg_string_constant(struct CodeGen* cg, size_t cidx, const char* str, size_t sz);
-void cg_reserve_data(struct CodeGen* cg, const char* name, const char* data, size_t sz);
+void cg_reserve_data(struct CodeGen* cg, const char* name, const char* data, const char* bases, size_t sz);
 void cg_reserve_zeroes(struct CodeGen* cg, const char* name, size_t sz);
 int cg_gen_taces(struct CodeGen* cg, const struct TACEntry* taces, size_t n_taces, size_t frame_size);
 int cg_emit(struct CodeGen* cg, const char* src_filename, FILE* fout);

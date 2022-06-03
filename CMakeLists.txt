@@ -14,6 +14,10 @@ if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
     add_compile_options(-Wno-format-truncation)
 endif()
 
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    add_compile_options(-fsanitize=undefined -fsanitize=address)
+endif()
+
 if(CMAKE_SYSTEM_NAME STREQUAL "Webassembly")
     set(CMAKE_RUNTIME_OUTPUT_DIRECTORY web)
     set(CMAKE_LIBRARY_OUTPUT_DIRECTORY web)

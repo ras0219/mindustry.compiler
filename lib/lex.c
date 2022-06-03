@@ -72,6 +72,8 @@ static int symbol_is_compound(char c1, char c2)
     {
         case '+': return c2 == '+' || c2 == '=';
         case '-': return c2 == '-' || c2 == '=' || c2 == '>';
+        case '/':
+        case '%':
         case '*': return c2 == '=';
         case '|': return c2 == '|' || c2 == '=';
         case '&': return c2 == '&' || c2 == '=';

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdio.h>
+
 #include "array.h"
 #include "ast.h"
 #include "autoheap.h"
@@ -36,6 +38,7 @@ typedef struct Parser
     struct StmtBlock* top;
 
     const char* tk_strdata;
+    const struct Token* tok_data;
 } Parser;
 
 enum Precedence
@@ -65,3 +68,4 @@ int parser_parse(struct Parser* p, const struct Token* tk, const char* tk_strs);
 const char* token_str(struct Parser* p, const struct Token* tk);
 
 void parser_debug_check(struct Parser* p);
+void parser_dump(struct Parser* p, FILE* f);
