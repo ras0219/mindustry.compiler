@@ -1,7 +1,7 @@
 .vs/
 .vscode/
 CMakeSettings.json
-out/
+out*/
 selfbuild/*.o
 selfbuild/*.asm
 selfbuild/main.selfbuild
