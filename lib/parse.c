@@ -1745,6 +1745,8 @@ static const struct Token* parse_stmt(Parser* p, const struct Token* cur_tok, st
         case LEX_UUVA_ARG:
         case LEX_UUVA_END:
         case LEX_UUVA_COPY:
+        case LEX_CHARLIT:
+        case LEX_STRING:
         case TOKEN_SYM1('('):
 #define Y_CASE(V, ...) case V:
             X_PREFIX_UNARY_TOKS(Y_CASE)

@@ -1148,8 +1148,22 @@ int parse_constants(struct TestState* state)
 {
     int rc = 1;
     StandardTest test;
-    SUBTEST(
-        stdtest_run(state, &test, "char d1['\\\\'];void f() {1;0x7fffffff;0x80000000;0x7fffffffLL;0x7fffffffLLU;}\n"));
+    SUBTEST(stdtest_run(state,
+                        &test,
+                        "char d1['\\\\'];"
+                        "void f() {"
+                        "1;"
+                        "0x7fffffff;"
+                        "0x80000000;"
+                        "0x7fffffffLL;"
+                        "0x7fffffffLLU;\n"
+                        "'\\n';"
+                        "'\\t';"
+                        "'\\b';"
+                        "'\\r';"
+                        "'\\0';"
+                        "'\\x20';"
+                        "}\n"));
     rc = 0;
 
     struct Expr** const exprs = (struct Expr**)test.parser->expr_seqs.data;
@@ -1166,7 +1180,7 @@ int parse_constants(struct TestState* state)
         {
             REQUIRE_AST(StmtBlock, b, d->init)
             {
-                REQUIRE_EQ(5, b->extent);
+                REQUIRE_EQ(11, b->extent);
                 REQUIRE_EXPR(ExprLit, e, exprs[b->offset])
                 {
                     REQUIRE_EQ(1, e->numeric);
@@ -1196,6 +1210,42 @@ int parse_constants(struct TestState* state)
                     REQUIRE_EQ(0x7fffffff, e->numeric);
                     REQUIRE_EQ(LIT_SUFFIX_LLU, e->suffix);
                     REQUIRE_SIZING_EQ(s_sizing_ptr, e->sizing);
+                }
+                REQUIRE_EXPR(ExprLit, e, exprs[b->offset + 5])
+                {
+                    REQUIRE_EQ('\n', e->numeric);
+                    REQUIRE_EQ(LIT_SUFFIX_NONE, e->suffix);
+                    REQUIRE_SIZING_EQ(s_sizing_int, e->sizing);
+                }
+                REQUIRE_EXPR(ExprLit, e, exprs[b->offset + 6])
+                {
+                    REQUIRE_EQ('\t', e->numeric);
+                    REQUIRE_EQ(LIT_SUFFIX_NONE, e->suffix);
+                    REQUIRE_SIZING_EQ(s_sizing_int, e->sizing);
+                }
+                REQUIRE_EXPR(ExprLit, e, exprs[b->offset + 7])
+                {
+                    REQUIRE_EQ('\b', e->numeric);
+                    REQUIRE_EQ(LIT_SUFFIX_NONE, e->suffix);
+                    REQUIRE_SIZING_EQ(s_sizing_int, e->sizing);
+                }
+                REQUIRE_EXPR(ExprLit, e, exprs[b->offset + 8])
+                {
+                    REQUIRE_EQ('\r', e->numeric);
+                    REQUIRE_EQ(LIT_SUFFIX_NONE, e->suffix);
+                    REQUIRE_SIZING_EQ(s_sizing_int, e->sizing);
+                }
+                REQUIRE_EXPR(ExprLit, e, exprs[b->offset + 9])
+                {
+                    REQUIRE_EQ(0, e->numeric);
+                    REQUIRE_EQ(LIT_SUFFIX_NONE, e->suffix);
+                    REQUIRE_SIZING_EQ(s_sizing_int, e->sizing);
+                }
+                REQUIRE_EXPR(ExprLit, e, exprs[b->offset + 10])
+                {
+                    REQUIRE_EQ(32, e->numeric);
+                    REQUIRE_EQ(LIT_SUFFIX_NONE, e->suffix);
+                    REQUIRE_SIZING_EQ(s_sizing_int, e->sizing);
                 }
             }
         }

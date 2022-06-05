@@ -142,12 +142,20 @@ __forceinline static int handle_backslash_nl(struct Lexer* const l, const char* 
         if (handle_backslash_nl(l, buf, sz, &i)) return 0;                                                             \
     } while (0)
 
-static const signed char s_map_escapes[256] = {
+static const signed char s_map_escapes[128] = {
     ['n'] = '\n' - 'n',
     ['b'] = '\b' - 'b',
     ['r'] = '\r' - 'r',
     ['t'] = '\t' - 't',
     ['0'] = '\0' - '0',
+    ['x'] = '\0' - 'x',
+};
+
+// hex value + 1, 0 on error
+static const char s_hex_map[128] = {
+    ['0'] = 1,  ['1'] = 2,  ['2'] = 3,  ['3'] = 4,  ['4'] = 5,  ['5'] = 6,  ['6'] = 7,  ['7'] = 8,
+    ['8'] = 9,  ['9'] = 10, ['a'] = 11, ['b'] = 12, ['c'] = 13, ['d'] = 14, ['e'] = 15, ['f'] = 16,
+    ['A'] = 11, ['B'] = 12, ['C'] = 13, ['D'] = 14, ['E'] = 15, ['F'] = 16,
 };
 
 int lex(Lexer* const l, const char* const buf, size_t const sz)
@@ -327,6 +335,25 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
 #if defined(TRACING_LEX)
                 fprintf(stderr, "lex('%c'): LEX_CHARLIT\n", ch);
 #endif
+                if (l->escapex)
+                {
+                    if ((unsigned)ch < 128 && s_hex_map[(unsigned)ch])
+                    {
+                        if (l->escapex == 3) return parser_ferror(&l->rc, "error: hex value out of range\n");
+                        l->tok[l->sz - 1] = (unsigned char)((l->tok[l->sz - 1] << 4) + (s_hex_map[(unsigned)ch] - 1));
+                        ++l->escapex;
+                        continue;
+                    }
+                    else if (l->escapex == 1)
+                    {
+                        return parser_ferror(&l->rc, "error: unsupported character in \\x escape\n");
+                    }
+                    else
+                    {
+                        l->escapex = 0;
+                    }
+                }
+
                 if (ch == '\n')
                 {
                     return parser_ferror(&l->rc, "error: unexpected end of line in character literal\n");
@@ -334,11 +361,16 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
                 else if (l->escape)
                 {
                     l->escape = 0;
-                    UNWRAP(push_tok_char(l, ch + s_map_escapes[(int)ch]));
+                    if ((unsigned)ch > 127) return parser_ferror(&l->rc, "error: unsupported escape character\n");
+                    if (ch == 'x')
+                    {
+                        l->escapex = 1;
+                    }
+                    UNWRAP(push_tok_char(l, ch + s_map_escapes[(unsigned)ch]));
                 }
                 else if (ch == '\'')
                 {
-                    // finish string
+                    // finish charlit
                     UNWRAP(emit_token(l));
                     advance_rowcol(&l->rc, buf[i++]);
                     goto LEX_START;
@@ -363,6 +395,25 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
 #if defined(TRACING_LEX)
                 fprintf(stderr, "lex('%c'): LEX_STRING\n", ch);
 #endif
+                if (l->escapex)
+                {
+                    if ((unsigned)ch < 128 && s_hex_map[(unsigned)ch])
+                    {
+                        if (l->escapex == 3) return parser_ferror(&l->rc, "error: hex value out of range\n");
+                        l->tok[l->sz - 1] = (unsigned char)((l->tok[l->sz - 1] << 4) + (s_hex_map[(unsigned)ch] - 1));
+                        ++l->escapex;
+                        continue;
+                    }
+                    else if (l->escapex == 1)
+                    {
+                        return parser_ferror(&l->rc, "error: unsupported character in \\x escape\n");
+                    }
+                    else
+                    {
+                        l->escapex = 0;
+                    }
+                }
+
                 if (ch == '\n')
                 {
                     return parser_ferror(&l->rc, "error: unexpected end of line in string literal\n");
@@ -370,7 +421,12 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
                 else if (l->escape)
                 {
                     l->escape = 0;
-                    UNWRAP(push_tok_char(l, ch + s_map_escapes[(int)ch]));
+                    if ((unsigned)ch > 127) return parser_ferror(&l->rc, "error: unsupported escape character\n");
+                    if (ch == 'x')
+                    {
+                        l->escapex = 1;
+                    }
+                    UNWRAP(push_tok_char(l, ch + s_map_escapes[(unsigned)ch]));
                 }
                 else if (ch == '"')
                 {

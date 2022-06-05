@@ -110,7 +110,7 @@ void cg_string_constant(struct CodeGen* cg, size_t cidx, const char* str, size_t
     {
         if (needs_escape(str[i]))
         {
-            array_appendf(&cg->const_, "\\x%02x", (unsigned char)str[i]);
+            array_appendf(&cg->const_, "\\%03o", (unsigned char)str[i]);
         }
         else
         {

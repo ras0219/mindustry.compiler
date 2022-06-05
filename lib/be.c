@@ -1582,6 +1582,7 @@ void debug_taca(Array* arr, const TACAddress* addr)
         case TACA_REG: array_appendf(arr, ", .reg = %s}", register_to_string(addr->reg)); break;
         case TACA_REF: array_appendf(arr, ", .ref = %zu}", addr->ref); break;
         case TACA_ALABEL: array_appendf(arr, ", .alabel = %zu}", addr->alabel); break;
+        case TACA_LLABEL: array_appendf(arr, ", .literal = %s}", addr->literal); break;
         case TACA_PARAM: array_appendf(arr, ", .param_offset = %zu}", addr->param_offset); break;
         case TACA_NAME: array_appendf(arr, ", .name = \"%s\"}", addr->name ? addr->name : "(null)"); break;
         case TACA_LNAME: array_appendf(arr, ", .name = \"%s\"}", addr->name ? addr->name : "(null)"); break;

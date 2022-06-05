@@ -16,6 +16,7 @@ struct Lexer
     unsigned int backslash : 1;
     unsigned int skip_next : 1;
     unsigned int escape : 1;
+    unsigned int escapex : 2;
 
     struct RowCol tok_rc;
     struct RowCol rc;
