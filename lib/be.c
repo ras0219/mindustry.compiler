@@ -60,6 +60,7 @@ static __forceinline Sizing min_sizing(Sizing s1, Sizing s2)
 
 static __forceinline size_t be_frame_alloc(struct BackEnd* be, size_t size, size_t align)
 {
+    if (size == 0 || align == 0) abort();
     size_t r = round_to_alignment(be->frame_size, align);
     be->frame_size = r + size;
     if (be->max_frame_size < be->frame_size) be->max_frame_size = be->frame_size;
@@ -165,6 +166,10 @@ static struct TACAddress be_push_tace(struct BackEnd* be, const struct TACEntry*
     {
         if (e->op == TACO_MULT) abort();
     }
+
+    if (e->arg1.kind == TACA_FRAME && e->arg1.frame_offset >= be->max_frame_size) abort();
+    if (e->arg2.kind == TACA_FRAME && e->arg2.frame_offset >= be->max_frame_size) abort();
+
     struct TACAddress ret = {
         .kind = TACA_REF,
         .ref = offset,
@@ -309,21 +314,22 @@ static int be_dereference(struct BackEnd* be, struct TACAddress* out, Sizing siz
 static int be_compile_stmt(struct BackEnd* be, struct Ast* e);
 static int be_compile_expr(struct BackEnd* be, struct Expr* e, struct TACAddress* out);
 static int be_compile_lvalue(struct BackEnd* be, struct Expr* e, struct TACAddress* out);
-static int be_compile_init(struct BackEnd* be, struct Ast* e, size_t frame_offset, Sizing sizing, uint8_t is_char_arr)
+static int be_compile_init(
+    struct BackEnd* be, struct Ast* e, size_t frame_base, size_t offset, Sizing sizing, uint8_t is_char_arr)
 {
     int rc = 0;
     if (e->kind == AST_INIT)
     {
         const struct TACEntry tace = {
             TACO_ASSIGN,
-            {TACA_FRAME, .is_addr = 1, .sizing = sizing, .frame_offset = frame_offset},
+            {TACA_FRAME, .is_addr = 1, .sizing = sizing, .frame_offset = frame_base + offset},
             {TACA_IMM, .sizing = s_sizing_int, .imm = 0},
         };
         be_push_tace(be, &tace, s_sizing_zero);
         struct AstInit* block = (void*)e;
         for (; block->init; block = block->next)
         {
-            UNWRAP(be_compile_init(be, block->init, frame_offset + block->offset, block->sizing, block->is_char_arr));
+            UNWRAP(be_compile_init(be, block->init, frame_base, block->offset, block->sizing, block->is_char_arr));
         }
     }
     else if (!ast_kind_is_expr(e->kind))
@@ -337,7 +343,7 @@ static int be_compile_init(struct BackEnd* be, struct Ast* e, size_t frame_offse
             .arg1 =
                 {
                     .kind = TACA_FRAME,
-                    .frame_offset = frame_offset,
+                    .frame_offset = frame_base + offset,
                     .is_addr = 1,
                     .sizing = sizing,
                 },
@@ -599,7 +605,7 @@ static int be_compile_arith_rhs(struct BackEnd* be, struct ExprBinOp* e, struct 
     int rc = 0;
     if (e->info == 0)
     {
-        UNWRAP(parser_tok_error(e->tok, "warning: unsized arithmetic op\n"));
+        UNWRAP(parser_tok_error(e->tok, "error: unsized arithmetic op\n"));
     }
     else if (e->info <= 1)
     {
@@ -608,12 +614,19 @@ static int be_compile_arith_rhs(struct BackEnd* be, struct ExprBinOp* e, struct 
     else
     {
         struct TACEntry tace = {};
-        tace.rc = &e->tok->rc;
-        /* adding to pointer, e->info is size of element */
-        tace.op = TACO_MULT;
-        tace.arg1 = taca_imm(e->info);
         UNWRAP(be_compile_expr(be, e->rhs, &tace.arg2));
-        *out = be_push_tace(be, &tace, s_sizing_pointer);
+        if (tace.arg2.kind == TACA_IMM)
+        {
+            *out = taca_imm(e->info * tace.arg2.imm);
+        }
+        else
+        {
+            tace.rc = &e->tok->rc;
+            /* adding to pointer, e->info is size of element */
+            tace.op = TACO_MULT;
+            tace.arg1 = taca_imm(e->info);
+            *out = be_push_tace(be, &tace, s_sizing_pointer);
+        }
     }
 fail:
     return rc;
@@ -760,7 +773,7 @@ static int be_compile_ExprBuiltin(struct BackEnd* be, struct ExprBuiltin* e, str
             tace.arg2.kind = TACA_FRAME;
             tace.arg2.is_addr = 1;
             tace.arg2.sizing = s_sizing_zero;
-            tace.arg2.arg_offset = 0;
+            tace.arg2.frame_offset = 0;
             be_push_tace(be, &tace, s_sizing_zero);
             *out = s_taca_void;
             break;
@@ -900,18 +913,16 @@ static int be_compile_ExprUnOp(struct BackEnd* be, struct ExprUnOp* e, struct TA
                 *out = be_ensure_ref(be, &tace.arg1);
             }
             tace.arg2 = taca_imm(e->sizeof_);
+            if (e->sizeof_ == 0) abort();
             tace.arg2 = be_push_tace(be, &tace, e->sizing);
             tace.op = TACO_ASSIGN;
             tace.arg1 = lhs_lvalue;
             tace.arg1.sizing = e->lhs->sizing;
-            if (e->postfix)
-            {
-                be_push_tace(be, &tace, e->sizing);
-            }
-            else
+            be_push_tace(be, &tace, e->sizing);
+            if (!e->postfix)
             {
                 // preincrement
-                *out = be_push_tace(be, &tace, e->sizing);
+                *out = tace.arg2;
             }
             break;
         case TOKEN_SYM1('!'):
@@ -1322,7 +1333,7 @@ static int be_compile_Decl(struct BackEnd* be, struct Decl* decl)
     {
         struct Ast* init = decl->init;
         int start_frame_size = be->frame_size;
-        UNWRAP(be_compile_init(be, init, decl->sym->addr.frame_offset, decl->sym->size, decl->sym->is_char_array));
+        UNWRAP(be_compile_init(be, init, decl->sym->addr.frame_offset, 0, decl->sym->size, decl->sym->is_char_array));
         be->frame_size = start_frame_size;
     }
 fail:

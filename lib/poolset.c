@@ -10,6 +10,7 @@ struct PoolSetFind
     size_t sz;
 };
 
+#if 0
 static void* poolset_find_obj(void* userp, void* bucket, size_t bucket_sz)
 {
     char* const data = bucket;
@@ -28,3 +29,4 @@ void* poolset_emplace(struct PoolSet* p, const void* obj, size_t sz)
     if (found) return found;
     return pool_push(&p->p, obj, sz);
 }
+#endif

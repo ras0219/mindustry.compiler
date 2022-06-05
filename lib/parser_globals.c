@@ -1,6 +1,7 @@
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "errors.h"
 #include "tok.h"
@@ -23,6 +24,13 @@ static int parser_vfmsg_impl(struct FixedMsgBuffer* buf, const struct RowCol* rc
     {
         buf->used += vsnprintf(buf->buf + buf->used, sizeof(buf->buf) - buf->used, fmt, argp);
     }
+#if defined(FAIL_ON_FIRST)
+    if (buf == &s_error)
+    {
+        parser_print_errors(stderr);
+        abort();
+    }
+#endif
     return 1;
 }
 

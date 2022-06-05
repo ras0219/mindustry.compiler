@@ -268,6 +268,8 @@ int main(int argc, const char* const* argv)
         "__builtin_bswap16",
         "__builtin_bswap64",
         "__func__=\"__func__\"",
+        "__FILE__=\"/path/to/__FILE__\"",
+        "__LINE__=0",
     };
 
     for (size_t i = 0; i < sizeof(predefs) / sizeof(predefs[0]); ++i)

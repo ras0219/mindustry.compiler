@@ -7,8 +7,11 @@
 /// </summary>
 struct Pool
 {
+    /// count of stored elements
     size_t sz;
+    /// count of buckets
     size_t sz_buckets;
+    /// T**, pointer to buckets
     void** data;
 };
 
@@ -23,8 +26,10 @@ void* pool_alloc_zeroes(struct Pool* p, size_t sz) __attribute__((alloc_size(2),
 void* pool_push(struct Pool* arr, const void* src, size_t sz) __attribute__((alloc_size(3), returns_nonnull));
 void pool_shrink(struct Pool* p, size_t count);
 
-typedef void* (*pool_foreach_cb_t)(void* userp, void* bucket, size_t bucket_sz);
+/// \param userp User provided data pointer
+/// \param bucket Pointer to beginning of bucket span
+/// \param n Number of active elements in bucket
+typedef void* (*pool_foreach_cb_t)(void* userp, void* bucket, size_t n);
 
-// sz must be held constant for life of p
 // if cb returns non-null, exit foreach early with value
-void* pool_foreach_bucket(struct Pool* p, size_t sz, pool_foreach_cb_t cb, void* userp);
+void* pool_foreach_bucket(struct Pool* p, pool_foreach_cb_t cb, void* userp);

@@ -11,6 +11,8 @@ typedef struct TypeStr
 {
     // length counted, first byte is length
     char buf[TYPESTR_BUF_SIZE];
+
+    unsigned long long pad2;
 } TypeStr;
 
 #define X_TYPE_BYTE_INT(Y)                                                                                             \

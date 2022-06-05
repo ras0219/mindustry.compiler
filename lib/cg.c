@@ -525,7 +525,16 @@ static int cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t 
         case TACO_NEQ:
             UNWRAP(cg_gen_load(cg, tace->arg1, REG_RAX, frame));
             UNWRAP(cg_gen_load(cg, tace->arg2, REG_RDX, frame));
-            array_appends(&cg->code, "cmp %rdx, %rax\n");
+            int wid = tace->arg1.sizing.width;
+            if (tace->arg2.sizing.width > wid) wid = tace->arg2.sizing.width;
+            switch (wid)
+            {
+                case 1: array_appends(&cg->code, "cmp %dl, %al\n"); break;
+                case 2: array_appends(&cg->code, "cmp %dx, %ax\n"); break;
+                case 4: array_appends(&cg->code, "cmp %edx, %eax\n"); break;
+                case 8: array_appends(&cg->code, "cmp %rdx, %rax\n"); break;
+                default: abort();
+            }
             switch (tace->op)
             {
                 case TACO_LT: array_appends(&cg->code, "    setl %al\n"); break;

@@ -231,7 +231,7 @@ top:;
         }
         else
         {
-#define PARAM_COUNT 16
+#define PARAM_COUNT 32
             CallParam params[PARAM_COUNT] = {0};
             size_t i = 0;
             do
@@ -2159,8 +2159,25 @@ static void parser_dump_ast(struct Parser* p, FILE* f, Ast* ast, int depth)
     }
 }
 
+static void* dump_sym_pool(void* f, void* bucket, size_t n)
+{
+    Symbol* syms = bucket;
+    for (size_t i = 0; i < n; ++i)
+    {
+        fprintf((FILE*)f, "(Symbol '%s'", syms[i].name ? syms[i].name : "");
+        if (syms[i].def)
+        {
+            if (syms[i].def->tok) fprintf((FILE*)f, "\n  %s:%d", syms[i].def->tok->rc.file, syms[i].def->tok->rc.row);
+        }
+        fprintf((FILE*)f, ")\n");
+    }
+
+    return NULL;
+}
+
 void parser_dump(struct Parser* p, FILE* f)
 {
     parser_dump_ast(p, f, &p->top->ast, 1);
     fputc('\n', f);
+    pool_foreach_bucket(&p->sym_pool, dump_sym_pool, f);
 }

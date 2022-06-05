@@ -45,45 +45,63 @@ enum
     TYPE_FLAGS_ARRAY = 1 << 9,
     TYPE_FLAGS_SIGNED = 1 << 10,
     TYPE_FLAGS_PROMOTE_INT = 1 << 11,
+    TYPE_FLAGS_WIDTH1 = 0 << 12,
+    TYPE_FLAGS_WIDTH2 = 1 << 12,
+    TYPE_FLAGS_WIDTH4 = 2 << 12,
+    TYPE_FLAGS_WIDTH8 = 3 << 12,
 
+    TYPE_MASK_WIDTH = 3 << 12,
     TYPE_MASK_HAS_FIELDS = TYPE_FLAGS_UNION | TYPE_FLAGS_STRUCT,
     TYPE_MASK_ARITH = TYPE_FLAGS_FLOAT | TYPE_FLAGS_INT,
     TYPE_MASK_SCALAR = TYPE_FLAGS_POINTER | TYPE_MASK_ARITH,
     TYPE_MASK_OBJECT = TYPE_FLAGS_VOID | TYPE_FLAGS_INT | TYPE_FLAGS_POINTER | TYPE_FLAGS_STRUCT | TYPE_FLAGS_UNION,
     TYPE_MASK_FN_ARR = TYPE_FLAGS_FUNCTION | TYPE_FLAGS_ARRAY,
+
+    TYPE_COMMON_FLAGS_CHAR = TYPE_FLAGS_CHAR | TYPE_FLAGS_INT | TYPE_FLAGS_PROMOTE_INT | TYPE_FLAGS_WIDTH1,
+    TYPE_COMMON_FLAGS_SHORT = TYPE_FLAGS_INT | TYPE_FLAGS_PROMOTE_INT | TYPE_FLAGS_WIDTH2,
+    TYPE_COMMON_FLAGS_INT = TYPE_FLAGS_INT | TYPE_FLAGS_WIDTH4,
+    TYPE_COMMON_FLAGS_LONG = TYPE_FLAGS_INT | TYPE_FLAGS_WIDTH8,
+};
+
+static unsigned int s_typestr_mask_data[256] = {
+    [TYPE_BYTE_VARIADIC] = TYPE_FLAGS_VAR,
+    [TYPE_BYTE_VOID] = TYPE_FLAGS_VOID,
+    [TYPE_BYTE_POINTER] = TYPE_FLAGS_POINTER | TYPE_FLAGS_WIDTH8,
+
+    [TYPE_BYTE_CHAR] = TYPE_COMMON_FLAGS_CHAR | TYPE_FLAGS_SIGNED,
+    [TYPE_BYTE_SCHAR] = TYPE_COMMON_FLAGS_CHAR | TYPE_FLAGS_SIGNED,
+    [TYPE_BYTE_UCHAR] = TYPE_COMMON_FLAGS_CHAR,
+
+    [TYPE_BYTE_SHORT] = TYPE_COMMON_FLAGS_SHORT | TYPE_FLAGS_SIGNED,
+    [TYPE_BYTE_USHORT] = TYPE_COMMON_FLAGS_SHORT,
+
+    [TYPE_BYTE_ENUM] = TYPE_COMMON_FLAGS_INT | TYPE_FLAGS_SIGNED,
+    [TYPE_BYTE_INT] = TYPE_COMMON_FLAGS_INT | TYPE_FLAGS_SIGNED,
+    [TYPE_BYTE_UINT] = TYPE_COMMON_FLAGS_INT,
+
+    [TYPE_BYTE_LONG] = TYPE_COMMON_FLAGS_LONG | TYPE_FLAGS_SIGNED,
+    [TYPE_BYTE_LLONG] = TYPE_COMMON_FLAGS_LONG | TYPE_FLAGS_SIGNED,
+    [TYPE_BYTE_ULONG] = TYPE_COMMON_FLAGS_LONG,
+    [TYPE_BYTE_ULLONG] = TYPE_COMMON_FLAGS_LONG,
+
+    [TYPE_BYTE_FLOAT] = TYPE_FLAGS_FLOAT | TYPE_FLAGS_WIDTH4,
+    [TYPE_BYTE_DOUBLE] = TYPE_FLAGS_FLOAT | TYPE_FLAGS_WIDTH8,
+    [TYPE_BYTE_LDOUBLE] = TYPE_FLAGS_FLOAT | TYPE_FLAGS_WIDTH8,
+
+    [TYPE_BYTE_UNK_ARRAY] = TYPE_FLAGS_ARRAY,
+    [TYPE_BYTE_ARRAY] = TYPE_FLAGS_ARRAY,
+    [TYPE_BYTE_STRUCT] = TYPE_FLAGS_STRUCT,
+    [TYPE_BYTE_UNION] = TYPE_FLAGS_UNION,
+    [TYPE_BYTE_FUNCTION] = TYPE_FLAGS_FUNCTION,
+    [TYPE_BYTE_UUVALIST] = TYPE_FLAGS_STRUCT,
 };
 
 unsigned int typestr_mask(const struct TypeStr* ts)
 {
-    switch (typestr_byte(ts))
-    {
-        case '\0': return 0;
-        case TYPE_BYTE_VARIADIC: return TYPE_FLAGS_VAR;
-        case TYPE_BYTE_VOID: return TYPE_FLAGS_VOID;
-        case TYPE_BYTE_CHAR:
-        case TYPE_BYTE_SCHAR: return TYPE_FLAGS_CHAR | TYPE_FLAGS_INT | TYPE_FLAGS_SIGNED | TYPE_FLAGS_PROMOTE_INT;
-        case TYPE_BYTE_UCHAR: return TYPE_FLAGS_CHAR | TYPE_FLAGS_INT | TYPE_FLAGS_PROMOTE_INT;
-        case TYPE_BYTE_ENUM:
-        case TYPE_BYTE_INT:
-        case TYPE_BYTE_SHORT: return TYPE_FLAGS_INT | TYPE_FLAGS_SIGNED | TYPE_FLAGS_PROMOTE_INT;
-        case TYPE_BYTE_LONG:
-        case TYPE_BYTE_LLONG: return TYPE_FLAGS_INT | TYPE_FLAGS_SIGNED;
-        case TYPE_BYTE_UINT:
-        case TYPE_BYTE_USHORT: return TYPE_FLAGS_INT | TYPE_FLAGS_PROMOTE_INT;
-        case TYPE_BYTE_ULONG:
-        case TYPE_BYTE_ULLONG: return TYPE_FLAGS_INT;
-        case TYPE_BYTE_FLOAT:
-        case TYPE_BYTE_DOUBLE:
-        case TYPE_BYTE_LDOUBLE: return TYPE_FLAGS_FLOAT;
-        case TYPE_BYTE_POINTER: return TYPE_FLAGS_POINTER;
-        case TYPE_BYTE_UNK_ARRAY:
-        case TYPE_BYTE_ARRAY: return TYPE_FLAGS_ARRAY;
-        case TYPE_BYTE_STRUCT: return TYPE_FLAGS_STRUCT;
-        case TYPE_BYTE_UNION: return TYPE_FLAGS_UNION;
-        case TYPE_BYTE_FUNCTION: return TYPE_FLAGS_FUNCTION;
-        case TYPE_BYTE_UUVALIST: return TYPE_FLAGS_STRUCT;
-        default: abort();
-    }
+    const int b = typestr_byte(ts);
+    unsigned int r = s_typestr_mask_data[b];
+    if (r == 0 && b != 0) abort();
+    return r;
 }
 
 static const struct TypeStr s_type_void = {.buf = {1, TYPE_BYTE_VOID}};
@@ -236,6 +254,7 @@ enum
 };
 static unsigned int typestr_strip_cvr(struct TypeStr* ts)
 {
+    if (ts->buf[0] <= 0 || ts->buf[0] >= TYPESTR_BUF_SIZE) abort();
     unsigned int m = 0;
     if (ts->buf[(int)ts->buf[0]] == 'r') ts->buf[0]--, m |= TYPESTR_CVR_R;
     if (ts->buf[(int)ts->buf[0]] == 'v') ts->buf[0]--, m |= TYPESTR_CVR_V;
@@ -328,16 +347,17 @@ static void typestr_decay(struct TypeStr* t)
     switch (ch)
     {
         case TYPE_BYTE_ARRAY: t->buf[0] -= 4; // passthrough
-        case TYPE_BYTE_UNK_ARRAY: t->buf[(int)t->buf[0]] = TYPE_BYTE_POINTER; return;
+        case TYPE_BYTE_UNK_ARRAY: t->buf[(int)t->buf[0]] = TYPE_BYTE_POINTER; break;
         case TYPE_BYTE_FUNCTION:
         {
             t->buf[0]++;
             if (t->buf[0] == TYPESTR_BUF_SIZE) abort();
             t->buf[(int)t->buf[0]] = TYPE_BYTE_POINTER;
-            return;
+            break;
         }
-        default: return;
+        default: break;
     }
+    if (t->buf[0] <= 0 || t->buf[0] >= TYPESTR_BUF_SIZE) abort();
 }
 static int is_zero_constant(Elaborator* elab, const Expr* e);
 static void typestr_implicit_conversion(Elaborator* elab,
@@ -346,6 +366,9 @@ static void typestr_implicit_conversion(Elaborator* elab,
                                         const struct TypeStr* orig_to,
                                         const Expr* from_expr)
 {
+    char buf_[128] = {0};
+    char* buf = buf_;
+
     struct TypeTable* types = elab->types;
     if (typestr_match(orig_from, orig_to)) return;
 
@@ -362,8 +385,18 @@ static void typestr_implicit_conversion(Elaborator* elab,
         --to.buf[0];
         unsigned int cvr_from = typestr_strip_cvr(&from);
         unsigned int cvr_to = typestr_strip_cvr(&to);
+        buf += snprintf(buf,
+                        128,
+                        "%d/%d:%c/%c:%u/%u\n",
+                        from.buf[0],
+                        to.buf[0],
+                        from.buf[(int)from.buf[0]],
+                        to.buf[(int)to.buf[0]],
+                        cvr_from,
+                        cvr_to);
         if ((cvr_from & cvr_to) == cvr_from)
         {
+            buf += sprintf(buf, "abc");
             // cvr_to contains cvr_from
             if (typestr_match(&to, &from) || typestr_match(&s_void, &to) || typestr_match(&s_void, &from)) return;
         }
@@ -378,12 +411,13 @@ static void typestr_implicit_conversion(Elaborator* elab,
         unsigned int to_mask = typestr_mask(&to);
         if (from_mask & to_mask & TYPE_FLAGS_INT) return;
     }
-
+    fprintf(stderr, "%s", buf_);
     typestr_error2(rc, types, "error: could not implicitly convert '%.*s' to '%.*s'\n", orig_from, orig_to);
 }
 
 static void typestr_append_offset(struct TypeStr* s, uint32_t offset, char offset_type)
 {
+    if (s->buf[0] < 0) abort();
     if (TYPESTR_BUF_SIZE <= s->buf[0] + sizeof(uint32_t) + 1) abort();
 
     int i = s->buf[0] + 1;
@@ -439,6 +473,9 @@ static void typestr_append_decltype(const struct Ast* const* expr_seqs,
 
 static void typestr_append_typestr(TypeStr* out, const TypeStr* in)
 {
+#if defined(TRACING_ELAB)
+    fprintf(stderr, "typestr_append_typestr\n");
+#endif
     if (out->buf[0] < 0 || in->buf[0] < 0) abort();
     if (out->buf[0] + in->buf[0] + 1 >= sizeof(out->buf)) abort();
     memcpy(out->buf + out->buf[0] + 1, in->buf + 1, in->buf[0]);
@@ -450,12 +487,18 @@ static void typestr_append_decltype_DeclSpecs(const struct Ast* const* expr_seqs
                                               struct TypeStr* s,
                                               const struct DeclSpecs* d)
 {
+#if defined(TRACING_ELAB)
+    fprintf(stderr, "typestr_append_decltype_DeclSpecs\n");
+#endif
     if (d->_typedef)
     {
         typestr_append_typestr(s, &d->_typedef->type);
     }
     else if (d->sym)
     {
+#if defined(TRACING_ELAB)
+        fprintf(stderr, "d->sym\n");
+#endif
         char ch;
         if (d->is_struct)
         {
@@ -481,6 +524,9 @@ static void typestr_append_decltype_DeclSpecs(const struct Ast* const* expr_seqs
     }
     else
     {
+#if defined(TRACING_ELAB)
+        fprintf(stderr, "d->tok->type=%d\n", d->tok->type);
+#endif
         char ch;
         switch (d->tok->type)
         {
@@ -507,8 +553,13 @@ static void typestr_append_decltype_DeclSpecs(const struct Ast* const* expr_seqs
                 break;
             default: abort();
         }
+        if (ch == 0) abort();
+        if (s->buf[0] != 0) abort();
         s->buf[(int)++s->buf[0]] = ch;
+        if (s->buf[0] != 1) abort();
+        if (s->buf[1] != ch) abort();
     }
+    if (s->buf[0] == 1 && s->buf[1] == 0) abort();
 
     unsigned int m = 0;
     if (d->is_const) m |= TYPESTR_CVR_C;
@@ -555,6 +606,7 @@ static void typestr_append_decltype(const struct Ast* const* expr_seqs,
         {
             struct DeclArr* d = (struct DeclArr*)e;
             typestr_append_decltype(expr_seqs, tt, s, d->type);
+            if (s->buf[0] == 1 && s->buf[1] == 0) abort();
             typestr_add_array(s, d->integer_arity);
             return;
         }
@@ -571,7 +623,7 @@ static void typestr_append_decltype(const struct Ast* const* expr_seqs,
             }
             if (d->is_varargs)
             {
-                struct TypeStr var = {1, TYPE_BYTE_VARIADIC};
+                struct TypeStr var = {.buf = {1, TYPE_BYTE_VARIADIC}};
                 array_push(&args, &var, sizeof(var));
             }
             size_t i = 0;
@@ -610,19 +662,13 @@ static void typestr_from_decltype(const struct Ast* const* expr_seqs,
     // initialize type
     *s = s_type_unknown;
     typestr_append_decltype(expr_seqs, tt, s, e);
+    if (s->buf[0] == 0) abort();
 }
 __forceinline static void typestr_from_decltype_Decl(const struct Ast* const* expr_seqs,
                                                      struct TypeTable* tt,
                                                      struct TypeStr* s,
                                                      struct Decl* d)
 {
-    // if (d->sym && d->sym->name && strcmp(d->sym->name, "va_list") == 0)
-    // {
-    //     s->buf[0] = 1;
-    //     s->buf[1] = TYPE_BYTE_UUVALIST;
-    //     typestr_append_offset(s, 1, TYPE_BYTE_ARRAY);
-    //     return;
-    // }
     typestr_from_decltype(expr_seqs, tt, s, &d->ast);
 }
 
@@ -965,6 +1011,9 @@ static void elaborate_binop(struct Elaborator* elab,
                             struct ExprBinOp* e,
                             struct TypeStr* rty)
 {
+#if defined(TRACING_ELAB)
+    fprintf(stderr, "elaborate_binop\n");
+#endif
     elaborate_expr(elab, ctx, e->lhs, rty);
     const struct TypeStr orig_lhs = *rty;
     typestr_decay(rty);
@@ -994,7 +1043,6 @@ static void elaborate_binop(struct Elaborator* elab,
                                &orig_lhs);
                 *rty = s_type_literal_int;
             }
-            typestr_promote_integer(rty);
             break;
         case TOKEN_SYM1('/'):
         case TOKEN_SYM1('*'):
@@ -1006,10 +1054,7 @@ static void elaborate_binop(struct Elaborator* elab,
                                &orig_lhs);
                 *rty = s_type_literal_int;
             }
-            typestr_promote_integer(rty);
             break;
-        case TOKEN_SYM2('|', '|'):
-        case TOKEN_SYM2('&', '&'):
         case TOKEN_SYM2('=', '='):
         case TOKEN_SYM2('<', '='):
         case TOKEN_SYM2('>', '='):
@@ -1019,9 +1064,11 @@ static void elaborate_binop(struct Elaborator* elab,
         case TOKEN_SYM1('['):
         case TOKEN_SYM1('+'):
         case TOKEN_SYM1('-'):
+        case TOKEN_SYM1('?'):
         case TOKEN_SYM2('+', '='):
         case TOKEN_SYM2('-', '='):
-        case TOKEN_SYM1('?'):
+        case TOKEN_SYM2('|', '|'):
+        case TOKEN_SYM2('&', '&'):
             if (!(lhs_mask & TYPE_MASK_SCALAR))
             {
                 typestr_error1(&e->tok->rc,
@@ -1039,14 +1086,14 @@ static void elaborate_binop(struct Elaborator* elab,
     {
         case TOKEN_SYM2('<', '<'):
         case TOKEN_SYM2('>', '>'):
-        case TOKEN_SYM3('<', '<', '='):
-        case TOKEN_SYM3('>', '>', '='):
         case TOKEN_SYM1('&'):
         case TOKEN_SYM1('|'):
-        case TOKEN_SYM2('&', '='):
-        case TOKEN_SYM2('|', '='):
         case TOKEN_SYM1('^'):
         case TOKEN_SYM1('%'):
+        case TOKEN_SYM3('<', '<', '='):
+        case TOKEN_SYM3('>', '>', '='):
+        case TOKEN_SYM2('&', '='):
+        case TOKEN_SYM2('|', '='):
             if (!(rhs_mask & TYPE_FLAGS_INT))
             {
                 typestr_error1(&e->tok->rc,
@@ -1067,8 +1114,6 @@ static void elaborate_binop(struct Elaborator* elab,
                                &orig_rhs);
             }
             break;
-        case TOKEN_SYM2('|', '|'):
-        case TOKEN_SYM2('&', '&'):
         case TOKEN_SYM2('=', '='):
         case TOKEN_SYM2('<', '='):
         case TOKEN_SYM2('>', '='):
@@ -1080,6 +1125,8 @@ static void elaborate_binop(struct Elaborator* elab,
         case TOKEN_SYM1('-'):
         case TOKEN_SYM2('+', '='):
         case TOKEN_SYM2('-', '='):
+        case TOKEN_SYM2('|', '|'):
+        case TOKEN_SYM2('&', '&'):
             if (!(rhs_mask & TYPE_MASK_SCALAR))
             {
                 typestr_error1(&e->tok->rc,
@@ -1091,24 +1138,26 @@ static void elaborate_binop(struct Elaborator* elab,
         default: break;
     }
 
+    int is_arithmetic = 0;
+    int rty_is_lhs = 0;
     switch (e->tok->type)
     {
+        case TOKEN_SYM2('*', '='):
+        case TOKEN_SYM2('%', '='):
+        case TOKEN_SYM2('/', '='):
+        case TOKEN_SYM2('&', '='):
+        case TOKEN_SYM2('|', '='):
+        case TOKEN_SYM3('<', '<', '='):
+        case TOKEN_SYM3('>', '>', '='): rty_is_lhs = 1;
         case TOKEN_SYM1('%'):
         case TOKEN_SYM1('/'):
         case TOKEN_SYM1('*'):
         case TOKEN_SYM1('&'):
         case TOKEN_SYM1('|'):
         case TOKEN_SYM1('^'):
-        case TOKEN_SYM2('*', '='):
-        case TOKEN_SYM2('%', '='):
-        case TOKEN_SYM2('/', '='):
-        case TOKEN_SYM2('&', '='):
-        case TOKEN_SYM2('|', '='):
         case TOKEN_SYM2('<', '<'):
-        case TOKEN_SYM2('>', '>'):
-        case TOKEN_SYM3('<', '<', '='):
-        case TOKEN_SYM3('>', '>', '='): break;
-        case TOKEN_SYM2('+', '='):
+        case TOKEN_SYM2('>', '>'): is_arithmetic = 1; break;
+        case TOKEN_SYM2('+', '='): rty_is_lhs = 1;
         case TOKEN_SYM1('+'):
             if (rhs_mask & lhs_mask & TYPE_FLAGS_POINTER)
             {
@@ -1128,10 +1177,11 @@ static void elaborate_binop(struct Elaborator* elab,
             }
             else
             {
+                is_arithmetic = 1;
                 e->info = 1;
             }
             break;
-        case TOKEN_SYM2('-', '='):
+        case TOKEN_SYM2('-', '='): rty_is_lhs = 1;
         case TOKEN_SYM1('-'):
             if (lhs_mask & TYPE_FLAGS_POINTER)
             {
@@ -1139,6 +1189,7 @@ static void elaborate_binop(struct Elaborator* elab,
             }
             else
             {
+                is_arithmetic = 1;
                 e->info = 1;
             }
             if (rhs_mask & TYPE_FLAGS_POINTER)
@@ -1240,9 +1291,35 @@ static void elaborate_binop(struct Elaborator* elab,
             *rty = s_type_unknown;
             break;
     }
+
+    if (is_arithmetic && !rty_is_lhs)
+    {
+        typestr_promote_integer(rty);
+        typestr_promote_integer(&rhs_ty);
+        lhs_mask = typestr_mask(rty);
+        unsigned lhs_width = lhs_mask & TYPE_MASK_WIDTH;
+        rhs_mask = typestr_mask(&rhs_ty);
+        unsigned rhs_width = rhs_mask & TYPE_MASK_WIDTH;
+        if (rhs_width < lhs_width)
+        {
+            // nothing to do, rty is correct
+        }
+        else if (rhs_width > lhs_width)
+        {
+            *rty = rhs_ty;
+        }
+        else if (lhs_mask & rhs_mask & TYPE_FLAGS_SIGNED)
+        {
+            // nothing to do, signed is correct
+        }
+        else if (lhs_mask & TYPE_FLAGS_SIGNED)
+        {
+            *rty = rhs_ty;
+        }
+    }
 }
 
-static const TypeStr s_valist_ptr = {2, TYPE_BYTE_UUVALIST, TYPE_BYTE_POINTER};
+static const TypeStr s_valist_ptr = {.buf = {2, TYPE_BYTE_UUVALIST, TYPE_BYTE_POINTER}};
 
 static void elaborate_builtin(struct Elaborator* elab,
                               struct ElaborateDeclCtx* ctx,
@@ -1701,6 +1778,7 @@ static void elaborate_stmt(struct Elaborator* elab, struct ElaborateDeclCtx* ctx
         struct TypeStr ts;
         return elaborate_expr(elab, ctx, (struct Expr*)ast, &ts);
     }
+    ast->elaborated = 1;
     void* top = ast;
     switch (ast->kind)
     {
@@ -1803,11 +1881,25 @@ static void elaborate_expr(struct Elaborator* elab,
                            struct Expr* top_expr,
                            struct TypeStr* rty)
 {
+#if defined(TRACING_ELAB)
+    if (top_expr->tok)
+        fprintf(stderr,
+                "{elaborate_expr(%s:%d:%d)\n",
+                top_expr->tok->rc.file,
+                top_expr->tok->rc.row,
+                top_expr->tok->rc.col);
+    else
+        fprintf(stderr, "{elaborate_expr(?)\n");
+#endif
+    memset(rty, 0, sizeof(*rty));
     void* top = top_expr;
     switch (top_expr->kind)
     {
         case EXPR_LIT:
         {
+#if defined(TRACING_ELAB)
+            fprintf(stderr, " EXPR_LIT\n");
+#endif
             struct ExprLit* expr = top;
             if (expr->tok->type == LEX_NUMBER)
             {
@@ -1945,8 +2037,12 @@ static void elaborate_expr(struct Elaborator* elab,
         }
         case EXPR_FIELD:
         {
+#if defined(TRACING_ELAB)
+            fprintf(stderr, " EXPR_FIELD\n");
+#endif
             struct ExprField* e = top;
             elaborate_expr(elab, ctx, e->lhs, rty);
+            if (rty->buf[0] == 0) abort();
             const struct TypeStr orig_lhs = *rty;
             if (e->is_arrow) typestr_dereference(rty);
             unsigned int cvr_mask = typestr_strip_cvr(rty);
@@ -2004,7 +2100,12 @@ static void elaborate_expr(struct Elaborator* elab,
         default: parser_tok_error(NULL, "error: unknown expr kind: %s\n", ast_kind_to_string(top_expr->kind)); return;
     }
 
+    if (rty->pad2 != 0) abort();
     top_expr->sizing = typestr_calc_sizing(elab, rty, top_expr->tok ? &top_expr->tok->rc : NULL);
+    if (rty->pad2 != 0) abort();
+#if defined(TRACING_ELAB)
+    fprintf(stderr, "}\n");
+#endif
 }
 
 static __forceinline size_t round_to_alignment(size_t size, size_t align)
@@ -2015,6 +2116,7 @@ static __forceinline size_t round_to_alignment(size_t size, size_t align)
 
 static void elaborate_decltype(struct Elaborator* elab, struct Ast* ast)
 {
+    ast->elaborated = 1;
     switch (ast->kind)
     {
         case AST_DECLARR:
@@ -2051,18 +2153,18 @@ static void elaborate_decltype(struct Elaborator* elab, struct Ast* ast)
     }
 }
 
-static int elaborate_constinit(Elaborator* elab, size_t offset, size_t sz, const Ast* ast, uint8_t is_char_arr)
+static int elaborate_constinit(
+    Elaborator* elab, char* base, size_t offset, size_t sz, const Ast* ast, uint8_t is_char_arr)
 {
     int rc = 0;
-    if (offset + sz > elab->constinit.sz) abort();
-    char* const bytes = elab->constinit.data + offset;
+    char* const bytes = base + offset;
     if (ast->kind == AST_INIT)
     {
         memset(bytes, 0, sz);
         AstInit* init = (void*)ast;
         while (init->init)
         {
-            UNWRAP(elaborate_constinit(elab, init->offset, init->sizing.width, init->init, init->is_char_arr));
+            UNWRAP(elaborate_constinit(elab, base, init->offset, init->sizing.width, init->init, init->is_char_arr));
             init = init->next;
         }
     }
@@ -2206,8 +2308,12 @@ static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
                 sym->constinit_offset = elab->constinit.sz;
                 array_push_zeroes(&elab->constinit, round_to_alignment(sym->size.width, 8));
                 array_push_zeroes(&elab->constinit_bases, round_to_alignment(sym->size.width, 8));
-                UNWRAP(
-                    elaborate_constinit(elab, sym->constinit_offset, sym->size.width, decl->init, sym->is_char_array));
+                UNWRAP(elaborate_constinit(elab,
+                                           elab->constinit.data + sym->constinit_offset,
+                                           0,
+                                           sym->size.width,
+                                           decl->init,
+                                           sym->is_char_array));
             }
         }
     }
