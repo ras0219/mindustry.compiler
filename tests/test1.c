@@ -2326,42 +2326,33 @@ int test_be_cast(TestState* state)
     REQUIRE_NEXT_TEXT("_main:");
     REQUIRE_NEXT_TEXT("subq $120, %rsp");
     REQUIRE_NEXT_TEXT("movsb 0(%rsp), %r10");
-    REQUIRE_NEXT_TEXT("mov $0, %r11");
-    REQUIRE_NEXT_TEXT("add %r11, %r10");
     REQUIRE_NEXT_TEXT("mov %r10, 104(%rsp)");
 
     REQUIRE_NEXT_TEXT("movsb 0(%rsp), %r10");
-    REQUIRE_NEXT_TEXT("mov $1, %r11");
-    REQUIRE_NEXT_TEXT("add %r11, %r10");
+    REQUIRE_NEXT_TEXT("add $1, %r10");
     REQUIRE_NEXT_TEXT("mov %r10, 112(%rsp)");
 
     REQUIRE_NEXT_TEXT("movsb 112(%rsp), %r11");
     REQUIRE_NEXT_TEXT("mov %r11b, 0(%rsp)");
 
     REQUIRE_NEXT_TEXT("movsb 104(%rsp), %r10");
-    REQUIRE_NEXT_TEXT("mov $0, %r11");
-    REQUIRE_NEXT_TEXT("add %r11, %r10");
     REQUIRE_NEXT_TEXT("mov %r10, 104(%rsp)");
 
     REQUIRE_NEXT_TEXT("movsl 104(%rsp), %r11");
     REQUIRE_NEXT_TEXT("mov %r11d, 4(%rsp)");
 
     REQUIRE_NEXT_TEXT("movsb 0(%rsp), %r10");
-    REQUIRE_NEXT_TEXT("mov $0, %r11");
-    REQUIRE_NEXT_TEXT("add %r11, %r10");
     REQUIRE_NEXT_TEXT("mov %r10, 104(%rsp)");
 
-    REQUIRE_NEXT_TEXT("mov $2, %r10");
-    REQUIRE_NEXT_TEXT("movsl 104(%rsp), %r11");
-    REQUIRE_NEXT_TEXT("add %r11, %r10");
+    REQUIRE_NEXT_TEXT("movsl 104(%rsp), %r10");
+    REQUIRE_NEXT_TEXT("add $2, %r10");
     REQUIRE_NEXT_TEXT("mov %r10, 104(%rsp)");
 
     REQUIRE_NEXT_TEXT("movsl 104(%rsp), %r11");
     REQUIRE_NEXT_TEXT("mov %r11d, 8(%rsp)");
 
-    REQUIRE_NEXT_TEXT("mov $1, %rdx");
     REQUIRE_NEXT_TEXT("mov $0, %rax");
-    REQUIRE_NEXT_TEXT("subq %rdx, %rax");
+    REQUIRE_NEXT_TEXT("subq $1, %rax");
     REQUIRE_NEXT_TEXT("mov %rax, 104(%rsp)");
 
     REQUIRE_NEXT_TEXT("movzb 104(%rsp), %r11");
@@ -2773,8 +2764,7 @@ int test_be_va_args(TestState* state)
     REQUIRE_NEXT_TEXT("callq _g");
 
     REQUIRE_NEXT_TEXT("movsl 56(%rsp), %rax");
-    REQUIRE_NEXT_TEXT("mov $48, %rdx");
-    REQUIRE_NEXT_TEXT("cmp %edx, %eax");
+    REQUIRE_NEXT_TEXT("cmp $48, %eax");
     REQUIRE_NEXT_TEXT("setl %al");
     REQUIRE_NEXT_TEXT("movzx %al, %rax");
     REQUIRE_NEXT_TEXT("mov %rax, 112(%rsp)");
@@ -2791,8 +2781,7 @@ int test_be_va_args(TestState* state)
     REQUIRE_NEXT_TEXT("movsd");
 
     REQUIRE_NEXT_TEXT("movsl 56(%rsp), %r10");
-    REQUIRE_NEXT_TEXT("mov $8, %r11");
-    REQUIRE_NEXT_TEXT("add %r11, %r10");
+    REQUIRE_NEXT_TEXT("add $8, %r10");
     REQUIRE_NEXT_TEXT("mov %r10, 112(%rsp)");
     REQUIRE_NEXT_TEXT("movsl 112(%rsp), %r11");
     REQUIRE_NEXT_TEXT("mov %r11d, 56(%rsp)");
@@ -2803,8 +2792,7 @@ int test_be_va_args(TestState* state)
     REQUIRE_NEXT_TEXT("movsd");
 
     REQUIRE_NEXT_TEXT("mov 64(%rsp), %r10");
-    REQUIRE_NEXT_TEXT("mov $8, %r11");
-    REQUIRE_NEXT_TEXT("add %r11, %r10");
+    REQUIRE_NEXT_TEXT("add $8, %r10");
     REQUIRE_NEXT_TEXT("mov %r10, 112(%rsp)");
     REQUIRE_NEXT_TEXT("mov 112(%rsp), %r11");
     REQUIRE_NEXT_TEXT("mov %r11, 64(%rsp)");
@@ -3551,16 +3539,13 @@ int test_cg_add(TestState* state)
     REQUIRE_NEXT_TEXT("subq $120, %rsp");
 
     REQUIRE_NEXT_TEXT("leaq 0(%rsp), %r10");
-    REQUIRE_NEXT_TEXT("mov $7, %r11");
-    REQUIRE_NEXT_TEXT("add %r11, %r10");
+    REQUIRE_NEXT_TEXT("add $7, %r10");
 
     REQUIRE_NEXT_TEXT("movsl 0(%rsp), %r10");
-    REQUIRE_NEXT_TEXT("mov $7, %r11");
-    REQUIRE_NEXT_TEXT("add %r11, %r10");
+    REQUIRE_NEXT_TEXT("add $7, %r10");
 
     REQUIRE_NEXT_TEXT("movsb 0(%rsp), %r10");
-    REQUIRE_NEXT_TEXT("mov $7, %r11");
-    REQUIRE_NEXT_TEXT("add %r11, %r10");
+    REQUIRE_NEXT_TEXT("add $7, %r10");
 
     REQUIRE_NEXT_TEXT("addq $120, %rsp");
     REQUIRE_NEXT_TEXT("ret");
@@ -3612,19 +3597,16 @@ int test_cg_bitmath(TestState* state)
     size_t index = 0;
     REQUIRE_NEXT_TEXT("subq $120, %rsp");
 
-    REQUIRE_NEXT_TEXT("mov $7, %rdx");
     REQUIRE_NEXT_TEXT("leaq 0(%rsp), %rax");
-    REQUIRE_NEXT_TEXT("and %rdx, %rax");
+    REQUIRE_NEXT_TEXT("andq $7, %rax");
     REQUIRE_NEXT_TEXT("mov %rax, 104(%rsp)");
 
-    REQUIRE_NEXT_TEXT("mov $7, %rdx");
     REQUIRE_NEXT_TEXT("movsl 104(%rsp), %rax");
-    REQUIRE_NEXT_TEXT("or %rdx, %rax");
+    REQUIRE_NEXT_TEXT("orq $7, %rax");
     REQUIRE_NEXT_TEXT("mov %rax, 104(%rsp)");
 
-    REQUIRE_NEXT_TEXT("mov $7, %rdx");
     REQUIRE_NEXT_TEXT("movsl 104(%rsp), %rax");
-    REQUIRE_NEXT_TEXT("xor %rdx, %rax");
+    REQUIRE_NEXT_TEXT("xorq $7, %rax");
     REQUIRE_NEXT_TEXT("mov %rax, 104(%rsp)");
 
     REQUIRE_NEXT_TEXT("movsl 104(%rsp), %rax");

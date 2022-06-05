@@ -137,8 +137,42 @@ void be_init(struct BackEnd* be, struct Parser* p, struct Elaborator* e, struct 
     be->cg = cg;
 }
 
+static int is_constant(const TACAddress* a)
+{
+    switch (a->kind)
+    {
+        case TACA_IMM: return 1;
+        case TACA_FRAME: return a->is_addr;
+        case TACA_ARG: return a->is_addr;
+        case TACA_PARAM: return a->is_addr;
+        default: return 0;
+    }
+}
+
+static TACAddress taca_add(TACAddress lhs, size_t imm)
+{
+    switch (lhs.kind)
+    {
+        case TACA_FRAME: lhs.frame_offset += imm; break;
+        case TACA_PARAM: lhs.param_offset += imm; break;
+        case TACA_ARG: lhs.arg_offset += imm; break;
+        case TACA_IMM: lhs.imm += imm; break;
+        default: abort();
+    }
+    return lhs;
+}
+
 static struct TACAddress be_push_tace(struct BackEnd* be, const struct TACEntry* e, Sizing sizing)
 {
+    // peephole optimize away constant operations
+    {
+        if (e->op == TACO_ADD)
+        {
+            if (e->arg1.kind == TACA_IMM && is_constant(&e->arg2)) return taca_add(e->arg2, e->arg1.imm);
+            if (e->arg2.kind == TACA_IMM && is_constant(&e->arg1)) return taca_add(e->arg1, e->arg2.imm);
+        }
+    }
+
     const size_t offset = array_size(&be->code, sizeof(struct TACEntry));
     array_push(&be->code, e, sizeof(struct TACEntry));
     if (e->op == TACO_ASSIGN)
@@ -652,8 +686,8 @@ static int be_compile_sub(struct BackEnd* be, struct ExprBinOp* e, struct TACAdd
         .rc = &e->tok->rc,
         .op = TACO_SUB,
     };
-    UNWRAP(be_compile_arith_rhs(be, e, &tace.arg2));
     UNWRAP(be_compile_expr(be, e->lhs, &tace.arg1));
+    UNWRAP(be_compile_arith_rhs(be, e, &tace.arg2));
     if (e->info < 1)
     {
         tace.arg1 = be_push_tace(be, &tace, e->sizing);

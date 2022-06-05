@@ -405,9 +405,22 @@ static int cg_gen_store_frame(struct CodeGen* cg, size_t i, int reg, struct Acti
 static int cg_add(struct CodeGen* cg, size_t i, const struct TACEntry* taces, struct ActivationRecord* frame)
 {
     int rc = 0;
-    UNWRAP(cg_gen_load(cg, taces[i].arg1, REG_R10, frame));
-    UNWRAP(cg_gen_load(cg, taces[i].arg2, REG_R11, frame));
-    array_appends(&cg->code, "    add %r11, %r10\n");
+    if (taces[i].arg1.kind == TACA_IMM && taces[i].arg1.imm < INT32_MAX)
+    {
+        UNWRAP(cg_gen_load(cg, taces[i].arg2, REG_R10, frame));
+        if (taces[i].arg1.imm != 0) array_appendf(&cg->code, "    add $%zu, %%r10\n", taces[i].arg1.imm);
+    }
+    else if (taces[i].arg2.kind == TACA_IMM && taces[i].arg2.imm < INT32_MAX)
+    {
+        UNWRAP(cg_gen_load(cg, taces[i].arg1, REG_R10, frame));
+        if (taces[i].arg2.imm != 0) array_appendf(&cg->code, "    add $%zu, %%r10\n", taces[i].arg2.imm);
+    }
+    else
+    {
+        UNWRAP(cg_gen_load(cg, taces[i].arg1, REG_R10, frame));
+        UNWRAP(cg_gen_load(cg, taces[i].arg2, REG_R11, frame));
+        array_appends(&cg->code, "    add %r11, %r10\n");
+    }
     UNWRAP(cg_gen_store_frame(cg, i, REG_R10, frame));
 fail:
     return rc;
@@ -565,18 +578,23 @@ static int cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t 
         case TACO_LTU:
         case TACO_LTEQU:
         case TACO_EQ:
-        case TACO_NEQ:
-            UNWRAP(cg_gen_load(cg, tace->arg1, REG_RAX, frame));
-            UNWRAP(cg_gen_load(cg, tace->arg2, REG_RDX, frame));
+        case TACO_NEQ:;
             int wid = tace->arg1.sizing.width;
             if (tace->arg2.sizing.width > wid) wid = tace->arg2.sizing.width;
-            switch (wid)
+            if (wid < 4) wid = 4;
+
+            UNWRAP(cg_gen_load(cg, tace->arg1, REG_RAX, frame));
+            if (tace->arg2.kind == TACA_IMM && tace->arg2.imm < INT32_MAX)
             {
-                case 1:
-                case 2:
-                case 4: array_appends(&cg->code, "cmp %edx, %eax\n"); break;
-                case 8: array_appends(&cg->code, "cmp %rdx, %rax\n"); break;
-                default: abort();
+                array_appendf(&cg->code, "    cmp $%zu, %%%cax\n", tace->arg2.imm, wid == 4 ? 'e' : 'r');
+            }
+            else
+            {
+                UNWRAP(cg_gen_load(cg, tace->arg2, REG_RDX, frame));
+                if (wid == 4)
+                    array_appends(&cg->code, "    cmp %edx, %eax\n");
+                else
+                    array_appends(&cg->code, "    cmp %rdx, %rax\n");
             }
             switch (tace->op)
             {
@@ -604,9 +622,9 @@ static int cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t 
             else
                 UNWRAP(cg_gen_store_frame(cg, i, REG_RDX, frame));
             break;
-        case TACO_BAND: inst = "and"; goto simple_binary;
-        case TACO_BOR: inst = "or"; goto simple_binary;
-        case TACO_BXOR: inst = "xor"; goto simple_binary;
+        case TACO_BAND: inst = "andq"; goto simple_binary;
+        case TACO_BOR: inst = "orq"; goto simple_binary;
+        case TACO_BXOR: inst = "xorq"; goto simple_binary;
         case TACO_SHL: inst = "shl"; goto shift;
         case TACO_SHR:
             inst = "shr";
@@ -648,9 +666,17 @@ static int cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t 
             break;
         }
         simple_binary:
-            UNWRAP(cg_gen_load(cg, tace->arg2, REG_RDX, frame));
-            UNWRAP(cg_gen_load(cg, tace->arg1, REG_RAX, frame));
-            array_appendf(&cg->code, "    %s %%rdx, %%rax\n", inst);
+            if (tace->arg2.kind == TACA_IMM && tace->arg2.imm < INT32_MAX)
+            {
+                UNWRAP(cg_gen_load(cg, tace->arg1, REG_RAX, frame));
+                array_appendf(&cg->code, "    %s $%zu, %%rax\n", inst, tace->arg2.imm);
+            }
+            else
+            {
+                UNWRAP(cg_gen_load(cg, tace->arg2, REG_RDX, frame));
+                UNWRAP(cg_gen_load(cg, tace->arg1, REG_RAX, frame));
+                array_appendf(&cg->code, "    %s %%rdx, %%rax\n", inst);
+            }
             UNWRAP(cg_gen_store_frame(cg, i, REG_RAX, frame));
             break;
         case TACO_ADD: UNWRAP(cg_add(cg, i, taces, frame)); break;
