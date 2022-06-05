@@ -596,7 +596,7 @@ static int be_compile_lvalue_ExprCall(struct BackEnd* be, struct ExprCall* e, st
 }
 static int be_compile_lvalue_ExprCast(struct BackEnd* be, struct ExprCast* e, struct TACAddress* out)
 {
-    return be_compile_lvalue(be, e->expr, out);
+    return parser_tok_error(e->tok, "error: cannot get address of cast expression\n");
 }
 
 static int be_compile_arith_rhs(struct BackEnd* be, struct ExprBinOp* e, struct TACAddress* out)
@@ -1460,6 +1460,17 @@ static int be_compile_ExprCast(struct BackEnd* be, struct ExprCast* e, struct TA
 {
     int rc = 0;
     UNWRAP(be_compile_expr(be, e->expr, out));
+    if (out->sizing.width < e->sizing.width)
+    {
+        TACEntry tace = {
+            .op = TACO_ADD,
+            .arg1 = *out,
+            .arg2 = taca_imm(0),
+        };
+        *out = be_push_tace(be, &tace, e->sizing);
+    }
+    else
+        out->sizing = e->sizing;
 
 fail:
     return rc;

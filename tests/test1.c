@@ -2260,6 +2260,7 @@ int test_be_cast(TestState* state)
                        " char ch;"
                        " int x = (int)ch++;"
                        " int y = 2 + (int)ch;"
+                       " unsigned z = (unsigned char)(char)-1;"
                        "}"));
     int index = 0;
     REQUIRE_NEXT_TACE({
@@ -2278,21 +2279,97 @@ int test_be_cast(TestState* state)
         {TACA_REF, .sizing = s_sizing_schar, .ref = index - 1},
     });
     REQUIRE_NEXT_TACE({
+        TACO_ADD,
+        {TACA_REF, .sizing = s_sizing_schar, .ref = 0},
+        {TACA_IMM, .sizing = s_sizing_int, .imm = 0},
+    });
+    REQUIRE_NEXT_TACE({
         TACO_ASSIGN,
         {TACA_FRAME, .is_addr = 1, .sizing = s_sizing_int, .param_offset = 4},
-        {TACA_REF, .sizing = s_sizing_schar, .ref = index - 3},
+        {TACA_REF, .sizing = s_sizing_int, .ref = index - 1},
+    });
+    REQUIRE_NEXT_TACE({
+        TACO_ADD,
+        {TACA_FRAME, .sizing = s_sizing_schar, .frame_offset = 0},
+        {TACA_IMM, .sizing = s_sizing_int, .imm = 0},
     });
     REQUIRE_NEXT_TACE({
         TACO_ADD,
         {TACA_IMM, .sizing = s_sizing_int, .imm = 2},
-        {TACA_FRAME, .sizing = s_sizing_schar, .frame_offset = 0},
+        {TACA_REF, .sizing = s_sizing_int, .ref = index - 1},
     });
     REQUIRE_NEXT_TACE({
         TACO_ASSIGN,
         {TACA_FRAME, .is_addr = 1, .sizing = s_sizing_int, .param_offset = 8},
         {TACA_REF, .sizing = s_sizing_int, .ref = index - 1},
     });
+    REQUIRE_NEXT_TACE({
+        TACO_SUB,
+        {TACA_IMM, .sizing = s_sizing_int, .imm = 0},
+        {TACA_IMM, .sizing = s_sizing_int, .imm = 1},
+    });
+    REQUIRE_NEXT_TACE({
+        TACO_ASSIGN,
+        {TACA_FRAME, .is_addr = 1, .sizing = s_sizing_uint, .param_offset = 12},
+        {TACA_REF, .sizing = s_sizing_uchar, .ref = index - 1},
+    });
     REQUIRE_END_TACE();
+
+    rc = cg_gen_taces(test.cg, test.be->code.data, array_size(&test.be->code, sizeof(TACEntry)), 100);
+    if (rc)
+    {
+        parser_print_errors(stderr);
+    }
+    REQUIRE_EQ(0, rc);
+
+    index = 0;
+    REQUIRE_NEXT_TEXT("_main:");
+    REQUIRE_NEXT_TEXT("subq $120, %rsp");
+    REQUIRE_NEXT_TEXT("movsb 0(%rsp), %r10");
+    REQUIRE_NEXT_TEXT("mov $0, %r11");
+    REQUIRE_NEXT_TEXT("add %r11, %r10");
+    REQUIRE_NEXT_TEXT("mov %r10, 104(%rsp)");
+
+    REQUIRE_NEXT_TEXT("movsb 0(%rsp), %r10");
+    REQUIRE_NEXT_TEXT("mov $1, %r11");
+    REQUIRE_NEXT_TEXT("add %r11, %r10");
+    REQUIRE_NEXT_TEXT("mov %r10, 112(%rsp)");
+
+    REQUIRE_NEXT_TEXT("movsb 112(%rsp), %r11");
+    REQUIRE_NEXT_TEXT("mov %r11b, 0(%rsp)");
+
+    REQUIRE_NEXT_TEXT("movsb 104(%rsp), %r10");
+    REQUIRE_NEXT_TEXT("mov $0, %r11");
+    REQUIRE_NEXT_TEXT("add %r11, %r10");
+    REQUIRE_NEXT_TEXT("mov %r10, 104(%rsp)");
+
+    REQUIRE_NEXT_TEXT("movsl 104(%rsp), %r11");
+    REQUIRE_NEXT_TEXT("mov %r11d, 4(%rsp)");
+
+    REQUIRE_NEXT_TEXT("movsb 0(%rsp), %r10");
+    REQUIRE_NEXT_TEXT("mov $0, %r11");
+    REQUIRE_NEXT_TEXT("add %r11, %r10");
+    REQUIRE_NEXT_TEXT("mov %r10, 104(%rsp)");
+
+    REQUIRE_NEXT_TEXT("mov $2, %r10");
+    REQUIRE_NEXT_TEXT("movsl 104(%rsp), %r11");
+    REQUIRE_NEXT_TEXT("add %r11, %r10");
+    REQUIRE_NEXT_TEXT("mov %r10, 104(%rsp)");
+
+    REQUIRE_NEXT_TEXT("movsl 104(%rsp), %r11");
+    REQUIRE_NEXT_TEXT("mov %r11d, 8(%rsp)");
+
+    REQUIRE_NEXT_TEXT("mov $1, %rdx");
+    REQUIRE_NEXT_TEXT("mov $0, %rax");
+    REQUIRE_NEXT_TEXT("subq %rdx, %rax");
+    REQUIRE_NEXT_TEXT("mov %rax, 104(%rsp)");
+
+    REQUIRE_NEXT_TEXT("movzb 104(%rsp), %r11");
+    REQUIRE_NEXT_TEXT("mov %r11d, 12(%rsp)");
+
+    REQUIRE_NEXT_TEXT("addq $120, %rsp");
+    REQUIRE_NEXT_TEXT("ret");
+    REQUIRE_END_TEXT();
 
     rc = 0;
 fail:
