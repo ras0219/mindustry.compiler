@@ -3276,7 +3276,18 @@ int test_be_static_init(TestState* state)
     }
 
     array_push_byte(&test.cg->data, '\0');
-    REQUIRE_STR_EQ("_data:\n.byte 1, 0, 0, 0, 2, 0, 0, 0\n.byte 3, 0, 0, 0\n\n", test.cg->data.data);
+
+    REQUIRE_LINES(test.cg->data.data)
+    {
+        REQUIRE_LINE("_data:");
+        REQUIRE_LINE(".byte 1, 0, 0, 0, 2, 0, 0, 0");
+        REQUIRE_LINE(".byte 3, 0, 0, 0");
+        REQUIRE_LINE("");
+        REQUIRE_LINE("_s_reg_names:");
+        REQUIRE_LINE(".quad L_.S0 + 0");
+        REQUIRE_LINE(".quad L_.S1 + 0");
+        REQUIRE_LINE("");
+    }
 
     rc = 0;
 fail:

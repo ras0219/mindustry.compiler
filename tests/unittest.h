@@ -242,3 +242,45 @@ void unittest_print_stack(const struct TestState* state);
 #define REQUIRE_AST(_type, _var, _expr) REQUIRE_AST_IMPL1(_type, _var, _expr, Ast, #_expr, __COUNTER__)
 
 #define REQUIRE_EXPR(_type, _var, _expr) REQUIRE_AST_IMPL1(_type, _var, _expr, Expr, #_expr, __COUNTER__)
+
+#define REQUIRE_LINES_IMPL(_expr, _expr_str, N)                                                                        \
+    if (1)                                                                                                             \
+    {                                                                                                                  \
+        goto _require_lines##N;                                                                                        \
+    }                                                                                                                  \
+    else                                                                                                               \
+        for (const char* _require_lines;;)                                                                             \
+            if (1)                                                                                                     \
+            {                                                                                                          \
+                REQUIRE_STR_EQ("", _require_lines);                                                                    \
+                break;                                                                                                 \
+            }                                                                                                          \
+            else if (1)                                                                                                \
+            {                                                                                                          \
+                _require_lines##N:;                                                                                    \
+                _require_lines = (_expr);                                                                              \
+                REQUIRE_IMPL(_require_lines, _expr_str);                                                               \
+                goto _require_lines_body##N;                                                                           \
+            }                                                                                                          \
+            else                                                                                                       \
+                _require_lines_body##N:
+
+#define REQUIRE_LINES(_expr) REQUIRE_LINES_IMPL(_expr, #_expr, __COUNTER__)
+
+#define REQUIRE_LINE(expected)                                                                                         \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        const char* _require_line = (expected);                                                                        \
+        size_t _require_line_s = strlen(_require_line);                                                                \
+        const char* _require_line_e = strchr(_require_lines, '\n');                                                    \
+        if (_require_line_e)                                                                                           \
+        {                                                                                                              \
+            REQUIRE_MEM_EQ(_require_line, _require_line_s, _require_lines, _require_line_e - _require_lines);          \
+            _require_lines = _require_line_e + 1;                                                                      \
+        }                                                                                                              \
+        else                                                                                                           \
+        {                                                                                                              \
+            REQUIRE_STR_EQ(_require_line, _require_lines);                                                             \
+            _require_lines = "";                                                                                       \
+        }                                                                                                              \
+    } while (0)

@@ -48,10 +48,17 @@ clean:
 srcs:=${wildcard ${srcdir}/lib/*.c}
 basenames:=${basename ${notdir ${srcs}}}
 stage3bases:=$(addprefix stage3/,$(basenames))
+astdiffs:=$(addsuffix .ast.diff,$(stage3bases))
+idiffs:=$(addsuffix .i.diff,$(stage3bases))
+asmdiffs:=$(addsuffix .asm.diff,$(stage3bases))
 
-$(addsuffix .i.diff,$(stage3bases)) $(addsuffix .ast.diff,$(stage3bases)): stage3/%.diff: stage2/% stage3/%
+$(idiffs) $(astdiffs) $(asmdiffs): stage3/%.diff: stage2/% stage3/%
 	diff -u $^ >$@ | true
 
-.PHONY: ast.diffs
+.PHONY: ast.diffs i.diffs asm.diffs
 
-ast.diffs: $(addsuffix .ast.diff,$(stage3bases))
+ast.diffs: $(astdiffs)
+
+i.diffs: $(idiffs)
+
+asm.diffs: $(asmdiffs)

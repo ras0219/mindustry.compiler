@@ -254,7 +254,7 @@ enum
 };
 static unsigned int typestr_strip_cvr(struct TypeStr* ts)
 {
-    //if (ts->buf[0] <= 0 || ts->buf[0] >= TYPESTR_BUF_SIZE) abort();
+    // if (ts->buf[0] <= 0 || ts->buf[0] >= TYPESTR_BUF_SIZE) abort();
     unsigned int m = 0;
     if (ts->buf[(int)ts->buf[0]] == 'r') ts->buf[0]--, m |= TYPESTR_CVR_R;
     if (ts->buf[(int)ts->buf[0]] == 'v') ts->buf[0]--, m |= TYPESTR_CVR_V;
@@ -357,7 +357,7 @@ static void typestr_decay(struct TypeStr* t)
         }
         default: break;
     }
-    //if (t->buf[0] <= 0 || t->buf[0] >= TYPESTR_BUF_SIZE) abort();
+    // if (t->buf[0] <= 0 || t->buf[0] >= TYPESTR_BUF_SIZE) abort();
 }
 static int is_zero_constant(Elaborator* elab, const Expr* e);
 static void typestr_implicit_conversion(Elaborator* elab,
@@ -2176,17 +2176,18 @@ static void elaborate_decltype(struct Elaborator* elab, struct Ast* ast)
 }
 
 static int elaborate_constinit(
-    Elaborator* elab, char* base, size_t offset, size_t sz, const Ast* ast, uint8_t is_char_arr)
+    Elaborator* elab, size_t constinit_offset, size_t offset, size_t sz, const Ast* ast, uint8_t is_char_arr)
 {
     int rc = 0;
-    char* const bytes = base + offset;
+    char* const bytes = elab->constinit.data + constinit_offset + offset;
     if (ast->kind == AST_INIT)
     {
         memset(bytes, 0, sz);
         AstInit* init = (void*)ast;
         while (init->init)
         {
-            UNWRAP(elaborate_constinit(elab, base, init->offset, init->sizing.width, init->init, init->is_char_arr));
+            UNWRAP(elaborate_constinit(
+                elab, constinit_offset, init->offset, init->sizing.width, init->init, init->is_char_arr));
             init = init->next;
         }
     }
@@ -2215,7 +2216,7 @@ static int elaborate_constinit(
                 return parser_tok_error(ast->tok, "error: expected constant expression\n");
             }
             memcpy(bytes, &cv.byte_offset, 8);
-            memcpy(elab->constinit_bases.data + offset, &cv.base, 8);
+            memcpy(elab->constinit_bases.data + constinit_offset + offset, &cv.base, 8);
         }
         else
         {
@@ -2330,12 +2331,8 @@ static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
                 sym->constinit_offset = elab->constinit.sz;
                 array_push_zeroes(&elab->constinit, round_to_alignment(sym->size.width, 8));
                 array_push_zeroes(&elab->constinit_bases, round_to_alignment(sym->size.width, 8));
-                UNWRAP(elaborate_constinit(elab,
-                                           elab->constinit.data + sym->constinit_offset,
-                                           0,
-                                           sym->size.width,
-                                           decl->init,
-                                           sym->is_char_array));
+                UNWRAP(elaborate_constinit(
+                    elab, sym->constinit_offset, 0, sym->size.width, decl->init, sym->is_char_array));
             }
         }
     }
