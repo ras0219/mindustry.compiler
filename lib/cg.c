@@ -123,22 +123,56 @@ void cg_reserve_data(struct CodeGen* cg, const char* name, const char* data, con
 {
     if (sz == 0) abort();
     array_appendf(&cg->data, "_%s:\n", name);
-    for (size_t i = 0; i < sz; ++i)
+    size_t zeroes = 0;
+    size_t i = 0;
+    for (; i + 8 <= sz; i += 8)
     {
-        if (sz - i >= 8 && i % 8 == 0)
+        size_t offset;
+        memcpy(&offset, data + i, 8);
+        size_t base;
+        memcpy(&base, bases + i, 8);
+        if (!base && !offset)
         {
-            size_t base;
-            memcpy(&base, bases + i, 8);
-            if (base)
-            {
-                size_t offset;
-                memcpy(&offset, data + i, 8);
-                array_appendf(&cg->data, ".quad L_.S%zu + %zu\n", base - 1, offset);
-                i += 7;
-                continue;
-            }
+            zeroes += 8;
+            continue;
         }
-        array_appendf(&cg->data, ".byte %u\n", (unsigned char)data[i]);
+        if (zeroes)
+        {
+            array_appendf(&cg->data, ".space %zu\n", zeroes);
+            zeroes = 0;
+        }
+        if (base)
+        {
+            array_appendf(&cg->data, ".quad L_.S%zu + %zu\n", base - 1, offset);
+        }
+        else
+        {
+            array_appendf(&cg->data,
+                          ".byte %u, %u, %u, %u, %u, %u, %u, %u\n",
+                          (unsigned char)data[i],
+                          (unsigned char)data[i + 1],
+                          (unsigned char)data[i + 2],
+                          (unsigned char)data[i + 3],
+                          (unsigned char)data[i + 4],
+                          (unsigned char)data[i + 5],
+                          (unsigned char)data[i + 6],
+                          (unsigned char)data[i + 7]);
+        }
+    }
+    if (zeroes)
+    {
+        array_appendf(&cg->data, ".space %zu\n", zeroes);
+        zeroes = 0;
+    }
+    if (i != sz)
+    {
+        array_appendf(&cg->data, ".byte %u", (unsigned char)data[i]);
+        ++i;
+        for (; i < sz; ++i)
+        {
+            array_appendf(&cg->data, ", %u", (unsigned char)data[i]);
+        }
+        array_push_byte(&cg->data, '\n');
     }
     array_push_byte(&cg->data, '\n');
 }
@@ -241,6 +275,13 @@ static int cg_gen_load(struct CodeGen* cg, struct TACAddress addr, int reg, stru
     if (!addr.is_addr)
     {
         goto not_address;
+    }
+    if (addr.kind == TACA_NAME)
+    {
+        array_appends(&cg->code, "    movq ");
+        rc = cg_gen_taca(cg, addr, frame);
+        array_appendf(&cg->code, ", %s\n", s_reg_names[reg]);
+        return rc;
     }
     addr.is_addr = 0;
     array_appends(&cg->code, "    leaq ");
@@ -521,6 +562,8 @@ static int cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t 
     {
         case TACO_LT:
         case TACO_LTEQ:
+        case TACO_LTU:
+        case TACO_LTEQU:
         case TACO_EQ:
         case TACO_NEQ:
             UNWRAP(cg_gen_load(cg, tace->arg1, REG_RAX, frame));
@@ -529,8 +572,8 @@ static int cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t 
             if (tace->arg2.sizing.width > wid) wid = tace->arg2.sizing.width;
             switch (wid)
             {
-                case 1: array_appends(&cg->code, "cmp %dl, %al\n"); break;
-                case 2: array_appends(&cg->code, "cmp %dx, %ax\n"); break;
+                case 1:
+                case 2:
                 case 4: array_appends(&cg->code, "cmp %edx, %eax\n"); break;
                 case 8: array_appends(&cg->code, "cmp %rdx, %rax\n"); break;
                 default: abort();
@@ -539,6 +582,8 @@ static int cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t 
             {
                 case TACO_LT: array_appends(&cg->code, "    setl %al\n"); break;
                 case TACO_LTEQ: array_appends(&cg->code, "    setle %al\n"); break;
+                case TACO_LTU: array_appends(&cg->code, "    setb %al\n"); break;
+                case TACO_LTEQU: array_appends(&cg->code, "    setbe %al\n"); break;
                 case TACO_EQ: array_appends(&cg->code, "    sete %al\n"); break;
                 case TACO_NEQ: array_appends(&cg->code, "    setne %al\n"); break;
                 default: abort();

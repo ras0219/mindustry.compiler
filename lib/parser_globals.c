@@ -28,6 +28,7 @@ static int parser_vfmsg_impl(struct FixedMsgBuffer* buf, const struct RowCol* rc
     if (buf == &s_error)
     {
         parser_print_errors(stderr);
+        fflush(stderr);
         abort();
     }
 #endif

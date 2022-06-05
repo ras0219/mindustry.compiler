@@ -114,6 +114,7 @@ typedef struct Symbol
     const char* name;
     Decl* last_decl;
     Decl* def;
+    struct TypeSymbol* parent;
     struct Symbol* next_field;
     unsigned int is_enum_constant : 1;
 

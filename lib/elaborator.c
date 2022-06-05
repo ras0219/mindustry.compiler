@@ -104,6 +104,9 @@ unsigned int typestr_mask(const struct TypeStr* ts)
     return r;
 }
 
+const struct TypeStr s_void = {
+    .buf = {1, TYPE_BYTE_VOID},
+};
 static const struct TypeStr s_type_void = {.buf = {1, TYPE_BYTE_VOID}};
 static const struct TypeStr s_type_literal_int = {.buf = {1, TYPE_BYTE_INT}};
 static const struct TypeStr s_type_mutable_char = {.buf = {1, TYPE_BYTE_CHAR}};
@@ -232,9 +235,6 @@ static __forceinline int typestr_is_pointer(const struct TypeStr* ts)
 {
     return ts->buf[(int)ts->buf[0]] == TYPE_BYTE_POINTER;
 }
-const struct TypeStr s_void = {
-    .buf = {1, TYPE_BYTE_VOID},
-};
 static __forceinline int typestr_is_fn(const struct TypeStr* ts) { return typestr_byte(ts) == TYPE_BYTE_FUNCTION; }
 static __forceinline int typestr_is_variadic(const struct TypeStr* ts)
 {
@@ -254,7 +254,7 @@ enum
 };
 static unsigned int typestr_strip_cvr(struct TypeStr* ts)
 {
-    if (ts->buf[0] <= 0 || ts->buf[0] >= TYPESTR_BUF_SIZE) abort();
+    //if (ts->buf[0] <= 0 || ts->buf[0] >= TYPESTR_BUF_SIZE) abort();
     unsigned int m = 0;
     if (ts->buf[(int)ts->buf[0]] == 'r') ts->buf[0]--, m |= TYPESTR_CVR_R;
     if (ts->buf[(int)ts->buf[0]] == 'v') ts->buf[0]--, m |= TYPESTR_CVR_V;
@@ -357,7 +357,7 @@ static void typestr_decay(struct TypeStr* t)
         }
         default: break;
     }
-    if (t->buf[0] <= 0 || t->buf[0] >= TYPESTR_BUF_SIZE) abort();
+    //if (t->buf[0] <= 0 || t->buf[0] >= TYPESTR_BUF_SIZE) abort();
 }
 static int is_zero_constant(Elaborator* elab, const Expr* e);
 static void typestr_implicit_conversion(Elaborator* elab,
@@ -366,6 +366,13 @@ static void typestr_implicit_conversion(Elaborator* elab,
                                         const struct TypeStr* orig_to,
                                         const Expr* from_expr)
 {
+    const void* p = &s_void;
+    char ch0 = s_void.buf[0];
+    char ch1 = s_void.buf[1];
+    (void)ch0;
+    (void)ch1, (void)p;
+    if (s_void.buf[0] != 1 || s_void.buf[1] != 'V') abort();
+
     char buf_[128] = {0};
     char* buf = buf_;
 
@@ -396,9 +403,15 @@ static void typestr_implicit_conversion(Elaborator* elab,
                         cvr_to);
         if ((cvr_from & cvr_to) == cvr_from)
         {
-            buf += sprintf(buf, "abc");
+            buf += sprintf(buf, "abc\n");
             // cvr_to contains cvr_from
-            if (typestr_match(&to, &from) || typestr_match(&s_void, &to) || typestr_match(&s_void, &from)) return;
+            if (typestr_match(&to, &from)) return;
+            buf += sprintf(buf, "def %u %u %u %u\n", s_void.buf[0], s_void.buf[1], to.buf[0], to.buf[1]);
+            if (typestr_match(&s_void, &to)) return;
+            buf += sprintf(buf, "ghi\n");
+            if (typestr_match(&s_void, &from)) return;
+            buf += sprintf(buf, "jkl\n");
+            if (s_void.buf[0] != 1 || s_void.buf[1] != 'V') fprintf(stderr, "s_void corrupted2\n"), abort();
         }
     }
     else if (typestr_is_pointer(&to) && (typestr_mask(&from) & TYPE_FLAGS_INT) && is_zero_constant(elab, from_expr))
@@ -969,7 +982,7 @@ static int is_zero_constant(Elaborator* elab, const Expr* e)
     return !try_eval_constant(elab, e, &cv) && cv.base == NULL && cv.byte_offset == 0;
 }
 
-static Symbol* find_field_by_name(TypeSymbol* def, const char* fieldname)
+static Symbol* find_field_by_name(TypeSymbol* def, const char* fieldname, size_t* offset)
 {
     for (Symbol* field = def->first_member; field; field = field->next_field)
     {
@@ -978,13 +991,21 @@ static Symbol* find_field_by_name(TypeSymbol* def, const char* fieldname)
             if (field->def->specs->suinit)
             {
                 // anonymous nested struct
-                Symbol* inner_field = find_field_by_name(field->def->specs->sym, fieldname);
-                if (inner_field) return inner_field;
+                Symbol* inner_field = find_field_by_name(field->def->specs->sym, fieldname, offset);
+                if (inner_field)
+                {
+                    *offset += field->field_offset;
+                    return inner_field;
+                }
             }
         }
         else
         {
-            if (strcmp(field->name, fieldname) == 0) return field;
+            if (strcmp(field->name, fieldname) == 0)
+            {
+                *offset = field->field_offset;
+                return field;
+            }
         }
     }
     return NULL;
@@ -1570,6 +1591,7 @@ static int di_fill_frame(DInitFrame* frame,
             if (designator_idx == SIZE_MAX)
             {
                 frame->field = sym->first_member;
+                frame->offset = frame->field->field_offset;
                 if (!frame->field) return 1;
             }
             else
@@ -1580,13 +1602,13 @@ static int di_fill_frame(DInitFrame* frame,
                 {
                     return parser_ferror(rc, "error: invalid array designator for struct/union\n");
                 }
-                frame->field = find_field_by_name(sym, designator->field);
+                frame->field = find_field_by_name(sym, designator->field, &frame->offset);
                 if (!frame->field)
                 {
                     return parser_ferror(rc, "error: field not found in structure: '%s'\n", designator->field);
                 }
             }
-            frame->offset = offset + frame->field->field_offset;
+            frame->offset += offset;
             typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, &frame->ty, frame->field->def);
             typestr_strip_cvr(&frame->ty);
             return 0;
@@ -2052,7 +2074,7 @@ static void elaborate_expr(struct Elaborator* elab,
                 if (sym->def)
                 {
                     // find field in decl
-                    Symbol* field = find_field_by_name(sym, e->fieldname);
+                    Symbol* field = find_field_by_name(sym, e->fieldname, &e->field_offset);
                     if (field)
                     {
                         e->sym = field;

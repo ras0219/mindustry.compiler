@@ -18,6 +18,8 @@
     Y(TACO_NEQ)                                                                                                        \
     Y(TACO_LTEQ)                                                                                                       \
     Y(TACO_LT)                                                                                                         \
+    Y(TACO_LTEQU)                                                                                                      \
+    Y(TACO_LTU)                                                                                                        \
     Y(TACO_MULT)                                                                                                       \
     Y(TACO_BAND)                                                                                                       \
     Y(TACO_BOR)                                                                                                        \

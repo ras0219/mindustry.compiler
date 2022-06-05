@@ -1387,11 +1387,56 @@ int parse_aggregates(struct TestState* state)
     SUBTEST(stdtest_run(state,
                         &test,
                         "struct A {\n"
+                        "int y;"
                         "struct {\n"
-                        "long l; char c;\n"
+                        "int l; char c;\n"
                         "};\n"
-                        "};"));
+                        "};\n"
+                        "int foo() {"
+                        " struct A a = {.l=1, .y=0, {2}};"
+                        " a.l;"
+                        "}"));
     rc = 0;
+
+    struct Ast** const asts = test.parser->expr_seqs.data;
+    REQUIRE_EQ(2, test.parser->top->extent);
+    REQUIRE_AST(StmtDecls, decls, asts[test.parser->top->offset + 1])
+    {
+        REQUIRE_EQ(1, decls->extent);
+        REQUIRE_AST(Decl, w, asts[decls->offset])
+        REQUIRE_AST(StmtBlock, body, w->init)
+        {
+            REQUIRE_EQ(2, body->extent);
+            REQUIRE_AST(StmtDecls, a, asts[body->offset])
+            {
+                REQUIRE_EQ(1, a->extent);
+                REQUIRE_AST(Decl, d, asts[a->offset])
+                REQUIRE_AST(AstInit, i, d->init)
+                {
+                    REQUIRE_EQ(4, i->offset);
+
+                    AstInit* n = i->next;
+                    REQUIRE(n && n->init);
+                    REQUIRE_EQ(0, n->offset);
+
+                    AstInit* nn = n->next;
+                    REQUIRE(nn);
+                    REQUIRE_EQ(4, nn->offset);
+                    REQUIRE_AST(AstInit, ii, nn->init) { REQUIRE_EQ(4, ii->offset); }
+                }
+            }
+            REQUIRE_AST(ExprField, f, asts[body->offset + 1])
+            {
+                REQUIRE_EQ(0, f->is_arrow);
+                REQUIRE(f->sym);
+                REQUIRE(f->sym->name);
+                REQUIRE_STR_EQ("l", f->sym->name);
+                REQUIRE_EQ(0, f->sym->field_offset);
+                REQUIRE_EQ(4, f->field_offset);
+            }
+        }
+    }
+
 fail:
     stdtest_destroy(&test);
     return rc;
@@ -3144,14 +3189,67 @@ fail:
     return rc;
 }
 
+int test_cg_refs(TestState* state)
+{
+    int rc = 1;
+    CGTest test = {
+        .cg = my_malloc(sizeof(struct CodeGen)),
+    };
+    cg_init(test.cg);
+    TACEntry taces[] = {
+        {
+            TACO_ADD,
+            {TACA_LNAME, .is_addr = 1, .name = "a"},
+            {TACA_LNAME, .sizing = s_sizing_int, .name = "b"},
+        },
+        {
+            TACO_ADD,
+            {TACA_NAME, .is_addr = 1, .name = "a"},
+            {TACA_NAME, .sizing = s_sizing_int, .name = "b"},
+        },
+    };
+    rc = cg_gen_taces(test.cg, taces, sizeof(taces) / sizeof(taces[0]), 100);
+    if (rc)
+    {
+        parser_print_errors(stderr);
+    }
+    REQUIRE_EQ(0, rc);
+
+    size_t index = 0;
+    REQUIRE_NEXT_TEXT("subq $120, %rsp");
+
+    REQUIRE_NEXT_TEXT("leaq _a(%rip), %r10");
+    REQUIRE_NEXT_TEXT("movsl _b(%rip), %r11");
+    REQUIRE_NEXT_TEXT("add %r11, %r10");
+
+    REQUIRE_NEXT_TEXT("movq _a@GOTPCREL(%rip), %r10");
+    REQUIRE_NEXT_TEXT("movq _b@GOTPCREL(%rip), %r11");
+    REQUIRE_NEXT_TEXT("movsl (%r11), %r11");
+    REQUIRE_NEXT_TEXT("add %r11, %r10");
+
+    REQUIRE_NEXT_TEXT("addq $120, %rsp");
+    REQUIRE_NEXT_TEXT("ret");
+    REQUIRE_END_TEXT();
+
+    rc = 0;
+fail:
+    cg_destroy(test.cg);
+    my_free(test.cg);
+    return rc;
+}
+
 int test_be_static_init(TestState* state)
 {
     int rc = 1;
     BETest test;
-    SUBTEST(betest_run(state, &test, "enum {v1 = 2}; static int data[] = {1,v1,3};\n"));
+    SUBTEST(betest_run(state,
+                       &test,
+                       "enum {v1 = 2};"
+                       "static int data[] = {1,v1,3};\n"
+                       "static const char* const s_reg_names[] = {\"%rax\", \"%rbx\"};\n"));
 
     struct Expr** const exprs = (struct Expr**)test.base.parser->expr_seqs.data;
-    REQUIRE_EQ(2, test.base.parser->top->extent);
+    REQUIRE_EQ(3, test.base.parser->top->extent);
     REQUIRE_EXPR(StmtDecls, decls, exprs[test.base.parser->top->offset + 1])
     {
         REQUIRE_EQ(1, decls->extent);
@@ -3178,8 +3276,7 @@ int test_be_static_init(TestState* state)
     }
 
     array_push_byte(&test.cg->data, '\0');
-#define ZZZ ".byte 0\n.byte 0\n.byte 0\n"
-    REQUIRE_STR_EQ("_data:\n.byte 1\n" ZZZ ".byte 2\n" ZZZ ".byte 3\n" ZZZ "\n", test.cg->data.data);
+    REQUIRE_STR_EQ("_data:\n.byte 1, 0, 0, 0, 2, 0, 0, 0\n.byte 3, 0, 0, 0\n\n", test.cg->data.data);
 
     rc = 0;
 fail:
@@ -3412,7 +3509,7 @@ int main()
     RUN_TEST(parse_initializer_expr_sue);
     RUN_TEST(parse_initializer_expr_designated);
     RUN_TEST(parse_fn_ptr_conversion);
-    //RUN_TEST(parse_implicit_conversion);
+    RUN_TEST(parse_implicit_conversion);
     RUN_TEST(parse_params);
     RUN_TEST(parse_enums);
     RUN_TEST(parse_typedefs);
@@ -3438,6 +3535,7 @@ int main()
     RUN_TEST(test_cg_call);
     RUN_TEST(test_cg_add);
     RUN_TEST(test_cg_bitmath);
+    RUN_TEST(test_cg_refs);
 
     const char* color = (state->testfails + state->assertionfails == 0) ? _state.colorsuc : _state.colorerr;
 

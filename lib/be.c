@@ -562,7 +562,6 @@ static int be_compile_ExprCall(struct BackEnd* be, struct ExprCall* e, struct TA
             tace_arg->arg1.sizing = param->sizing;
             if (param->sizing.width == 0) abort();
             param_offset += param->sizing.width;
-            ++j;
         }
         UNWRAP(be_compile_expr(be, param->expr, &tace_arg->arg2));
     }
@@ -1066,14 +1065,34 @@ static int be_compile_ExprBinOp(struct BackEnd* be, struct ExprBinOp* e, struct 
 swapped_binary:
     UNWRAP(be_compile_expr(be, e->rhs, &tace.arg1));
     UNWRAP(be_compile_expr(be, e->lhs, &tace.arg2));
-    *out = be_push_tace(be, &tace, e->sizing);
-    goto fail;
+    goto push;
 
 basic_binary:
     UNWRAP(be_compile_expr(be, e->rhs, &tace.arg2));
     UNWRAP(be_compile_expr(be, e->lhs, &tace.arg1));
+push:
+    if (tace.op == TACO_LTEQ || tace.op == TACO_LT)
+    {
+        Sizing l = e->lhs->sizing;
+        Sizing r = e->rhs->sizing;
+        if (l.width < 4) l = s_sizing_int;
+        if (r.width < 4) r = s_sizing_int;
+        int is_unsigned;
+        if (l.width < r.width)
+        {
+            is_unsigned = !r.is_signed;
+        }
+        else if (l.width > r.width)
+        {
+            is_unsigned = !l.is_signed;
+        }
+        else
+        {
+            is_unsigned = !(l.is_signed & r.is_signed);
+        }
+        if (is_unsigned) tace.op = tace.op == TACO_LT ? TACO_LTU : TACO_LTEQU;
+    }
     *out = be_push_tace(be, &tace, e->sizing);
-    goto fail;
 
 fail:
     return rc;
@@ -1352,7 +1371,7 @@ static int be_compile_lvalue_ExprField(struct BackEnd* be, struct ExprField* e, 
         UNWRAP(be_compile_lvalue(be, e->lhs, out));
     }
 
-    *out = be_increment(be, out, e->sym->field_offset);
+    *out = be_increment(be, out, e->field_offset);
 
 fail:
     return rc;
@@ -1513,16 +1532,16 @@ int be_compile_toplevel_decl(struct BackEnd* be, Decl* decl)
     if (!sym->name) abort();
 
     struct Decl* def = sym->def ? sym->def : decl;
-    if ((decl->type->kind == AST_DECLFN && !def->init) || def->specs->is_extern)
-    {
-        cg_declare_extern(be->cg, sym->name);
-    }
-    else if (!decl->specs->is_static && !decl->specs->is_inline)
-    {
-        cg_declare_public(be->cg, sym->name);
-    }
     if (!decl->prev_decl)
     {
+        if ((decl->type->kind == AST_DECLFN && !def->init) || def->specs->is_extern)
+        {
+            cg_declare_extern(be->cg, sym->name);
+        }
+        else if (!decl->specs->is_static && !decl->specs->is_inline)
+        {
+            cg_declare_public(be->cg, sym->name);
+        }
         sym->addr.kind = decl->specs->is_static ? TACA_LNAME : TACA_NAME;
         sym->addr.name = sym->name;
     }
