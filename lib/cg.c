@@ -886,7 +886,7 @@ int cg_emit(struct CodeGen* cg, const char* src_filename, FILE* fout)
         UNWRAP(fputs("Lfunc_end0:\n", fout) < 0);
         UNWRAP(fprintf(fout,
                        "\n.section __DWARF,__debug_abbrev,regular,debug\n"
-                       ".byte	1                               ## Abbreviation Code\n"
+                       ".byte   1                               ## Abbreviation Code\n"
                        ".byte	17                              ## DW_TAG_compile_unit\n"
                        ".byte	1                               ## DW_CHILDREN_yes\n"
                        ".byte	19                              ## DW_AT_language\n"

@@ -3020,6 +3020,38 @@ fail:
     return rc;
 }
 
+int test_be_fnstatic(TestState* state)
+{
+    int rc = 1;
+    BETest test;
+    SUBTEST(betest_run_cg(state, &test, "int main() { static const int x = 42; return x; }"));
+
+    size_t index = 0;
+    REQUIRE_NEXT_TACE({
+        TACO_ASSIGN,
+        {TACA_REG, .is_addr = 1, .sizing = s_sizing_int, .reg = REG_RAX},
+        {TACA_LNAME, .sizing = s_sizing_int, .name = "x"},
+    });
+    REQUIRE_NEXT_TACE({TACO_RETURN});
+
+    REQUIRE_END_TACE();
+
+    // index = 0;
+    // REQUIRE_NEXT_TEXT("_main:");
+    // REQUIRE_NEXT_TEXT("subq $24, %rsp");
+    // REQUIRE_NEXT_TEXT("mov $42, %rax");
+    // REQUIRE_NEXT_TEXT("addq $24, %rsp");
+    // REQUIRE_NEXT_TEXT("ret");
+    // REQUIRE_NEXT_TEXT("addq $24, %rsp");
+    // REQUIRE_NEXT_TEXT("ret");
+    // REQUIRE_END_TEXT();
+
+    rc = 0;
+fail:
+    betest_destroy(&test);
+    return rc;
+}
+
 typedef struct CGTest
 {
     struct CodeGen* cg;
@@ -3542,6 +3574,7 @@ int main()
     RUN_TEST(test_be_switch);
     RUN_TEST(test_be_ternary);
     RUN_TEST(test_be_static_init);
+    RUN_TEST(test_be_fnstatic);
     RUN_TEST(test_cg_assign);
     RUN_TEST(test_cg_call);
     RUN_TEST(test_cg_add);

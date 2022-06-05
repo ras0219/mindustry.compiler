@@ -13,9 +13,8 @@ typedef struct BackEnd
 
     // Set of program string literals for coalescing. Does not own their memory.
     struct Array aszConstants;
-    struct AutoHeap const_ref;
 
-    struct AutoHeap heap;
+    struct AutoHeap sym_renames;
 
     struct Array code;
 

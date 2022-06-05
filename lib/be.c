@@ -1340,9 +1340,75 @@ fail:
     return rc;
 }
 
+static void be_compile_global(struct BackEnd* be, Decl* decl)
+{
+    struct Symbol* const sym = decl->sym;
+    if (!decl->prev_decl)
+    {
+        const char* name;
+        if (decl->specs->parent)
+        {
+            int n = snprintf(NULL, 0, "%s$%zu", sym->name, be->next_label);
+            name = autoheap_alloc(&be->sym_renames, n + 1);
+            snprintf((char*)name, n + 1, "%s$%zu", sym->name, be->next_label);
+        }
+        else
+        {
+            name = sym->name;
+        }
+        struct Decl* def = sym->def ? sym->def : decl;
+        if ((decl->type->kind == AST_DECLFN && !def->init) || def->specs->is_extern)
+        {
+            cg_declare_extern(be->cg, sym->name);
+        }
+        else if (!decl->specs->is_static && !decl->specs->is_inline)
+        {
+            cg_declare_public(be->cg, sym->name);
+        }
+        sym->addr.kind = decl->specs->is_static ? TACA_LNAME : TACA_NAME;
+        sym->addr.name = sym->name;
+    }
+    if (decl->specs->is_extern || decl->type->kind == AST_DECLFN)
+    {
+        return;
+    }
+
+    // global variable
+    if (decl->init)
+    {
+        size_t* buf = my_malloc(sym->size.width);
+        memset(buf, 0, sym->size.width);
+        void* lit_ptrs = be->elab->constinit_bases.data + sym->constinit_offset;
+        for (int j = 0; j < sym->size.width / 8; ++j)
+        {
+            ExprLit* ptr;
+            memcpy(&ptr, lit_ptrs + j * 8, 8);
+            if (ptr)
+            {
+                buf[j] = be_compile_ExprLit_String(be, ptr) + 1;
+            }
+        }
+
+        cg_reserve_data(
+            be->cg, sym->name, (char*)be->elab->constinit.data + sym->constinit_offset, (char*)buf, sym->size.width);
+        my_free(buf);
+    }
+    else
+    {
+        cg_reserve_zeroes(be->cg, sym->name, sym->size.width);
+    }
+}
+
 static int be_compile_Decl(struct BackEnd* be, struct Decl* decl)
 {
     if (!decl->type) return 0;
+
+    if (decl->specs->is_static)
+    {
+        // global variable
+        be_compile_global(be, decl);
+        return 0;
+    }
 
     int rc = 0;
     if (decl->sym->size.width == 0) abort();
@@ -1518,6 +1584,7 @@ void debug_taca(Array* arr, const TACAddress* addr)
         case TACA_ALABEL: array_appendf(arr, ", .alabel = %zu}", addr->alabel); break;
         case TACA_PARAM: array_appendf(arr, ", .param_offset = %zu}", addr->param_offset); break;
         case TACA_NAME: array_appendf(arr, ", .name = \"%s\"}", addr->name ? addr->name : "(null)"); break;
+        case TACA_LNAME: array_appendf(arr, ", .name = \"%s\"}", addr->name ? addr->name : "(null)"); break;
         case TACA_CONST: array_appendf(arr, ", .const_idx = %zu}", addr->const_idx); break;
         case TACA_VOID: array_push_byte(arr, '}'); break;
         default: array_appendf(arr, ", unimplemented = %p}", addr); break;
@@ -1530,21 +1597,7 @@ int be_compile_toplevel_decl(struct BackEnd* be, Decl* decl)
     array_clear(&be->code);
     struct Symbol* const sym = decl->sym;
     if (!sym->name) abort();
-
-    struct Decl* def = sym->def ? sym->def : decl;
-    if (!decl->prev_decl)
-    {
-        if ((decl->type->kind == AST_DECLFN && !def->init) || def->specs->is_extern)
-        {
-            cg_declare_extern(be->cg, sym->name);
-        }
-        else if (!decl->specs->is_static && !decl->specs->is_inline)
-        {
-            cg_declare_public(be->cg, sym->name);
-        }
-        sym->addr.kind = decl->specs->is_static ? TACA_LNAME : TACA_NAME;
-        sym->addr.name = sym->name;
-    }
+    be_compile_global(be, decl);
     if (decl->type->kind == AST_DECLFN)
     {
         struct DeclFn* declfn = (struct DeclFn*)decl->type;
@@ -1625,36 +1678,6 @@ int be_compile_toplevel_decl(struct BackEnd* be, Decl* decl)
             UNWRAP(be_compile_stmt(be, decl->init));
         }
     }
-    else if (!decl->specs->is_extern)
-    {
-        // global variable
-        if (decl->init)
-        {
-            size_t* buf = my_malloc(sym->size.width);
-            memset(buf, 0, sym->size.width);
-            void* lit_ptrs = be->elab->constinit_bases.data + sym->constinit_offset;
-            for (int j = 0; j < sym->size.width / 8; ++j)
-            {
-                ExprLit* ptr;
-                memcpy(&ptr, lit_ptrs + j * 8, 8);
-                if (ptr)
-                {
-                    buf[j] = be_compile_ExprLit_String(be, ptr) + 1;
-                }
-            }
-
-            cg_reserve_data(be->cg,
-                            sym->name,
-                            (char*)be->elab->constinit.data + sym->constinit_offset,
-                            (char*)buf,
-                            sym->size.width);
-            my_free(buf);
-        }
-        else
-        {
-            cg_reserve_zeroes(be->cg, sym->name, sym->size.width);
-        }
-    }
 
 fail:
     return rc;
@@ -1710,7 +1733,6 @@ fail:
 void be_destroy(struct BackEnd* be)
 {
     array_destroy(&be->aszConstants);
-    autoheap_destroy(&be->const_ref);
-    autoheap_destroy(&be->heap);
+    autoheap_destroy(&be->sym_renames);
     scope_destroy(&be->scope);
 }

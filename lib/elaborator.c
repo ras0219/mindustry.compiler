@@ -2324,8 +2324,8 @@ static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
 
             UNWRAP(parser_has_errors());
 
-            if (!(struct Decl*)decl->specs->parent && !decl->specs->is_extern && tyb != TYPE_BYTE_FUNCTION &&
-                decl->init)
+            if ((!(struct Decl*)decl->specs->parent || decl->specs->is_static) && !decl->specs->is_extern &&
+                tyb != TYPE_BYTE_FUNCTION && decl->init)
             {
                 // global object with initializer -- constinit
                 sym->constinit_offset = elab->constinit.sz;
