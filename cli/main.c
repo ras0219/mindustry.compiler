@@ -73,6 +73,7 @@ int usage(const char* self)
             "  -c                                Compile only.\n"
             "  -D <macro>, -D <macro>=<value>    Define <macro> with optional <value>.\n"
             "  -E                                Preprocess only.\n"
+            "  -S                                Emit assembly.\n"
             "  -I <dir>                          Add directory to the include search path.\n"
             "  -o <path>                         Specify output path.\n"
             "  --debug-be                        Emit backend tracing information\n"
@@ -90,6 +91,7 @@ struct Arguments
     struct Array inc;
     unsigned fCompile : 1;
     unsigned fPreprocOnly : 1;
+    unsigned fAssembleOnly : 1;
     unsigned fParseOnly : 1;
     unsigned fDebugBE : 1;
     struct Array macro_name;
@@ -108,6 +110,10 @@ static int parse_arguments(int argc, const char* const* argv, struct Arguments* 
             if (strcmp(argv[i] + 1, "c") == 0)
             {
                 out->fCompile = 1;
+            }
+            else if (strcmp(argv[i] + 1, "S") == 0)
+            {
+                out->fAssembleOnly = 1;
             }
             else if (strcmp(argv[i] + 1, "E") == 0)
             {
@@ -176,6 +182,11 @@ static int parse_arguments(int argc, const char* const* argv, struct Arguments* 
                 array_appends(&out->macro_name, argv[i]);
                 array_push_byte(&out->macro_name, 0);
             }
+            else if (argv[i][1] == 'D')
+            {
+                array_appends(&out->macro_name, argv[i] + 2);
+                array_push_byte(&out->macro_name, 0);
+            }
             else
             {
                 fprintf(stderr, "error: unrecognized flag %s\n", argv[i]);
@@ -238,13 +249,59 @@ usage:
     return usage(argv[0]);
 }
 
+static void extract_basename(const char* path, Array* out)
+{
+    int x = 0;
+    int b = 0;
+    int c = 0;
+    for (char ch = path[x]; ch; ch = path[++x])
+    {
+        if (ch == '/')
+            b = x + 1, c = b;
+        else if (ch == '.')
+            c = x;
+    }
+
+    if (c == b) c = x;
+    array_push(out, path + b, c - b);
+}
+
 int main(int argc, const char* const* argv)
 {
     int rc = 0;
     struct Arguments args = {};
     if (rc = parse_arguments(argc, argv, &args)) return rc;
 
-    const char* obj_file = "test.o";
+    struct Array asm_file = {0};
+    struct Array obj_file = {0};
+    struct Array exe_file = {0};
+    struct Array cmd_buf = {0};
+    extract_basename(args.input, &asm_file);
+    array_push(&obj_file, asm_file.data, asm_file.sz);
+    array_appends(&asm_file, ".s");
+    array_appends(&obj_file, ".o");
+    array_appends(&exe_file, "a.out");
+    if (args.output)
+    {
+        if (args.fAssembleOnly)
+        {
+            array_clear(&asm_file);
+            array_appends(&asm_file, args.output);
+        }
+        else if (args.fCompile)
+        {
+            array_clear(&obj_file);
+            array_appends(&obj_file, args.output);
+        }
+        else
+        {
+            array_clear(&exe_file);
+            array_appends(&exe_file, args.output);
+        }
+    }
+    array_push_byte(&asm_file, 0);
+    array_push_byte(&obj_file, 0);
+    array_push_byte(&exe_file, 0);
     struct FrontEnd fe = {};
 
     fe.pp = preproc_alloc(args.inc.data);
@@ -310,14 +367,11 @@ int main(int argc, const char* const* argv)
 
     UNWRAP(be_compile(fe.be));
     UNWRAP(parser_has_errors());
-    const char* asm_file = args.fCompile && args.output ? args.output : "test.asm";
-    fe.fout = fopen(asm_file, "wbT");
+    fe.fout = fopen(asm_file.data, "wbT");
 
     if (!fe.fout)
     {
-        char buf[256];
-        snprintf(buf, 256, "%s", asm_file);
-        perror(buf);
+        perror(asm_file.data);
         UNWRAP(1);
     }
 
@@ -326,27 +380,35 @@ int main(int argc, const char* const* argv)
     fe.fout = NULL;
     UNWRAP(parser_has_errors());
 
-    if (!args.fCompile)
+    if (!args.fAssembleOnly)
     {
+        array_clear(&cmd_buf);
+        array_appendf(&cmd_buf,
+                      "clang -target x86_64-apple-darwin20.3.0 -g -c %s -o %s",
+                      (char*)asm_file.data,
+                      (char*)obj_file.data);
+        array_push_byte(&cmd_buf, 0);
+        printf("%s\n", (char*)cmd_buf.data);
+        UNWRAP(system((char*)cmd_buf.data));
+        if (!args.fCompile)
+        {
 #ifdef _WIN32
-        const char* exe_file = args.output ? args.output : "test.exe";
-        char buf[512];
-        rc = sizeof(buf) <=
-             snprintf(buf, sizeof(buf), "ml64 /Zd /Zi /Sa %s /link /OPT:REF /OPT:ICF /out:%s", asm_file, exe_file);
-        if (!rc) rc = system(buf);
-#else
-        const char* exe_file = args.output ? args.output : "a.out";
-        char buf[512];
-        rc = sizeof(buf) <=
-             snprintf(buf, sizeof(buf), "clang -target x86_64-apple-darwin20.3.0 -g -c %s -o %s", asm_file, obj_file);
-        printf("%s\n", buf);
-        if (!rc) rc = system(buf);
-        if (!rc)
+            const char* exe_file = args.output ? args.output : "test.exe";
+            char buf[512];
             rc = sizeof(buf) <=
-                 snprintf(buf, sizeof(buf), "clang -target x86_64-apple-darwin20.3.0 %s -o %s", obj_file, exe_file);
-        printf("%s\n", buf);
-        if (!rc) rc = system(buf);
+                 snprintf(buf, sizeof(buf), "ml64 /Zd /Zi /Sa %s /link /OPT:REF /OPT:ICF /out:%s", asm_file, exe_file);
+            if (!rc) rc = system(buf);
+#else
+            array_clear(&cmd_buf);
+            array_appendf(&cmd_buf,
+                          "clang -target x86_64-apple-darwin20.3.0 %s -o %s",
+                          (char*)obj_file.data,
+                          (char*)exe_file.data);
+            array_push_byte(&cmd_buf, 0);
+            printf("%s\n", (char*)cmd_buf.data);
+            UNWRAP(system((char*)cmd_buf.data));
 #endif
+        }
     }
 
 fail:
@@ -356,5 +418,9 @@ fail:
     }
     if (fe.fout) fclose(fe.fout);
     fe_destroy(&fe);
+    array_destroy(&cmd_buf);
+    array_destroy(&exe_file);
+    array_destroy(&obj_file);
+    array_destroy(&asm_file);
     return rc;
 }
