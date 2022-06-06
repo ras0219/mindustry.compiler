@@ -119,7 +119,8 @@ typedef struct Symbol
     unsigned int is_enum_constant : 1;
 
     // elaboration information
-    unsigned int is_char_array : 1;
+    unsigned int is_aggregate : 1;
+    unsigned int is_array_or_fn : 1;
     TypeStr type;
 
     Sizing fn_ret_sizing;

@@ -10,9 +10,7 @@ enum
 typedef struct TypeStr
 {
     // length counted, first byte is length
-    char buf[TYPESTR_BUF_SIZE];
-
-    unsigned long long pad2;
+    unsigned char buf[TYPESTR_BUF_SIZE];
 } TypeStr;
 
 #define X_TYPE_BYTE_INT(Y)                                                                                             \
@@ -42,10 +40,14 @@ typedef struct TypeStr
     Y(TYPE_BYTE_STRUCT, '$')                                                                                           \
     Y(TYPE_BYTE_UNION, 'u')                                                                                            \
     Y(TYPE_BYTE_ENUM, 'e')                                                                                             \
+    Y(TYPE_BYTE_CONST, 'c')                                                                                            \
+    Y(TYPE_BYTE_VOLATILE, 'v')                                                                                         \
+    Y(TYPE_BYTE_RESTRICT, 'r')                                                                                         \
     Y(TYPE_BYTE_POINTER, 'p')                                                                                          \
     Y(TYPE_BYTE_ARRAY, '[')                                                                                            \
     Y(TYPE_BYTE_UNK_ARRAY, ']')                                                                                        \
-    Y(TYPE_BYTE_FUNCTION, '(')
+    Y(TYPE_BYTE_FUNCTION, '(')                                                                                         \
+    Y(TYPE_BYTE_INVALID, '\0')
 
 #define Y_COMMA(E, CH) E = CH,
 enum
@@ -53,13 +55,3 @@ enum
     X_TYPE_BYTE(Y_COMMA)
 };
 #undef Y_COMMA
-
-// ignores CVR
-__forceinline char typestr_byte(const struct TypeStr* ts)
-{
-    int i = ts->buf[0];
-    if (ts->buf[i] == 'r') --i;
-    if (ts->buf[i] == 'v') --i;
-    if (ts->buf[i] == 'c') --i;
-    return ts->buf[i];
-}

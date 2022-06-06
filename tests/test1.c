@@ -1551,7 +1551,7 @@ int parse_params(struct TestState* state)
             array_clear(&arr);
             typestr_fmt(test.elab->types, &w->sym->type, &arr);
             array_push_byte(&arr, 0);
-            REQUIRE_STR_EQ("function (pointer to int) returning int", arr.data);
+            REQUIRE_STR_EQ("function of (pointer to int) returning int", arr.data);
         }
     }
     REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->offset + 1])
@@ -1562,7 +1562,7 @@ int parse_params(struct TestState* state)
             array_clear(&arr);
             typestr_fmt(test.elab->types, &w->sym->type, &arr);
             array_push_byte(&arr, 0);
-            REQUIRE_STR_EQ("function (pointer to int) returning int", arr.data);
+            REQUIRE_STR_EQ("function of (pointer to int) returning int", arr.data);
         }
     }
     REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->offset + 2])
@@ -1573,7 +1573,7 @@ int parse_params(struct TestState* state)
             array_clear(&arr);
             typestr_fmt(test.elab->types, &w->sym->type, &arr);
             array_push_byte(&arr, 0);
-            REQUIRE_STR_EQ("function (pointer to __builtin_va_list) returning int", arr.data);
+            REQUIRE_STR_EQ("function of (pointer to __builtin_va_list) returning int", arr.data);
         }
     }
     REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->offset + 4])
@@ -1584,7 +1584,7 @@ int parse_params(struct TestState* state)
             array_clear(&arr);
             typestr_fmt(test.elab->types, &w->sym->type, &arr);
             array_push_byte(&arr, 0);
-            REQUIRE_STR_EQ("function (pointer to int) returning int", arr.data);
+            REQUIRE_STR_EQ("function of (pointer to int) returning int", arr.data);
             REQUIRE_AST(DeclFn, fn, w->type)
             {
                 REQUIRE_EQ(1, fn->extent);

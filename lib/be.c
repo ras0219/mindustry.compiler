@@ -499,17 +499,6 @@ static int be_compile_lvalue_ExprLit(struct BackEnd* be, struct ExprLit* e, stru
     return rc;
 }
 
-static int is_sym_array_or_function(Symbol* sym)
-{
-    switch (typestr_byte(&sym->type))
-    {
-        case TYPE_BYTE_FUNCTION:
-        case TYPE_BYTE_UNK_ARRAY:
-        case TYPE_BYTE_ARRAY: return 1;
-        default: return 0;
-    }
-}
-
 static int be_compile_lvalue_ExprRef(struct BackEnd* be, struct ExprRef* e, struct TACAddress* out)
 {
     Symbol* sym = e->sym;
@@ -531,7 +520,7 @@ static int be_compile_ExprRef(struct BackEnd* be, struct ExprRef* esym, struct T
     else
     {
         UNWRAP(be_compile_lvalue_ExprRef(be, esym, out));
-        if (!is_sym_array_or_function(esym->sym))
+        if (!esym->sym->is_array_or_fn)
         {
             UNWRAP(be_dereference(be, out, esym->sizing, &esym->tok->rc));
         }
@@ -1452,7 +1441,7 @@ static int be_compile_Decl(struct BackEnd* be, struct Decl* decl)
     {
         struct Ast* init = decl->init;
         int start_frame_size = be->frame_size;
-        UNWRAP(be_compile_init(be, init, decl->sym->addr.frame_offset, 0, decl->sym->size, decl->sym->is_char_array));
+        UNWRAP(be_compile_init(be, init, decl->sym->addr.frame_offset, 0, decl->sym->size, decl->sym->is_aggregate));
         be->frame_size = start_frame_size;
     }
 fail:
@@ -1481,7 +1470,7 @@ static int be_compile_ExprField(struct BackEnd* be, struct ExprField* e, struct 
 {
     int rc = 0;
     UNWRAP(be_compile_lvalue_ExprField(be, e, out));
-    if (!is_sym_array_or_function(e->sym))
+    if (!e->sym->is_array_or_fn)
     {
         UNWRAP(be_dereference(be, out, e->sizing, &e->tok->rc));
     }

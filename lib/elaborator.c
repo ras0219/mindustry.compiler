@@ -56,6 +56,7 @@ enum
     TYPE_MASK_SCALAR = TYPE_FLAGS_POINTER | TYPE_MASK_ARITH,
     TYPE_MASK_OBJECT = TYPE_FLAGS_VOID | TYPE_FLAGS_INT | TYPE_FLAGS_POINTER | TYPE_FLAGS_STRUCT | TYPE_FLAGS_UNION,
     TYPE_MASK_FN_ARR = TYPE_FLAGS_FUNCTION | TYPE_FLAGS_ARRAY,
+    TYPE_MASK_AGGREGATE = TYPE_FLAGS_ARRAY | TYPE_FLAGS_STRUCT | TYPE_FLAGS_UNION,
 
     TYPE_COMMON_FLAGS_CHAR = TYPE_FLAGS_CHAR | TYPE_FLAGS_INT | TYPE_FLAGS_PROMOTE_INT | TYPE_FLAGS_WIDTH1,
     TYPE_COMMON_FLAGS_SHORT = TYPE_FLAGS_INT | TYPE_FLAGS_PROMOTE_INT | TYPE_FLAGS_WIDTH2,
@@ -63,7 +64,7 @@ enum
     TYPE_COMMON_FLAGS_LONG = TYPE_FLAGS_INT | TYPE_FLAGS_WIDTH8,
 };
 
-static unsigned int s_typestr_mask_data[256] = {
+static const unsigned int s_typestr_mask_data[256] = {
     [TYPE_BYTE_VARIADIC] = TYPE_FLAGS_VAR,
     [TYPE_BYTE_VOID] = TYPE_FLAGS_VOID,
     [TYPE_BYTE_POINTER] = TYPE_FLAGS_POINTER | TYPE_FLAGS_WIDTH8,
@@ -96,7 +97,17 @@ static unsigned int s_typestr_mask_data[256] = {
     [TYPE_BYTE_UUVALIST] = TYPE_FLAGS_STRUCT,
 };
 
-unsigned int typestr_mask(const struct TypeStr* ts)
+// ignores CVR
+static char typestr_byte(const struct TypeStr* ts)
+{
+    int i = ts->buf[0];
+    if (ts->buf[i] == TYPE_BYTE_RESTRICT) --i;
+    if (ts->buf[i] == TYPE_BYTE_VOLATILE) --i;
+    if (ts->buf[i] == TYPE_BYTE_CONST) --i;
+    return ts->buf[i];
+}
+
+static unsigned int typestr_mask(const struct TypeStr* ts)
 {
     const int b = typestr_byte(ts);
     unsigned int r = s_typestr_mask_data[b];
@@ -125,115 +136,139 @@ __forceinline static uint32_t typestr_get_offset(const struct TypeStr* ts)
     return typestr_get_offset_i(ts, ts->buf[0]);
 }
 
+static const char* const s_typestr_fmt_strs[128] = {
+    [TYPE_BYTE_INVALID] = "invalid type",
+    [TYPE_BYTE_VARIADIC] = "...",
+    [TYPE_BYTE_VOID] = "void",
+    [TYPE_BYTE_CHAR] = "char",
+    [TYPE_BYTE_SCHAR] = "signed char",
+    [TYPE_BYTE_UCHAR] = "unsigned char",
+    [TYPE_BYTE_SHORT] = "short",
+    [TYPE_BYTE_USHORT] = "unsigned short",
+    [TYPE_BYTE_INT] = "int",
+    [TYPE_BYTE_UINT] = "unsigned int",
+    [TYPE_BYTE_LONG] = "long",
+    [TYPE_BYTE_ULONG] = "unsigned long",
+    [TYPE_BYTE_LLONG] = "long long",
+    [TYPE_BYTE_ULLONG] = "unsigned long long",
+    [TYPE_BYTE_FLOAT] = "float",
+    [TYPE_BYTE_DOUBLE] = "double",
+    [TYPE_BYTE_UUVALIST] = "__builtin_va_list",
+
+    [TYPE_BYTE_POINTER] = "pointer to ",
+    [TYPE_BYTE_CONST] = "const ",
+    [TYPE_BYTE_VOLATILE] = "volatile ",
+    [TYPE_BYTE_RESTRICT] = "restrict ",
+    [TYPE_BYTE_UNK_ARRAY] = "array of ",
+    [TYPE_BYTE_ARRAY] = "array of ",
+
+    [TYPE_BYTE_STRUCT] = "struct ",
+    [TYPE_BYTE_UNION] = "union ",
+    [TYPE_BYTE_ENUM] = "enum ",
+
+    [TYPE_BYTE_FUNCTION] = "function of (",
+};
+
+enum
+{
+    TYPESTR_FMT_COMPLETE,
+    TYPESTR_FMT_CONTINUE,
+    TYPESTR_FMT_SUE,
+    TYPESTR_FMT_FN,
+    TYPESTR_FMT_ARR,
+};
+
+static const unsigned char s_typestr_fmt_ctrl[128] = {
+    [TYPE_BYTE_INVALID] = TYPESTR_FMT_COMPLETE,   [TYPE_BYTE_VARIADIC] = TYPESTR_FMT_COMPLETE,
+    [TYPE_BYTE_VOID] = TYPESTR_FMT_COMPLETE,      [TYPE_BYTE_CHAR] = TYPESTR_FMT_COMPLETE,
+    [TYPE_BYTE_SCHAR] = TYPESTR_FMT_COMPLETE,     [TYPE_BYTE_UCHAR] = TYPESTR_FMT_COMPLETE,
+    [TYPE_BYTE_SHORT] = TYPESTR_FMT_COMPLETE,     [TYPE_BYTE_USHORT] = TYPESTR_FMT_COMPLETE,
+    [TYPE_BYTE_INT] = TYPESTR_FMT_COMPLETE,       [TYPE_BYTE_UINT] = TYPESTR_FMT_COMPLETE,
+    [TYPE_BYTE_LONG] = TYPESTR_FMT_COMPLETE,      [TYPE_BYTE_ULONG] = TYPESTR_FMT_COMPLETE,
+    [TYPE_BYTE_LLONG] = TYPESTR_FMT_COMPLETE,     [TYPE_BYTE_ULLONG] = TYPESTR_FMT_COMPLETE,
+    [TYPE_BYTE_FLOAT] = TYPESTR_FMT_COMPLETE,     [TYPE_BYTE_DOUBLE] = TYPESTR_FMT_COMPLETE,
+    [TYPE_BYTE_UUVALIST] = TYPESTR_FMT_COMPLETE,
+
+    [TYPE_BYTE_POINTER] = TYPESTR_FMT_CONTINUE,   [TYPE_BYTE_CONST] = TYPESTR_FMT_CONTINUE,
+    [TYPE_BYTE_VOLATILE] = TYPESTR_FMT_CONTINUE,  [TYPE_BYTE_RESTRICT] = TYPESTR_FMT_CONTINUE,
+    [TYPE_BYTE_UNK_ARRAY] = TYPESTR_FMT_CONTINUE,
+
+    [TYPE_BYTE_ARRAY] = TYPESTR_FMT_ARR,
+
+    [TYPE_BYTE_STRUCT] = TYPESTR_FMT_SUE,         [TYPE_BYTE_UNION] = TYPESTR_FMT_SUE,
+    [TYPE_BYTE_ENUM] = TYPESTR_FMT_SUE,
+
+    [TYPE_BYTE_FUNCTION] = TYPESTR_FMT_FN,
+};
+
 static void typestr_fmt_i(const struct TypeTable* tt, const struct TypeStr* ts, size_t i, struct Array* buf)
 {
-    size_t depth = 0;
-    const char* str;
     while (1)
     {
-        char ch = ts->buf[i];
-        switch (ch)
+        if (i == 0) abort();
+        const unsigned char ch = ts->buf[i];
+        array_appends(buf, s_typestr_fmt_strs[ch]);
+
+        const unsigned char ctrl = s_typestr_fmt_ctrl[ch];
+        if (ctrl == TYPESTR_FMT_COMPLETE)
         {
-            case '\0': array_appends(buf, "invalid type"); return;
-            case TYPE_BYTE_VARIADIC: str = "..."; goto append_ret;
-            case TYPE_BYTE_VOID: str = "void"; goto append_ret;
-            case TYPE_BYTE_CHAR: str = "char"; goto append_ret;
-            case TYPE_BYTE_SCHAR: str = "signed char"; goto append_ret;
-            case TYPE_BYTE_UCHAR: str = "unsigned char"; goto append_ret;
-            case TYPE_BYTE_INT: str = "int"; goto append_ret;
-            case TYPE_BYTE_SHORT: str = "short"; goto append_ret;
-            case TYPE_BYTE_LONG: str = "long"; goto append_ret;
-            case TYPE_BYTE_LLONG: str = "long long"; goto append_ret;
-            case TYPE_BYTE_UINT: str = "unsigned int"; goto append_ret;
-            case TYPE_BYTE_USHORT: str = "unsigned short"; goto append_ret;
-            case TYPE_BYTE_ULONG: str = "unsigned long"; goto append_ret;
-            case TYPE_BYTE_ULLONG: str = "unsigned long long"; goto append_ret;
-            case TYPE_BYTE_FLOAT: str = "float"; goto append_ret;
-            case TYPE_BYTE_DOUBLE: str = "double"; goto append_ret;
-            case TYPE_BYTE_UUVALIST: str = "__builtin_va_list"; goto append_ret;
-            case TYPE_BYTE_POINTER: str = "pointer to "; goto append_continue;
-            case 'c': str = "const "; goto append_continue;
-            case 'v': str = "volatile "; goto append_continue;
-            case 'r': str = "restrict "; goto append_continue;
-            case TYPE_BYTE_UNK_ARRAY: str = "array of "; goto append_continue;
-            case TYPE_BYTE_ARRAY:
-            {
-                uint32_t u;
-                i -= sizeof(u);
-                memcpy(&u, ts->buf + i, sizeof(u));
-                array_appendf(buf, "array of %u ", u);
-                --i;
-                continue;
-            }
-            case TYPE_BYTE_STRUCT: str = "struct"; goto sue;
-            case TYPE_BYTE_UNION: str = "union"; goto sue;
-            case TYPE_BYTE_ENUM: str = "enum"; goto sue;
-            case TYPE_BYTE_FUNCTION:
-            {
-                array_appends(buf, "function (");
-                uint32_t f_offset = typestr_get_offset_i(ts, i);
-                size_t begin = f_offset ? arrsz_at(&tt->fn_args_ends, f_offset - 1) : 0;
-                size_t end = arrsz_at(&tt->fn_args_ends, f_offset);
-                const struct TypeStr* argtys = tt->fn_args.data;
-                for (; begin != end; ++begin)
-                {
-                    typestr_fmt(tt, argtys + begin, buf);
-                    if (begin + 1 != end) array_appends(buf, ", ");
-                }
-                str = ") returning ";
-                i -= sizeof(uint32_t);
-                goto append_continue;
-            }
-            default: abort();
+            return;
         }
-    append_continue:
-        array_appends(buf, str);
         --i;
-        continue;
-    append_ret:
-        array_appends(buf, str);
-        --i;
-        goto end;
-    sue:;
-        // struct, union, enum
-        unsigned int u;
+        if (ctrl == TYPESTR_FMT_CONTINUE)
+        {
+            continue;
+        }
+        const uint32_t u = typestr_get_offset_i(ts, i + 1);
         i -= sizeof(u);
-        memcpy(&u, ts->buf + i, sizeof(u));
-        TypeSymbol* sym = tt_get(tt, u);
-        array_appends(buf, str);
-        array_push_byte(buf, ' ');
-        if (sym->name)
-            array_appends(buf, sym->name);
-        else
-            array_appendf(buf, "<anonymous#%u>", u);
-        goto end;
-    end:
-        if (depth)
+        if (ctrl == TYPESTR_FMT_ARR)
         {
-            if (ts->buf[i] == ')')
-            {
-                --depth;
-                str = ") returning ";
-                goto append_continue;
-            }
-            else
-            {
-                array_appends(buf, ", ");
-                continue;
-            }
+            array_appendf(buf, "%u ", u);
         }
-        return;
+        else if (ctrl == TYPESTR_FMT_SUE)
+        {
+            // struct, union, enum
+            TypeSymbol* sym = tt_get(tt, u);
+            if (sym->name)
+                array_appends(buf, sym->name);
+            else
+                array_appendf(buf, "<anonymous#%u>", u);
+            return;
+        }
+        else if (ctrl == TYPESTR_FMT_FN)
+        {
+            size_t begin = u ? arrsz_at(&tt->fn_args_ends, u - 1) : 0;
+            size_t end = arrsz_at(&tt->fn_args_ends, u);
+            const struct TypeStr* argtys = tt->fn_args.data;
+            if (begin != end)
+            {
+                typestr_fmt(tt, argtys + begin, buf);
+                for (++begin; begin != end; ++begin)
+                {
+                    array_appends(buf, ", ");
+                    typestr_fmt(tt, argtys + begin, buf);
+                }
+            }
+            array_appends(buf, ") returning ");
+        }
+        else
+            abort();
     }
 }
 
 void typestr_fmt(const struct TypeTable* tt, const struct TypeStr* ts, struct Array* buf)
 {
+    if (ts->buf[0] == 0)
+    {
+        array_appends(buf, "invalid type");
+        return;
+    }
     typestr_fmt_i(tt, ts, ts->buf[0], buf);
 }
 
 static __forceinline int typestr_is_pointer(const struct TypeStr* ts)
 {
-    return ts->buf[(int)ts->buf[0]] == TYPE_BYTE_POINTER;
+    return ts->buf[ts->buf[0]] == TYPE_BYTE_POINTER;
 }
 static __forceinline int typestr_is_fn(const struct TypeStr* ts) { return typestr_byte(ts) == TYPE_BYTE_FUNCTION; }
 static __forceinline int typestr_is_variadic(const struct TypeStr* ts)
@@ -242,8 +277,7 @@ static __forceinline int typestr_is_variadic(const struct TypeStr* ts)
 }
 static __forceinline int typestr_is_aggregate(const struct TypeStr* ts)
 {
-    char ch = typestr_byte(ts);
-    return ch == TYPE_BYTE_STRUCT || ch == TYPE_BYTE_ARRAY || ch == TYPE_BYTE_UNION || ch == TYPE_BYTE_UNK_ARRAY;
+    return !!(typestr_mask(ts) & TYPE_MASK_AGGREGATE);
 }
 
 enum
@@ -254,17 +288,16 @@ enum
 };
 static unsigned int typestr_strip_cvr(struct TypeStr* ts)
 {
-    // if (ts->buf[0] <= 0 || ts->buf[0] >= TYPESTR_BUF_SIZE) abort();
     unsigned int m = 0;
-    if (ts->buf[(int)ts->buf[0]] == 'r') ts->buf[0]--, m |= TYPESTR_CVR_R;
-    if (ts->buf[(int)ts->buf[0]] == 'v') ts->buf[0]--, m |= TYPESTR_CVR_V;
-    if (ts->buf[(int)ts->buf[0]] == 'c') ts->buf[0]--, m |= TYPESTR_CVR_C;
+    if (ts->buf[ts->buf[0]] == TYPE_BYTE_RESTRICT) ts->buf[0]--, m |= TYPESTR_CVR_R;
+    if (ts->buf[ts->buf[0]] == TYPE_BYTE_VOLATILE) ts->buf[0]--, m |= TYPESTR_CVR_V;
+    if (ts->buf[ts->buf[0]] == TYPE_BYTE_CONST) ts->buf[0]--, m |= TYPESTR_CVR_C;
     return m;
 }
 static void typestr_remove_array(struct TypeStr* ts)
 {
     typestr_strip_cvr(ts);
-    if (ts->buf[(int)ts->buf[0]] == TYPE_BYTE_ARRAY)
+    if (ts->buf[ts->buf[0]] == TYPE_BYTE_ARRAY)
     {
         ts->buf[0] -= sizeof(uint32_t) + 1;
     }
@@ -276,7 +309,7 @@ static void typestr_remove_array(struct TypeStr* ts)
 static void typestr_dereference(struct TypeStr* ts)
 {
     typestr_strip_cvr(ts);
-    if (typestr_is_pointer(ts))
+    if (ts->buf[ts->buf[0]] == TYPE_BYTE_POINTER)
     {
         --ts->buf[0];
     }
@@ -328,9 +361,9 @@ __forceinline static uint32_t typestr_pop_offset(struct TypeStr* ts)
     return r;
 }
 
-TypeSymbol* typestr_get_decl(struct TypeTable* tt, const struct TypeStr* ts)
+static TypeSymbol* typestr_get_decl(struct TypeTable* tt, const struct TypeStr* ts)
 {
-    char ch = ts->buf[(int)ts->buf[0]];
+    char ch = ts->buf[ts->buf[0]];
     if (ch == TYPE_BYTE_STRUCT || ch == TYPE_BYTE_UNION)
     {
         return tt_get(tt, typestr_get_offset(ts));
@@ -338,26 +371,23 @@ TypeSymbol* typestr_get_decl(struct TypeTable* tt, const struct TypeStr* ts)
     return NULL;
 }
 
-int typestr_is_arithmetic(const struct TypeStr* ts) { return !!(typestr_mask(ts) & TYPE_MASK_ARITH); }
-
 static void typestr_decay(struct TypeStr* t)
 {
     typestr_strip_cvr(t);
-    char ch = t->buf[(int)t->buf[0]];
+    char ch = t->buf[t->buf[0]];
     switch (ch)
     {
         case TYPE_BYTE_ARRAY: t->buf[0] -= 4; // passthrough
-        case TYPE_BYTE_UNK_ARRAY: t->buf[(int)t->buf[0]] = TYPE_BYTE_POINTER; break;
+        case TYPE_BYTE_UNK_ARRAY: t->buf[t->buf[0]] = TYPE_BYTE_POINTER; break;
         case TYPE_BYTE_FUNCTION:
         {
             t->buf[0]++;
             if (t->buf[0] == TYPESTR_BUF_SIZE) abort();
-            t->buf[(int)t->buf[0]] = TYPE_BYTE_POINTER;
+            t->buf[t->buf[0]] = TYPE_BYTE_POINTER;
             break;
         }
         default: break;
     }
-    // if (t->buf[0] <= 0 || t->buf[0] >= TYPESTR_BUF_SIZE) abort();
 }
 static int is_zero_constant(Elaborator* elab, const Expr* e);
 static void typestr_implicit_conversion(Elaborator* elab,
@@ -366,16 +396,6 @@ static void typestr_implicit_conversion(Elaborator* elab,
                                         const struct TypeStr* orig_to,
                                         const Expr* from_expr)
 {
-    const void* p = &s_void;
-    char ch0 = s_void.buf[0];
-    char ch1 = s_void.buf[1];
-    (void)ch0;
-    (void)ch1, (void)p;
-    if (s_void.buf[0] != 1 || s_void.buf[1] != 'V') abort();
-
-    char buf_[128] = {0};
-    char* buf = buf_;
-
     struct TypeTable* types = elab->types;
     if (typestr_match(orig_from, orig_to)) return;
 
@@ -386,45 +406,26 @@ static void typestr_implicit_conversion(Elaborator* elab,
     if (typestr_match(&from, &to)) return;
 
     // then, check secondary conversions
-    if (typestr_is_pointer(&from) && typestr_is_pointer(&to))
+    const unsigned from_mask = typestr_mask(&from), to_mask = typestr_mask(&to);
+    if (from_mask & to_mask & TYPE_FLAGS_POINTER)
     {
         --from.buf[0];
         --to.buf[0];
         unsigned int cvr_from = typestr_strip_cvr(&from);
         unsigned int cvr_to = typestr_strip_cvr(&to);
-        buf += snprintf(buf,
-                        128,
-                        "%d/%d:%c/%c:%u/%u\n",
-                        from.buf[0],
-                        to.buf[0],
-                        from.buf[(int)from.buf[0]],
-                        to.buf[(int)to.buf[0]],
-                        cvr_from,
-                        cvr_to);
         if ((cvr_from & cvr_to) == cvr_from)
         {
-            buf += sprintf(buf, "abc\n");
             // cvr_to contains cvr_from
             if (typestr_match(&to, &from)) return;
-            buf += sprintf(buf, "def %u %u %u %u\n", s_void.buf[0], s_void.buf[1], to.buf[0], to.buf[1]);
             if (typestr_match(&s_void, &to)) return;
-            buf += sprintf(buf, "ghi\n");
             if (typestr_match(&s_void, &from)) return;
-            buf += sprintf(buf, "jkl\n");
-            if (s_void.buf[0] != 1 || s_void.buf[1] != 'V') fprintf(stderr, "s_void corrupted2\n"), abort();
         }
     }
-    else if (typestr_is_pointer(&to) && (typestr_mask(&from) & TYPE_FLAGS_INT) && is_zero_constant(elab, from_expr))
+    else if (from_mask & TYPE_FLAGS_INT)
     {
-        return;
+        if (to_mask & TYPE_FLAGS_INT) return;
+        if ((to_mask & TYPE_FLAGS_POINTER) && is_zero_constant(elab, from_expr)) return;
     }
-    else
-    {
-        unsigned int from_mask = typestr_mask(&from);
-        unsigned int to_mask = typestr_mask(&to);
-        if (from_mask & to_mask & TYPE_FLAGS_INT) return;
-    }
-    fprintf(stderr, "%s", buf_);
     typestr_error2(rc, types, "error: could not implicitly convert '%.*s' to '%.*s'\n", orig_from, orig_to);
 }
 
@@ -448,7 +449,7 @@ static void typestr_add_array(struct TypeStr* s, unsigned int n)
         // unbounded array
         int i = ++s->buf[0];
         if (i >= TYPESTR_BUF_SIZE) abort();
-        s->buf[i] = ']';
+        s->buf[i] = TYPE_BYTE_UNK_ARRAY;
     }
     else
         typestr_append_offset(s, n, TYPE_BYTE_ARRAY);
@@ -457,7 +458,7 @@ static void typestr_add_array(struct TypeStr* s, unsigned int n)
 __forceinline static void typestr_add_pointer(struct TypeStr* s)
 {
     if (s->buf[0] == 0) return;
-    size_t o = s->buf[0] += 1;
+    unsigned o = ++s->buf[0];
     if (o >= TYPESTR_BUF_SIZE) abort();
     s->buf[o] = TYPE_BYTE_POINTER;
 }
@@ -465,17 +466,15 @@ __forceinline static void typestr_add_pointer(struct TypeStr* s)
 static void typestr_add_cvr(struct TypeStr* s, unsigned int mask)
 {
     if (s->buf[0] == 0) return;
+    unsigned int m = typestr_strip_cvr(s);
     int i = s->buf[0];
-    unsigned int m = 0;
-    if (s->buf[i] == 'r') --i, m |= TYPESTR_CVR_R;
-    if (s->buf[i] == 'v') --i, m |= TYPESTR_CVR_V;
-    if (s->buf[i] == 'c') --i, m |= TYPESTR_CVR_C;
+    if (i == 0) return;
     if (i + 3 >= TYPESTR_BUF_SIZE) abort();
     if (!(mask & ~m)) return;
     m |= mask;
-    if (m & TYPESTR_CVR_C) s->buf[++i] = 'c';
-    if (m & TYPESTR_CVR_V) s->buf[++i] = 'v';
-    if (m & TYPESTR_CVR_R) s->buf[++i] = 'r';
+    if (m & TYPESTR_CVR_C) s->buf[++i] = TYPE_BYTE_CONST;
+    if (m & TYPESTR_CVR_V) s->buf[++i] = TYPE_BYTE_VOLATILE;
+    if (m & TYPESTR_CVR_R) s->buf[++i] = TYPE_BYTE_RESTRICT;
     s->buf[0] = i;
 }
 
@@ -532,7 +531,7 @@ static void typestr_append_decltype_DeclSpecs(const struct Ast* const* expr_seqs
     else if (d->tok->type == LEX_UUVALIST)
     {
         if (s->buf[0] < 0 || s->buf[0] >= TYPESTR_BUF_SIZE - 1) abort();
-        s->buf[(int)++s->buf[0]] = TYPE_BYTE_UUVALIST;
+        s->buf[++s->buf[0]] = TYPE_BYTE_UUVALIST;
         typestr_append_offset(s, 1, TYPE_BYTE_ARRAY);
     }
     else
@@ -566,13 +565,8 @@ static void typestr_append_decltype_DeclSpecs(const struct Ast* const* expr_seqs
                 break;
             default: abort();
         }
-        if (ch == 0) abort();
-        if (s->buf[0] != 0) abort();
-        s->buf[(int)++s->buf[0]] = ch;
-        if (s->buf[0] != 1) abort();
-        if (s->buf[1] != ch) abort();
+        s->buf[(unsigned)++s->buf[0]] = ch;
     }
-    if (s->buf[0] == 1 && s->buf[1] == 0) abort();
 
     unsigned int m = 0;
     if (d->is_const) m |= TYPESTR_CVR_C;
@@ -619,7 +613,6 @@ static void typestr_append_decltype(const struct Ast* const* expr_seqs,
         {
             struct DeclArr* d = (struct DeclArr*)e;
             typestr_append_decltype(expr_seqs, tt, s, d->type);
-            if (s->buf[0] == 1 && s->buf[1] == 0) abort();
             typestr_add_array(s, d->integer_arity);
             return;
         }
@@ -687,9 +680,9 @@ __forceinline static void typestr_from_decltype_Decl(const struct Ast* const* ex
 
 static size_t typestr_get_size_i(struct Elaborator* elab, const struct TypeStr* ts, int i, const RowCol* rc)
 {
-    if (ts->buf[i] == 'r') --i;
-    if (ts->buf[i] == 'v') --i;
-    if (ts->buf[i] == 'c') --i;
+    if (ts->buf[i] == TYPE_BYTE_RESTRICT) --i;
+    if (ts->buf[i] == TYPE_BYTE_VOLATILE) --i;
+    if (ts->buf[i] == TYPE_BYTE_CONST) --i;
     switch (ts->buf[i])
     {
         case TYPE_BYTE_STRUCT:
@@ -741,9 +734,9 @@ static size_t typestr_get_size(struct Elaborator* elab, const struct TypeStr* ts
 
 static size_t typestr_get_align_i(struct Elaborator* elab, const struct TypeStr* ts, int i)
 {
-    if (ts->buf[i] == 'r') --i;
-    if (ts->buf[i] == 'v') --i;
-    if (ts->buf[i] == 'c') --i;
+    if (ts->buf[i] == TYPE_BYTE_RESTRICT) --i;
+    if (ts->buf[i] == TYPE_BYTE_VOLATILE) --i;
+    if (ts->buf[i] == TYPE_BYTE_CONST) --i;
     switch (ts->buf[i])
     {
         case TYPE_BYTE_STRUCT:
@@ -1063,6 +1056,7 @@ static void elaborate_binop(struct Elaborator* elab,
                                "error: expected integer type in first argument but got '%.*s'\n",
                                &orig_lhs);
                 *rty = s_type_literal_int;
+                return;
             }
             break;
         case TOKEN_SYM1('/'):
@@ -1074,6 +1068,7 @@ static void elaborate_binop(struct Elaborator* elab,
                                "error: expected arithmetic type in first argument but got '%.*s'\n",
                                &orig_lhs);
                 *rty = s_type_literal_int;
+                return;
             }
             break;
         case TOKEN_SYM2('=', '='):
@@ -1096,7 +1091,8 @@ static void elaborate_binop(struct Elaborator* elab,
                                elab->types,
                                "error: expected scalar type in first argument but got '%.*s'\n",
                                &orig_lhs);
-                *rty = s_type_unknown;
+                *rty = s_type_literal_int;
+                return;
             }
             break;
         default: break;
@@ -1121,6 +1117,8 @@ static void elaborate_binop(struct Elaborator* elab,
                                elab->types,
                                "error: expected integer type in second argument but got '%.*s'\n",
                                &orig_rhs);
+                *rty = s_type_literal_int;
+                return;
             }
             break;
         case TOKEN_SYM1('/'):
@@ -1133,6 +1131,8 @@ static void elaborate_binop(struct Elaborator* elab,
                                elab->types,
                                "error: expected arithmetic type in second argument but got '%.*s'\n",
                                &orig_rhs);
+                *rty = s_type_literal_int;
+                return;
             }
             break;
         case TOKEN_SYM2('=', '='):
@@ -1154,6 +1154,8 @@ static void elaborate_binop(struct Elaborator* elab,
                                elab->types,
                                "error: expected scalar type in second argument but got '%.*s'\n",
                                &orig_rhs);
+                *rty = s_type_literal_int;
+                return;
             }
             break;
         default: break;
@@ -1265,7 +1267,7 @@ static void elaborate_binop(struct Elaborator* elab,
             else if (typestr_match(&orig_lhs, &orig_rhs))
             {
             }
-            else if (typestr_is_pointer(rty) && typestr_is_pointer(&rhs_ty))
+            else if (rhs_mask & lhs_mask & TYPE_FLAGS_POINTER)
             {
                 --rty->buf[0];
                 --rhs_ty.buf[0];
@@ -1290,10 +1292,10 @@ static void elaborate_binop(struct Elaborator* elab,
                     *rty = s_type_unknown;
                 }
             }
-            else if (typestr_is_pointer(rty) && is_zero_constant(elab, e->rhs))
+            else if ((lhs_mask & TYPE_FLAGS_POINTER) && is_zero_constant(elab, e->rhs))
             {
             }
-            else if (typestr_is_pointer(&rhs_ty) && is_zero_constant(elab, e->lhs))
+            else if ((rhs_mask & TYPE_FLAGS_POINTER) && is_zero_constant(elab, e->lhs))
             {
                 *rty = rhs_ty;
             }
@@ -2122,9 +2124,7 @@ static void elaborate_expr(struct Elaborator* elab,
         default: parser_tok_error(NULL, "error: unknown expr kind: %s\n", ast_kind_to_string(top_expr->kind)); return;
     }
 
-    if (rty->pad2 != 0) abort();
     top_expr->sizing = typestr_calc_sizing(elab, rty, top_expr->tok ? &top_expr->tok->rc : NULL);
-    if (rty->pad2 != 0) abort();
 #if defined(TRACING_ELAB)
     fprintf(stderr, "}\n");
 #endif
@@ -2242,7 +2242,10 @@ static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
     if (!decl->prev_decl)
     {
         typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, &sym->type, decl);
-        sym->is_char_array = typestr_is_aggregate(&sym->type);
+
+        unsigned int t = typestr_mask(&sym->type);
+        sym->is_array_or_fn = !!(t & TYPE_MASK_FN_ARR);
+        sym->is_aggregate = !!(t & TYPE_MASK_AGGREGATE);
     }
     if (sym->def == decl)
     {
@@ -2332,7 +2335,7 @@ static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
                 array_push_zeroes(&elab->constinit, round_to_alignment(sym->size.width, 8));
                 array_push_zeroes(&elab->constinit_bases, round_to_alignment(sym->size.width, 8));
                 UNWRAP(elaborate_constinit(
-                    elab, sym->constinit_offset, 0, sym->size.width, decl->init, sym->is_char_array));
+                    elab, sym->constinit_offset, 0, sym->size.width, decl->init, sym->is_aggregate));
             }
         }
     }
