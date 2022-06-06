@@ -17,8 +17,6 @@
 #include "typestr.h"
 #include "unwrap.h"
 
-static const struct TypeStr s_type_unknown = {0};
-
 typedef struct TypeTable
 {
     struct Array typesyms;
@@ -115,9 +113,7 @@ static unsigned int typestr_mask(const struct TypeStr* ts)
     return r;
 }
 
-const struct TypeStr s_void = {
-    .buf = {1, TYPE_BYTE_VOID},
-};
+static const struct TypeStr s_type_unknown = {0};
 static const struct TypeStr s_type_void = {.buf = {1, TYPE_BYTE_VOID}};
 static const struct TypeStr s_type_literal_int = {.buf = {1, TYPE_BYTE_INT}};
 static const struct TypeStr s_type_mutable_char = {.buf = {1, TYPE_BYTE_CHAR}};
@@ -417,8 +413,8 @@ static void typestr_implicit_conversion(Elaborator* elab,
         {
             // cvr_to contains cvr_from
             if (typestr_match(&to, &from)) return;
-            if (typestr_match(&s_void, &to)) return;
-            if (typestr_match(&s_void, &from)) return;
+            if (typestr_match(&s_type_void, &to)) return;
+            if (typestr_match(&s_type_void, &from)) return;
         }
     }
     else if (from_mask & TYPE_FLAGS_INT)
@@ -1020,6 +1016,51 @@ static void typestr_promote_integer(struct TypeStr* rty)
     }
 }
 
+enum
+{
+    BINOP_FLAGS_INT = 1,
+    BINOP_FLAGS_ARITH = 2,
+    BINOP_FLAGS_SCALAR = 4,
+    BINOP_FLAGS_ASSIGN = 8,
+};
+
+static unsigned int binop_mask(unsigned int tok_type)
+{
+    switch (tok_type)
+    {
+        case TOKEN_SYM2('<', '<'):
+        case TOKEN_SYM2('>', '>'):
+        case TOKEN_SYM1('|'):
+        case TOKEN_SYM1('&'):
+        case TOKEN_SYM1('^'):
+        case TOKEN_SYM1('%'): return BINOP_FLAGS_INT;
+        case TOKEN_SYM3('<', '<', '='):
+        case TOKEN_SYM3('>', '>', '='):
+        case TOKEN_SYM2('&', '='):
+        case TOKEN_SYM2('|', '='): return BINOP_FLAGS_INT | BINOP_FLAGS_ASSIGN;
+        case TOKEN_SYM1('/'):
+        case TOKEN_SYM1('*'): return BINOP_FLAGS_ARITH;
+        case TOKEN_SYM2('*', '='):
+        case TOKEN_SYM2('/', '='): return BINOP_FLAGS_ARITH | BINOP_FLAGS_ASSIGN;
+        case TOKEN_SYM2('=', '='):
+        case TOKEN_SYM2('<', '='):
+        case TOKEN_SYM2('>', '='):
+        case TOKEN_SYM2('!', '='):
+        case TOKEN_SYM1('<'):
+        case TOKEN_SYM1('>'):
+        case TOKEN_SYM1('['):
+        case TOKEN_SYM1('+'):
+        case TOKEN_SYM1('-'):
+        case TOKEN_SYM1('?'):
+        case TOKEN_SYM2('|', '|'):
+        case TOKEN_SYM2('&', '&'): return BINOP_FLAGS_SCALAR;
+        case TOKEN_SYM2('+', '='):
+        case TOKEN_SYM2('-', '='): return BINOP_FLAGS_SCALAR | BINOP_FLAGS_ASSIGN;
+        case TOKEN_SYM1('='): return BINOP_FLAGS_ASSIGN;
+        default: return 0;
+    }
+}
+
 static void elaborate_binop(struct Elaborator* elab,
                             struct ElaborateDeclCtx* ctx,
                             struct ExprBinOp* e,
@@ -1038,131 +1079,71 @@ static void elaborate_binop(struct Elaborator* elab,
     const struct TypeStr orig_rhs = rhs_ty;
     typestr_decay(&rhs_ty);
     unsigned int rhs_mask = typestr_mask(&rhs_ty);
+
+    const unsigned int binmask = binop_mask(e->tok->type);
+
     // check lhs mask
-    switch (e->tok->type)
+    if (binmask & BINOP_FLAGS_INT)
     {
-        case TOKEN_SYM2('<', '<'):
-        case TOKEN_SYM2('>', '>'):
-        case TOKEN_SYM3('<', '<', '='):
-        case TOKEN_SYM3('>', '>', '='):
-        case TOKEN_SYM1('|'):
-        case TOKEN_SYM1('&'):
-        case TOKEN_SYM1('^'):
-        case TOKEN_SYM1('%'):
-            if (!(lhs_mask & TYPE_FLAGS_INT))
-            {
-                typestr_error1(&e->tok->rc,
-                               elab->types,
-                               "error: expected integer type in first argument but got '%.*s'\n",
-                               &orig_lhs);
-                *rty = s_type_literal_int;
-                return;
-            }
-            break;
-        case TOKEN_SYM1('/'):
-        case TOKEN_SYM1('*'):
-            if (!(lhs_mask & TYPE_MASK_ARITH))
-            {
-                typestr_error1(&e->tok->rc,
-                               elab->types,
-                               "error: expected arithmetic type in first argument but got '%.*s'\n",
-                               &orig_lhs);
-                *rty = s_type_literal_int;
-                return;
-            }
-            break;
-        case TOKEN_SYM2('=', '='):
-        case TOKEN_SYM2('<', '='):
-        case TOKEN_SYM2('>', '='):
-        case TOKEN_SYM2('!', '='):
-        case TOKEN_SYM1('<'):
-        case TOKEN_SYM1('>'):
-        case TOKEN_SYM1('['):
-        case TOKEN_SYM1('+'):
-        case TOKEN_SYM1('-'):
-        case TOKEN_SYM1('?'):
-        case TOKEN_SYM2('+', '='):
-        case TOKEN_SYM2('-', '='):
-        case TOKEN_SYM2('|', '|'):
-        case TOKEN_SYM2('&', '&'):
-            if (!(lhs_mask & TYPE_MASK_SCALAR))
-            {
-                typestr_error1(&e->tok->rc,
-                               elab->types,
-                               "error: expected scalar type in first argument but got '%.*s'\n",
-                               &orig_lhs);
-                *rty = s_type_literal_int;
-                return;
-            }
-            break;
-        default: break;
+        if (!(lhs_mask & TYPE_FLAGS_INT))
+        {
+            typestr_error1(
+                &e->tok->rc, elab->types, "error: expected integer type in first argument but got '%.*s'\n", &orig_lhs);
+            *rty = s_type_literal_int;
+            return;
+        }
+        if (!(rhs_mask & TYPE_FLAGS_INT))
+        {
+            typestr_error1(&e->tok->rc,
+                           elab->types,
+                           "error: expected integer type in second argument but got '%.*s'\n",
+                           &orig_rhs);
+            *rty = s_type_literal_int;
+            return;
+        }
+    }
+    else if (binmask & BINOP_FLAGS_ARITH)
+    {
+        if (!(lhs_mask & TYPE_MASK_ARITH))
+        {
+            typestr_error1(&e->tok->rc,
+                           elab->types,
+                           "error: expected arithmetic type in first argument but got '%.*s'\n",
+                           &orig_lhs);
+            *rty = s_type_literal_int;
+            return;
+        }
+        if (!(rhs_mask & TYPE_MASK_ARITH))
+        {
+            typestr_error1(&e->tok->rc,
+                           elab->types,
+                           "error: expected arithmetic type in second argument but got '%.*s'\n",
+                           &orig_rhs);
+            *rty = s_type_literal_int;
+            return;
+        }
+    }
+    else if (binmask & BINOP_FLAGS_SCALAR || e->tok->type == TOKEN_SYM1('?'))
+    {
+        if (!(lhs_mask & TYPE_MASK_SCALAR))
+        {
+            typestr_error1(
+                &e->tok->rc, elab->types, "error: expected scalar type in first argument but got '%.*s'\n", &orig_lhs);
+            *rty = s_type_literal_int;
+            return;
+        }
+        if ((binmask & BINOP_FLAGS_SCALAR) && !(rhs_mask & TYPE_MASK_SCALAR))
+        {
+            typestr_error1(
+                &e->tok->rc, elab->types, "error: expected scalar type in second argument but got '%.*s'\n", &orig_rhs);
+            *rty = s_type_literal_int;
+            return;
+        }
     }
 
     // check rhs mask
-    switch (e->tok->type)
-    {
-        case TOKEN_SYM2('<', '<'):
-        case TOKEN_SYM2('>', '>'):
-        case TOKEN_SYM1('&'):
-        case TOKEN_SYM1('|'):
-        case TOKEN_SYM1('^'):
-        case TOKEN_SYM1('%'):
-        case TOKEN_SYM3('<', '<', '='):
-        case TOKEN_SYM3('>', '>', '='):
-        case TOKEN_SYM2('&', '='):
-        case TOKEN_SYM2('|', '='):
-            if (!(rhs_mask & TYPE_FLAGS_INT))
-            {
-                typestr_error1(&e->tok->rc,
-                               elab->types,
-                               "error: expected integer type in second argument but got '%.*s'\n",
-                               &orig_rhs);
-                *rty = s_type_literal_int;
-                return;
-            }
-            break;
-        case TOKEN_SYM1('/'):
-        case TOKEN_SYM1('*'):
-        case TOKEN_SYM2('*', '='):
-        case TOKEN_SYM2('/', '='):
-            if (!(rhs_mask & TYPE_MASK_ARITH))
-            {
-                typestr_error1(&e->tok->rc,
-                               elab->types,
-                               "error: expected arithmetic type in second argument but got '%.*s'\n",
-                               &orig_rhs);
-                *rty = s_type_literal_int;
-                return;
-            }
-            break;
-        case TOKEN_SYM2('=', '='):
-        case TOKEN_SYM2('<', '='):
-        case TOKEN_SYM2('>', '='):
-        case TOKEN_SYM2('!', '='):
-        case TOKEN_SYM1('<'):
-        case TOKEN_SYM1('>'):
-        case TOKEN_SYM1('['):
-        case TOKEN_SYM1('+'):
-        case TOKEN_SYM1('-'):
-        case TOKEN_SYM2('+', '='):
-        case TOKEN_SYM2('-', '='):
-        case TOKEN_SYM2('|', '|'):
-        case TOKEN_SYM2('&', '&'):
-            if (!(rhs_mask & TYPE_MASK_SCALAR))
-            {
-                typestr_error1(&e->tok->rc,
-                               elab->types,
-                               "error: expected scalar type in second argument but got '%.*s'\n",
-                               &orig_rhs);
-                *rty = s_type_literal_int;
-                return;
-            }
-            break;
-        default: break;
-    }
-
     int is_arithmetic = 0;
-    int rty_is_lhs = 0;
+    const int rty_is_lhs = !!(binmask & BINOP_FLAGS_ASSIGN);
     switch (e->tok->type)
     {
         case TOKEN_SYM2('*', '='):
@@ -1171,7 +1152,7 @@ static void elaborate_binop(struct Elaborator* elab,
         case TOKEN_SYM2('&', '='):
         case TOKEN_SYM2('|', '='):
         case TOKEN_SYM3('<', '<', '='):
-        case TOKEN_SYM3('>', '>', '='): rty_is_lhs = 1;
+        case TOKEN_SYM3('>', '>', '='):
         case TOKEN_SYM1('%'):
         case TOKEN_SYM1('/'):
         case TOKEN_SYM1('*'):
@@ -1180,7 +1161,7 @@ static void elaborate_binop(struct Elaborator* elab,
         case TOKEN_SYM1('^'):
         case TOKEN_SYM2('<', '<'):
         case TOKEN_SYM2('>', '>'): is_arithmetic = 1; break;
-        case TOKEN_SYM2('+', '='): rty_is_lhs = 1;
+        case TOKEN_SYM2('+', '='):
         case TOKEN_SYM1('+'):
             if (rhs_mask & lhs_mask & TYPE_FLAGS_POINTER)
             {
@@ -1204,7 +1185,7 @@ static void elaborate_binop(struct Elaborator* elab,
                 e->info = 1;
             }
             break;
-        case TOKEN_SYM2('-', '='): rty_is_lhs = 1;
+        case TOKEN_SYM2('-', '='):
         case TOKEN_SYM1('-'):
             if (lhs_mask & TYPE_FLAGS_POINTER)
             {
@@ -1272,11 +1253,11 @@ static void elaborate_binop(struct Elaborator* elab,
                 --rty->buf[0];
                 --rhs_ty.buf[0];
                 unsigned int combined_cvr = typestr_strip_cvr(rty) | typestr_strip_cvr(&rhs_ty);
-                if (typestr_match(rty, &s_void))
+                if (typestr_match(rty, &s_type_void))
                 {
                     *rty = rhs_ty;
                 }
-                if (typestr_match(&rhs_ty, &s_void) || typestr_match(rty, &rhs_ty))
+                if (typestr_match(&rhs_ty, &s_type_void) || typestr_match(rty, &rhs_ty))
                 {
                     typestr_add_cvr(rty, combined_cvr);
                     typestr_add_pointer(rty);

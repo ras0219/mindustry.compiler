@@ -2850,7 +2850,7 @@ int test_be_conversions(TestState* state)
     REQUIRE_NEXT_TACE({
         TACO_ASSIGN,
         {TACA_FRAME, .is_addr = 1, .sizing = s_sizing_schar, .frame_offset = 0},
-        {TACA_IMM, .sizing = s_sizing_schar, .imm = 11},
+        {TACA_IMM, .sizing = s_sizing_int, .imm = 11},
     });
     REQUIRE_NEXT_TACE({
         TACO_ASSIGN,

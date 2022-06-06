@@ -52,12 +52,6 @@ static __forceinline size_t round_to_alignment(size_t size, size_t align)
     return n - (n % align);
 }
 
-static __forceinline Sizing min_sizing(Sizing s1, Sizing s2)
-{
-    Sizing ret = {.is_signed = s2.is_signed, .width = s1.width < s2.width ? s1.width : s2.width};
-    return ret;
-}
-
 static __forceinline size_t be_frame_alloc(struct BackEnd* be, size_t size, size_t align)
 {
     if (size == 0 || align == 0) abort();
@@ -284,27 +278,13 @@ static struct TACAddress be_alloc_temp(struct BackEnd* be, Sizing sizing)
 static struct TACAddress be_ensure_ref(struct BackEnd* be, const struct TACAddress* in)
 {
     if (in->kind == TACA_REF) return *in;
-    if (in->is_addr || in->sizing.width <= 8)
-    {
-        struct TACEntry tace = {
-            .op = TACO_ADD,
-            .arg1 = *in,
-            .arg2 = taca_imm(0),
-        };
-        return be_push_tace(be, &tace, in->sizing);
-    }
-    else
-    {
-        const TACAddress ret = be_alloc_temp(be, in->sizing);
-        struct TACEntry tace = {
-            .op = TACO_ASSIGN,
-            .arg1 = ret,
-            .arg2 = *in,
-        };
-        tace.arg1.is_addr = 1;
-        be_push_tace(be, &tace, in->sizing);
-        return ret;
-    }
+    if (!in->is_addr && in->sizing.width > 8) abort();
+    struct TACEntry tace = {
+        .op = TACO_ADD,
+        .arg1 = *in,
+        .arg2 = taca_imm(0),
+    };
+    return be_push_tace(be, &tace, in->sizing);
 }
 
 static TACAddress be_deref(struct BackEnd* be, const TACAddress* in, Sizing sizing, const struct RowCol* rc)
@@ -715,7 +695,7 @@ static int be_compile_lvalue_ExprBinOp(struct BackEnd* be, struct ExprBinOp* e, 
             UNWRAP(be_compile_lvalue(be, e->lhs, out));
             tace.arg1 = *out;
             tace.arg1.sizing = e->sizing;
-            tace.arg2.sizing = min_sizing(e->sizing, tace.arg2.sizing);
+            tace.arg2.sizing = tace.arg2.sizing;
             be_push_tace(be, &tace, e->sizing);
             goto fail;
 
@@ -1020,8 +1000,8 @@ static int be_compile_ExprBinOp(struct BackEnd* be, struct ExprBinOp* e, struct 
             UNWRAP(be_dereference(be, out, e->sizing, &e->tok->rc));
             break;
         case TOKEN_SYM1(','):
-            UNWRAP(be_compile_expr(be, e->rhs, &tace.arg2));
             UNWRAP(be_compile_expr(be, e->lhs, out));
+            UNWRAP(be_compile_expr(be, e->rhs, out));
             break;
         case TOKEN_SYM1('?'):
         {
@@ -1371,6 +1351,7 @@ static void be_compile_global(struct BackEnd* be, Decl* decl)
         const char* name;
         if (decl->specs->parent)
         {
+            ++be->next_label;
             int n = snprintf(NULL, 0, "%s$%zu", sym->name, be->next_label);
             name = autoheap_alloc(&be->sym_renames, n + 1);
             snprintf((char*)name, n + 1, "%s$%zu", sym->name, be->next_label);
