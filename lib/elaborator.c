@@ -870,6 +870,20 @@ static int try_eval_constant(struct Elaborator* elab, const Expr* e, ConstValue*
                     out->byte_offset = l.byte_offset * r.byte_offset;
                     return 0;
                 }
+                case TOKEN_SYM1('/'):
+                {
+                    if (l.base || r.base) return 1;
+                    if (r.byte_offset == 0) return 1;
+                    out->byte_offset = l.byte_offset / r.byte_offset;
+                    return 0;
+                }
+                case TOKEN_SYM1('%'):
+                {
+                    if (l.base || r.base) return 1;
+                    if (r.byte_offset == 0) return 1;
+                    out->byte_offset = l.byte_offset % r.byte_offset;
+                    return 0;
+                }
                 case TOKEN_SYM1('|'):
                 {
                     if (l.base || r.base) return 1;
@@ -889,17 +903,13 @@ static int try_eval_constant(struct Elaborator* elab, const Expr* e, ConstValue*
                     return 0;
                 }
                 case TOKEN_SYM2('<', '<'):
-                {
                     if (l.base || r.base || r.byte_offset >= 64) return 1;
                     out->byte_offset = l.byte_offset << r.byte_offset;
                     return 0;
-                }
                 case TOKEN_SYM2('>', '>'):
-                {
                     if (l.base || r.base || r.byte_offset >= 64) return 1;
                     out->byte_offset = l.byte_offset << r.byte_offset;
                     return 0;
-                }
                 default: break;
             }
             return 1;
@@ -2047,7 +2057,11 @@ static void elaborate_expr(struct Elaborator* elab,
 #endif
             struct ExprField* e = top;
             elaborate_expr(elab, ctx, e->lhs, rty);
-            if (rty->buf[0] == 0) abort();
+            if (rty->buf[0] == 0)
+            {
+                parser_tok_error(e->lhs->tok, "error: unable to elaborate expression\n");
+                return;
+            }
             const struct TypeStr orig_lhs = *rty;
             if (e->is_arrow) typestr_dereference(rty);
             unsigned int cvr_mask = typestr_strip_cvr(rty);

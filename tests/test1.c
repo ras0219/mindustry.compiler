@@ -405,6 +405,40 @@ fail:
     return rc;
 }
 
+int parse_cmake_size_test(struct TestState* state)
+{
+    int rc = 1;
+    StandardTest test;
+    SUBTEST(stdtest_run(state,
+                        &test,
+                        "#define SIZEOF_DPTR (sizeof(void*))\n"
+                        "const char info_sizeof_dptr[] = {\n"
+                        "'I', 'N', 'F', 'O', ':', 's', 'i', 'z', 'e', 'o', 'f', '_', 'd', 'p', 't',\n"
+                        "'r', '[', ('0' + ((SIZEOF_DPTR / 10) % 10)), ('0' + (SIZEOF_DPTR % 10)), ']',\n"
+                        "'\\0'\n"
+                        "};"));
+
+    rc = 0;
+
+fail:
+    return rc;
+}
+
+int parse_typedef_enum(struct TestState* state)
+{
+    int rc = 1;
+    StandardTest test;
+    SUBTEST(stdtest_run(state,
+                        &test,
+                        "typedef enum {   CURLPX_OK, } CURLproxycode;\n"
+                        "struct PureInfo { CURLproxycode pc; };"));
+
+    rc = 0;
+
+fail:
+    return rc;
+}
+
 int parse_initializer(struct TestState* state)
 {
     int rc = 1;
@@ -3641,6 +3675,8 @@ int main()
     RUN_TEST(parse_initializer_struct);
     RUN_TEST(preproc_ternary);
     RUN_TEST(parse_strings);
+    RUN_TEST(parse_cmake_size_test);
+    RUN_TEST(parse_typedef_enum);
     RUN_TEST(parse_main);
     RUN_TEST(parse_body);
     RUN_TEST(parse_sizeof);
