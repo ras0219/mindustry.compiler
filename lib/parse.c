@@ -957,14 +957,11 @@ fail:
     return cur_tok;
 }
 
-static const struct Token* parse_declarator1(Parser* p,
-                                             const struct Token* cur_tok,
-                                             const struct Token** out_id,
-                                             struct Ast** out_type,
-                                             struct Ast*** out_p_basetype)
+static const Token* parse_declarator1(
+    Parser* p, const Token* cur_tok, const Token** out_id, AstType** out_type, AstType*** out_p_basetype)
 {
-    struct Ast* base_expr = NULL;
-    struct Ast** out_base_expr = NULL;
+    AstType* base_expr = NULL;
+    AstType** out_base_expr = NULL;
     if (cur_tok->type == LEX_CDECL) ++cur_tok;
     if (cur_tok->type == TOKEN_SYM1('*'))
     {
@@ -980,7 +977,7 @@ static const struct Token* parse_declarator1(Parser* p,
                 struct DeclPtr* p2 = pool_alloc_zeroes(&p->ast_pools[AST_DECLPTR], sizeof(struct DeclPtr));
                 p2->kind = AST_DECLPTR;
                 p2->tok = cur_tok;
-                p2->type = &base_ptr->ast;
+                p2->type = &base_ptr->ast_type;
                 base_ptr = p2;
                 ++cur_tok;
             }
@@ -1002,7 +999,7 @@ static const struct Token* parse_declarator1(Parser* p,
             else
                 break;
         }
-        base_expr = &base_ptr->ast;
+        base_expr = &base_ptr->ast_type;
     }
     if (cur_tok->type == TOKEN_SYM1('('))
     {
@@ -1031,7 +1028,7 @@ static const struct Token* parse_declarator1(Parser* p,
         {
             struct DeclFn* declfn = pool_alloc(&p->ast_pools[AST_DECLFN], sizeof(struct DeclFn));
             PARSER_DO(parse_declarator_fnargs(p, cur_tok, declfn));
-            *out_type = &declfn->ast;
+            *out_type = &declfn->ast_type;
             out_type = &declfn->type;
             continue;
         }
@@ -1039,7 +1036,7 @@ static const struct Token* parse_declarator1(Parser* p,
         {
             struct DeclArr* declarr = NULL;
             PARSER_DO(parse_declarator_arr(p, cur_tok, &declarr));
-            *out_type = &declarr->ast;
+            *out_type = &declarr->ast_type;
             out_type = &declarr->type;
             continue;
         }
@@ -1073,9 +1070,9 @@ static const struct Token* parse_declarator(Parser* p, const struct Token* cur_t
         ++cur_tok;
         PARSER_DO(parse_msdeclspec(p, cur_tok, &decl->attr));
     }
-    struct Ast** p_basetype = NULL;
+    AstType** p_basetype = NULL;
     PARSER_DO(parse_declarator1(p, cur_tok, &decl->tok, &decl->type, &p_basetype));
-    *p_basetype = &decl->specs->ast;
+    *p_basetype = &decl->specs->ast_type;
     while (1)
     {
         if (cur_tok->type == LEX_ATTRIBUTE)
@@ -1146,7 +1143,7 @@ static const struct Token* parse_enum_body(struct Parser* p, const struct Token*
             .kind = AST_DECL,
             .tok = cur_tok,
             .specs = specs,
-            .type = &specs->ast,
+            .type = &specs->ast_type,
         };
         ++cur_tok;
         if (cur_tok->type == TOKEN_SYM1('='))
@@ -1474,7 +1471,7 @@ static const struct Token* parse_stmt_decl(Parser* p, const struct Token* cur_to
                     {
                         // Inject anonymous declarations into suinit bodies
                         Decl* anon_decl = parse_alloc_decl(p, decls->specs);
-                        anon_decl->type = &decls->specs->ast;
+                        anon_decl->type = &decls->specs->ast_type;
                         decls->offset = array_size(&p->expr_seqs, sizeof(void*));
                         decls->extent = 1;
                         arrptr_push(&p->expr_seqs, anon_decl);
@@ -1837,10 +1834,10 @@ static void nl_indent(FILE* f, int depth)
 }
 
 static void parser_dump_ast(struct Parser* p, FILE* f, Ast* ast, int depth);
-static void parser_dump_type_ast(struct Parser* p, FILE* f, Ast* ast, int depth)
+static void parser_dump_type_ast(struct Parser* p, FILE* f, AstType* ast, int depth)
 {
     if (ast->kind != AST_DECLSPEC)
-        parser_dump_ast(p, f, ast, depth);
+        parser_dump_ast(p, f, &ast->ast, depth);
     else
         fprintf(f, "/**/");
 }

@@ -474,10 +474,7 @@ static void typestr_add_cvr(struct TypeStr* s, unsigned int mask)
     s->buf[0] = i;
 }
 
-static void typestr_append_decltype(const struct Ast* const* expr_seqs,
-                                    struct TypeTable* tt,
-                                    struct TypeStr* s,
-                                    const struct Ast* e);
+static void typestr_append_decltype(const Decl* const* expr_seqs, TypeTable* tt, TypeStr* s, const AstType* e);
 
 static void typestr_append_typestr(TypeStr* out, const TypeStr* in)
 {
@@ -490,10 +487,19 @@ static void typestr_append_typestr(TypeStr* out, const TypeStr* in)
     out->buf[0] += in->buf[0];
 }
 
-static void typestr_append_decltype_DeclSpecs(const struct Ast* const* expr_seqs,
-                                              struct TypeTable* tt,
-                                              struct TypeStr* s,
-                                              const struct DeclSpecs* d)
+__forceinline static void typestr_append_decltype_Decl(const struct Decl* const* expr_seqs,
+                                                       TypeTable* tt,
+                                                       struct TypeStr* s,
+                                                       const Decl* d)
+{
+    typestr_append_decltype(expr_seqs, tt, s, d->type);
+    if (d->specs->is_fn_arg > 0)
+    {
+        typestr_decay(s);
+    }
+}
+
+static void typestr_append_decltype_DeclSpecs(TypeTable* tt, struct TypeStr* s, const DeclSpecs* d)
 {
 #if defined(TRACING_ELAB)
     fprintf(stderr, "typestr_append_decltype_DeclSpecs\n");
@@ -570,24 +576,12 @@ static void typestr_append_decltype_DeclSpecs(const struct Ast* const* expr_seqs
     typestr_add_cvr(s, m);
     return;
 }
-static void typestr_append_decltype(const struct Ast* const* expr_seqs,
-                                    struct TypeTable* tt,
-                                    struct TypeStr* s,
-                                    const struct Ast* e)
+static void typestr_append_decltype(const Decl* const* expr_seqs, TypeTable* tt, TypeStr* s, const AstType* e)
 {
     if (!e) abort();
     switch (e->kind)
     {
-        case AST_DECL:
-        {
-            typestr_append_decltype(expr_seqs, tt, s, ((struct Decl*)e)->type);
-            if (((struct Decl*)e)->specs->is_fn_arg > 0)
-            {
-                typestr_decay(s);
-            }
-            return;
-        }
-        case AST_DECLSPEC: return typestr_append_decltype_DeclSpecs(expr_seqs, tt, s, (struct DeclSpecs*)e);
+        case AST_DECLSPEC: typestr_append_decltype_DeclSpecs(tt, s, (struct DeclSpecs*)e); break;
         case AST_DECLPTR:
         {
             struct DeclPtr* d = (struct DeclPtr*)e;
@@ -598,14 +592,14 @@ static void typestr_append_decltype(const struct Ast* const* expr_seqs,
             if (d->is_volatile) m |= TYPESTR_CVR_V;
             if (d->is_restrict) m |= TYPESTR_CVR_R;
             typestr_add_cvr(s, m);
-            return;
+            break;
         }
         case AST_DECLARR:
         {
             struct DeclArr* d = (struct DeclArr*)e;
             typestr_append_decltype(expr_seqs, tt, s, d->type);
             typestr_add_array(s, d->integer_arity);
-            return;
+            break;
         }
         case AST_DECLFN:
         {
@@ -616,7 +610,7 @@ static void typestr_append_decltype(const struct Ast* const* expr_seqs,
             {
                 struct TypeStr* arg_ts = array_push_zeroes(&args, sizeof(struct TypeStr));
                 struct StmtDecls* arg_decls = (void*)expr_seqs[d->offset + i];
-                typestr_append_decltype(expr_seqs, tt, arg_ts, expr_seqs[arg_decls->offset]);
+                typestr_append_decltype_Decl(expr_seqs, tt, arg_ts, expr_seqs[arg_decls->offset]);
             }
             if (d->is_varargs)
             {
@@ -643,30 +637,24 @@ static void typestr_append_decltype(const struct Ast* const* expr_seqs,
                 arrsz_push(&tt->fn_args_ends, array_size(&tt->fn_args, sizeof(struct TypeStr)));
             }
             typestr_append_offset(s, i, TYPE_BYTE_FUNCTION);
-            return;
+            break;
         }
-        default: break;
+        default:
+            fprintf(stderr, "typestr_append_decltype(, %s) failed\n", ast_kind_to_string(e->kind));
+            *s = s_type_unknown;
+            break;
     }
-    fprintf(stderr, "typestr_append_decltype(, %s) failed\n", ast_kind_to_string(e->kind));
-    *s = s_type_unknown;
 }
 
-static void typestr_from_decltype(const struct Ast* const* expr_seqs,
-                                  struct TypeTable* tt,
-                                  struct TypeStr* s,
-                                  struct Ast* e)
+__forceinline static void typestr_from_decltype_Decl(const Decl* const* expr_seqs,
+                                                     TypeTable* tt,
+                                                     struct TypeStr* s,
+                                                     const Decl* d)
 {
     // initialize type
     *s = s_type_unknown;
-    typestr_append_decltype(expr_seqs, tt, s, e);
+    typestr_append_decltype_Decl(expr_seqs, tt, s, d);
     if (s->buf[0] == 0) abort();
-}
-__forceinline static void typestr_from_decltype_Decl(const struct Ast* const* expr_seqs,
-                                                     struct TypeTable* tt,
-                                                     struct TypeStr* s,
-                                                     struct Decl* d)
-{
-    typestr_from_decltype(expr_seqs, tt, s, &d->ast);
 }
 
 static size_t typestr_get_size_i(struct Elaborator* elab, const struct TypeStr* ts, int i, const RowCol* rc)
@@ -2131,7 +2119,7 @@ static __forceinline size_t round_to_alignment(size_t size, size_t align)
     return n - (n % align);
 }
 
-static void elaborate_decltype(struct Elaborator* elab, struct Ast* ast)
+static void elaborate_decltype(Elaborator* elab, AstType* ast)
 {
     ast->elaborated = 1;
     switch (ast->kind)

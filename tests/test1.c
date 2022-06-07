@@ -1619,7 +1619,7 @@ int parse_params(struct TestState* state)
             typestr_fmt(test.elab->types, &w->sym->type, &arr);
             array_push_byte(&arr, 0);
             REQUIRE_STR_EQ("function of (pointer to int) returning int", arr.data);
-            REQUIRE_AST(DeclFn, fn, w->type)
+            REQUIRE_AST(DeclFn, fn, &w->type->ast)
             {
                 REQUIRE_EQ(1, fn->extent);
                 REQUIRE_EXPR(StmtDecls, arg1s, exprs[fn->offset])

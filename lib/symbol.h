@@ -20,9 +20,24 @@ typedef struct TypeSymbol
     size_t align;
 } TypeSymbol;
 
-typedef struct DeclSpecs
+typedef struct AstType
 {
     INHERIT_AST;
+} AstType;
+
+#define INHERIT_ASTTYPE                                                                                                \
+    union                                                                                                              \
+    {                                                                                                                  \
+        struct AstType ast_type;                                                                                       \
+        struct                                                                                                         \
+        {                                                                                                              \
+            INHERIT_AST;                                                                                               \
+        };                                                                                                             \
+    }
+
+typedef struct DeclSpecs
+{
+    INHERIT_ASTTYPE;
 
     /// encompassing function or struct
     Ast* parent;
@@ -59,9 +74,9 @@ typedef struct DeclSpecs
 
 struct DeclPtr
 {
-    INHERIT_AST;
+    INHERIT_ASTTYPE;
+    struct AstType* type;
 
-    struct Ast* type;
     int is_const : 1;
     int is_volatile : 1;
     int is_restrict : 1;
@@ -69,9 +84,9 @@ struct DeclPtr
 
 typedef struct DeclFn
 {
-    INHERIT_AST;
+    INHERIT_ASTTYPE;
+    struct AstType* type;
 
-    struct Ast* type;
     unsigned is_varargs : 1;
     size_t offset;
     size_t extent;
@@ -82,9 +97,9 @@ typedef struct DeclFn
 
 typedef struct DeclArr
 {
-    INHERIT_AST;
+    INHERIT_ASTTYPE;
+    struct AstType* type;
 
-    struct Ast* type;
     struct Expr* arity;
     // elaboration
     unsigned int integer_arity;
@@ -96,10 +111,10 @@ typedef struct DeclArr
 typedef struct Decl
 {
     INHERIT_AST;
+    struct AstType* type;
 
     Attribute attr;
     DeclSpecs* specs;
-    Ast* type;
     Ast* init;
 
     struct Decl* prev_decl;

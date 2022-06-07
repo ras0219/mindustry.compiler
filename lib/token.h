@@ -5,7 +5,7 @@
 #include "compilermacros.h"
 #include "rowcol.h"
 
-struct Token
+typedef struct Token
 {
     struct RowCol rc;
     // enum LexerState
@@ -14,7 +14,7 @@ struct Token
     unsigned int type : 24;
     unsigned int tok_len;
     ptrdiff_t sp_offset;
-};
+} Token;
 
 #define TOKEN_SYM1(A) (0x80 + (unsigned int)(A))
 #define TOKEN_SYM2(A, B) (0x80 + (unsigned int)(A) + 0x100 * (unsigned int)(B))
