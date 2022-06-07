@@ -140,7 +140,7 @@ typedef struct ExprRef
 #define AST_STRUCT_EXPR_REF ExprRef
 #define AST_KIND_ExprRef EXPR_REF
 
-struct ExprField
+typedef struct ExprField
 {
     INHERIT_EXPR;
 
@@ -152,7 +152,7 @@ struct ExprField
     /* filled by elaboration */
     struct Symbol* sym;
     size_t field_offset;
-};
+} ExprField;
 #define AST_STRUCT_EXPR_FIELD ExprField
 #define AST_KIND_ExprField EXPR_FIELD
 
