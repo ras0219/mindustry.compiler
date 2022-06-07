@@ -364,6 +364,7 @@ static const struct Token* pp_parse_if_expr(struct Preprocessor* pp, const struc
     int or_value = 0;
     int and_value = 1;
     int invert = 0;
+    int negate = 0;
 top:
 #if defined(TRACING_PREPROC)
     fprintf(stderr,
@@ -407,6 +408,15 @@ top:
         ++cur;
         goto top;
     }
+    else if (cur->type == TOKEN_SYM1('-'))
+    {
+        if (!invert)
+        {
+            negate = !negate;
+        }
+        ++cur;
+        goto top;
+    }
     else
     {
         parser_tok_error(cur, "error: expected primary expression in macro condition\n");
@@ -428,6 +438,13 @@ top:
     if (invert)
     {
         *out_value = (invert & 1) ^ (*out_value != 0);
+        invert = 0;
+    }
+    if (negate)
+    {
+        if (*out_value == INT32_MIN) abort();
+        *out_value = -*out_value;
+        negate = 0;
     }
 
     if (mul_op)

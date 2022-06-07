@@ -156,6 +156,14 @@ static int parse_arguments(int argc, const char* const* argv, struct Arguments* 
                 }
                 array_appends(&out->inc, argv[i]);
             }
+            else if (argv[i][1] == 'I')
+            {
+                if (out->inc.sz)
+                {
+                    array_push_byte(&out->inc, ';');
+                }
+                array_appends(&out->inc, argv[i] + 2);
+            }
             else if (strcmp(argv[i] + 1, "N") == 0)
             {
                 ++i;
@@ -319,6 +327,7 @@ int main(int argc, const char* const* argv)
         "__x86_64__",
         "__STDC__",
         "_POSIX_SOURCE",
+        "_C99_SOURCE",
         "__DARWIN_OS_INLINE=static inline",
         "__llvm__",
         "__builtin_bswap32",
