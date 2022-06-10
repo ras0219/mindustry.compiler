@@ -15,4 +15,6 @@ typedef enum LitSuffix
     LIT_SUFFIX_LU_DECIMAL,
     LIT_SUFFIX_LL_DECIMAL,
     LIT_SUFFIX_LLU_DECIMAL,
+
+    LIT_SUFFIX_MASK_UNSIGNED = 1,
 } LitSuffix;

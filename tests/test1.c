@@ -18,10 +18,16 @@
 #define REQUIRE_SIZING_EQ(expected, actual)                                                                            \
     do                                                                                                                 \
     {                                                                                                                  \
-        const Sizing a = (actual);                                                                                     \
-        const Sizing e = (expected);                                                                                   \
-        REQUIRE_EQ_IMPL(__FILE__, __LINE__, e.width, #expected ".width", a.width, #actual ".width");                   \
-        REQUIRE_EQ_IMPL(__FILE__, __LINE__, e.is_signed, #expected ".is_signed", a.is_signed, #actual ".is_signed");   \
+        const Sizing _require_s_e = (expected);                                                                        \
+        const Sizing _require_s_a = (actual);                                                                          \
+        REQUIRE_EQ_IMPL(                                                                                               \
+            __FILE__, __LINE__, _require_s_e.width, #expected ".width", _require_s_a.width, #actual ".width");         \
+        REQUIRE_EQ_IMPL(__FILE__,                                                                                      \
+                        __LINE__,                                                                                      \
+                        _require_s_e.is_signed,                                                                        \
+                        #expected ".is_signed",                                                                        \
+                        _require_s_a.is_signed,                                                                        \
+                        #actual ".is_signed");                                                                         \
     } while (0)
 
 static const Sizing s_sizing_int = {.width = 4, .is_signed = 1};
@@ -30,6 +36,43 @@ static const Sizing s_sizing_schar = {.width = 1, .is_signed = 1};
 static const Sizing s_sizing_uchar = {.width = 1};
 static const Sizing s_sizing_ptr = {.width = 8};
 static const Sizing s_sizing_sptr = {.width = 8, .is_signed = 1};
+
+int unittest_require_typestr_eq_impl(struct TestState* state,
+                                     const char* file,
+                                     int line,
+                                     const char* expected_str,
+                                     const char* actual_str,
+                                     TypeStr a,
+                                     TypeStr b,
+                                     const struct TypeTable* tt)
+{
+    int rc = 1;
+    ++state->assertions;
+
+    struct Array buf = {0};
+    typestr_fmt(tt, &a, &buf);
+    const size_t sep = buf.sz;
+    typestr_fmt(tt, &b, &buf);
+
+    REQUIRE_MEM_EQ_IMPL(
+        file, line, expected_str, (char*)buf.data, sep, actual_str, (char*)buf.data + sep, buf.sz - sep);
+
+    rc = 0;
+fail:
+    array_destroy(&buf);
+    return 0;
+}
+
+#define REQUIRE_TYPESTR_EQ_IMPL(file, line, expected, expected_str, actual, actual_str)                                \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        if (unittest_require_typestr_eq_impl(                                                                          \
+                state, file, line, expected_str, actual_str, (expected), (actual), test.elab->types))                  \
+            goto fail;                                                                                                 \
+    } while (0)
+
+#define REQUIRE_TYPESTR_EQ(expected, actual)                                                                           \
+    REQUIRE_TYPESTR_EQ_IMPL(__FILE__, __LINE__, expected, #expected, actual, #actual)
 
 int test_preproc(struct TestState* state, struct Preprocessor** pp, const char* text)
 {
@@ -417,6 +460,30 @@ int parse_cmake_size_test(struct TestState* state)
                         "'r', '[', ('0' + ((SIZEOF_DPTR / 10) % 10)), ('0' + (SIZEOF_DPTR % 10)), ']',\n"
                         "'\\0'\n"
                         "};"));
+
+    rc = 0;
+
+fail:
+    return rc;
+}
+
+int parse_fdset(struct TestState* state)
+{
+    int rc = 1;
+    StandardTest test;
+    SUBTEST(stdtest_run(state,
+                        &test,
+                        "int arr1[sizeof(int) * 8];\n"
+                        "int arr2[1 + 1024 % (sizeof(int) * 8)];\n"
+                        "int arr3[1024 / (sizeof(int) * 8)];\n"
+                        "int arr4[1024 == 1024];\n"
+                        "int arr5[10 ? 20 : 30];\n"
+                        "#define __DARWIN_howmany(x, y)  ((((x) % (y)) == 0) ? ((x) / (y)) : (((x) / (y)) + 1)) /* # "
+                        "y's == x bits? */\n"
+                        "\n"
+                        "typedef struct fd_set {\n"
+                        "	int       fds_bits[__DARWIN_howmany(1024, sizeof(int) * 8)];\n"
+                        "} fd_set;\n"));
 
     rc = 0;
 
@@ -1073,7 +1140,7 @@ int parse_uuva_list(struct TestState* state)
                     REQUIRE_EXPR(Decl, v, exprs[decls->offset])
                     {
                         REQUIRE_EQ(24, v->sym->size.width);
-                        REQUIRE_EQ('_', v->sym->type.buf[1]);
+                        REQUIRE_EQ('_', v->sym->type.buf.buf[1]);
                     }
                 }
                 REQUIRE_EXPR(StmtDecls, decls, exprs[body->offset + 1])
@@ -1082,7 +1149,7 @@ int parse_uuva_list(struct TestState* state)
                     REQUIRE_EXPR(Decl, v, exprs[decls->offset])
                     {
                         REQUIRE_EQ(24, v->sym->size.width);
-                        REQUIRE_EQ('_', v->sym->type.buf[1]);
+                        REQUIRE_EQ('_', v->sym->type.buf.buf[1]);
                     }
                 }
             }
@@ -1381,8 +1448,8 @@ int parse_enums(struct TestState* state)
     StandardTest test;
     SUBTEST(stdtest_run(state,
                         &test,
-                        "enum A { a1 = 5, a2, a3 };\n"
-                        "typedef struct { enum A a; } W;"
+                        "enum A { a1 = 5, a2, a3 = a2 + 20 };\n"
+                        "typedef struct { enum A a; } W;\n"
                         "int main() {\n"
                         "enum A x = a3;\n"
                         "int y = (x == a2);\n"
@@ -1406,12 +1473,26 @@ int parse_enums(struct TestState* state)
             REQUIRE_PTR_EQ(w, w->sym->def);
             REQUIRE_SIZING_EQ(s_sizing_int, w->sym->size);
         }
+        REQUIRE_EXPR(Decl, w, exprs[decls->specs->enum_init->offset + 1])
+        {
+            REQUIRE_EQ(6, w->sym->enum_value);
+            REQUIRE_PTR_EQ(w, w->sym->def);
+            REQUIRE_SIZING_EQ(s_sizing_int, w->sym->size);
+        }
+        REQUIRE_EXPR(Decl, w, exprs[decls->specs->enum_init->offset + 2])
+        {
+            REQUIRE_EQ(26, w->sym->enum_value);
+            REQUIRE_PTR_EQ(w, w->sym->def);
+            REQUIRE_SIZING_EQ(s_sizing_int, w->sym->size);
+        }
     }
 
 fail:
     stdtest_destroy(&test);
     return rc;
 }
+
+#define REQUIRE_TYPE_EQ(expected, actual)
 
 int parse_typedefs(struct TestState* state)
 {
@@ -1426,17 +1507,19 @@ int parse_typedefs(struct TestState* state)
                         "}\n"));
     rc = 0;
 
+    const TypeStr i = {.buf = {1, TYPE_BYTE_INT}};
+
     struct Expr** const exprs = (struct Expr**)test.parser->expr_seqs.data;
     REQUIRE_EQ(3, test.parser->top->extent);
     REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->offset])
     {
         REQUIRE_EQ(1, decls->extent);
-        REQUIRE_EXPR(Decl, w, exprs[decls->offset]) { REQUIRE_EQ(1, w->sym->type.buf[0]); }
+        REQUIRE_EXPR(Decl, w, exprs[decls->offset]) { REQUIRE_TYPESTR_EQ(i, w->sym->type); }
     }
     REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->offset + 1])
     {
         REQUIRE_EQ(1, decls->extent);
-        REQUIRE_EXPR(Decl, w, exprs[decls->offset]) { REQUIRE_EQ(1, w->sym->type.buf[0]); }
+        REQUIRE_EXPR(Decl, w, exprs[decls->offset]) { REQUIRE_TYPESTR_EQ(i, w->sym->type); }
     }
     REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->offset + 2])
     {
@@ -1451,7 +1534,7 @@ int parse_typedefs(struct TestState* state)
                     REQUIRE_EQ(1, decls->extent);
                     REQUIRE_EXPR(Decl, w, exprs[decls->offset])
                     {
-                        REQUIRE_EQ(1, w->sym->type.buf[0]);
+                        REQUIRE_TYPESTR_EQ(i, w->sym->type);
                         REQUIRE_SIZING_EQ(s_sizing_int, w->sym->size);
                     }
                 }
@@ -1694,7 +1777,8 @@ int require_taca(TestState* state, struct TACAddress* expected, struct TACAddres
     struct Array buf_actual = {0};
     debug_taca(&buf_expected, expected);
     debug_taca(&buf_actual, actual);
-    REQUIRE_MEM_EQ_IMPL(file, line, buf_expected.data, buf_expected.sz, buf_actual.data, buf_actual.sz);
+    REQUIRE_MEM_EQ_IMPL(
+        file, line, "expected", buf_expected.data, buf_expected.sz, "actual", buf_actual.data, buf_actual.sz);
     return 0;
 fail:
     return 1;
@@ -3676,6 +3760,7 @@ int main()
     RUN_TEST(preproc_ternary);
     RUN_TEST(parse_strings);
     RUN_TEST(parse_cmake_size_test);
+    RUN_TEST(parse_fdset);
     RUN_TEST(parse_typedef_enum);
     RUN_TEST(parse_main);
     RUN_TEST(parse_body);

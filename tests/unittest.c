@@ -13,3 +13,38 @@ void unittest_print_stack(const struct TestState* state)
     }
     fprintf(stderr, "%.*s", (int)state->info.sz, (char*)state->info.data);
 }
+
+int unittest_require_eq_impl(
+    struct TestState* state, const char* file, int line, const char* expected_str, const char* actual_str, int a, int b)
+{
+    ++state->assertions;
+
+    if (a != b)
+    {
+        REQUIRE_FAIL_IMPL(file, line, "'%s == %s' was '%d == %d'", expected_str, actual_str, a, b);
+    }
+
+    return 0;
+fail:
+    return 1;
+}
+
+int unittest_require_zu_eq_impl(struct TestState* state,
+                                const char* file,
+                                int line,
+                                const char* expected_str,
+                                const char* actual_str,
+                                size_t a,
+                                size_t b)
+{
+    ++state->assertions;
+
+    if (a != b)
+    {
+        REQUIRE_FAIL_IMPL(file, line, "'%s == %s' was '%zu == %zu'", expected_str, actual_str, a, b);
+    }
+
+    return 0;
+fail:
+    return 1;
+}

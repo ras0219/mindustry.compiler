@@ -156,7 +156,7 @@ typedef struct ExprField
 #define AST_STRUCT_EXPR_FIELD ExprField
 #define AST_KIND_ExprField EXPR_FIELD
 
-struct ExprBinOp
+typedef struct ExprBinOp
 {
     INHERIT_EXPR;
 
@@ -165,7 +165,7 @@ struct ExprBinOp
     // additional info for certain operations
     //  * '[','+', size of element
     int info;
-};
+} ExprBinOp;
 #define AST_STRUCT_EXPR_BINOP ExprBinOp
 #define AST_KIND_ExprBinOp EXPR_BINOP
 

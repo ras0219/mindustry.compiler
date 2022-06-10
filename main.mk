@@ -3,6 +3,7 @@
 # - srcdir
 # - outdir
 
+hdrs:=${wildcard ${srcdir}/lib/*.h}
 srcs:=${wildcard ${srcdir}/lib/*.c}
 basenames:=${basename ${notdir ${srcs}}}
 ints:=${addprefix ${intdir}/,${basenames}}
@@ -11,13 +12,13 @@ objs:=${addsuffix .o,${ints}}
 pps:=${addsuffix .i,${ints}}
 asts:=${addsuffix .ast,${ints}}
 
-${asms}: ${intdir}/%.asm: ${srcdir}/lib/%.c ${CC} | ${intdir}
+${asms}: ${intdir}/%.asm: ${srcdir}/lib/%.c ${CC} ${hdrs} | ${intdir}
 	${CC} -I ${srcdir}/lib ${CFLAGS} $(filter %.c,$^) -c -o $@
 
-${intdir}/main.asm: ${srcdir}/cli/main.c ${CC} | ${intdir}
+${intdir}/main.asm: ${srcdir}/cli/main.c ${CC} ${hdrs} | ${intdir}
 	${CC} -I ${srcdir}/lib ${CFLAGS} $(filter %.c,$^) -c -o $@
 
-${intdir}/test1.asm: ${srcdir}/tests/test1.c ${CC} | ${intdir}
+${intdir}/test1.asm: ${srcdir}/tests/test1.c ${CC} ${hdrs} | ${intdir}
 	${CC} -I ${srcdir}/lib ${CFLAGS} $(filter %.c,$^) -c -o $@
 
 ${pps}: ${intdir}/%.i: ${srcdir}/lib/%.c ${CC} | ${intdir}
