@@ -1702,6 +1702,24 @@ fail:
 const struct Token* preproc_tokens(const struct Preprocessor* pp) { return pp->toks.data; }
 const char* preproc_stringpool(const struct Preprocessor* pp) { return pp->stringpool.data.data; }
 
+static int preproc_dump_f(void* userp, const char* k, size_t def_offset)
+{
+    struct MacroDef* def = (struct MacroDef*)((const Preprocessor*)userp)->defs_info.data + def_offset;
+    printf("#define %s(%d)", k, def->arity);
+    for (size_t i = 0; i < def->tok_seq_extent; ++i)
+    {
+        struct Token* tok = (struct Token*)((const Preprocessor*)userp)->defs_tokens.data + def->tok_seq_offset + i;
+        if (tok->basic_type == LEX_MACRO_ARG_BEGIN)
+        {
+            printf(" $%u", tok->type - LEX_MACRO_ARG_BEGIN);
+        }
+        else
+            printf(" %s", pp_token_str(((const Preprocessor*)userp), tok));
+    }
+    printf("\n");
+    return 0;
+}
+
 void preproc_dump(const struct Preprocessor* pp)
 {
     const struct Token* data = preproc_tokens(pp);
@@ -1719,22 +1737,5 @@ void preproc_dump(const struct Preprocessor* pp)
         ++data;
     } while (1);
 
-    for (size_t i = 0; i < array_size(&pp->defines_map.keys.arr, sizeof(char*)); ++i)
-    {
-        if (((char**)pp->defines_map.keys.arr.data)[i] == NULL) continue;
-        size_t def_offset = arrsz_at(&pp->defines_map.values, i);
-        struct MacroDef* def = (struct MacroDef*)pp->defs_info.data + def_offset;
-        printf("#define %s(%d)", ((char**)pp->defines_map.keys.arr.data)[i], def->arity);
-        for (size_t i = 0; i < def->tok_seq_extent; ++i)
-        {
-            struct Token* tok = (struct Token*)pp->defs_tokens.data + def->tok_seq_offset + i;
-            if (tok->basic_type == LEX_MACRO_ARG_BEGIN)
-            {
-                printf(" $%u", tok->type - LEX_MACRO_ARG_BEGIN);
-            }
-            else
-                printf(" %s", pp_token_str(pp, tok));
-        }
-        printf("\n");
-    }
+    sm_foreach(&pp->defines_map, preproc_dump_f, (Preprocessor*)pp);
 }

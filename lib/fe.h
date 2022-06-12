@@ -3,7 +3,6 @@
 #include "array.h"
 #include "fwd.h"
 #include "stdio.h"
-#include "stringmap.h"
 #include "tok.h"
 
 struct FrontEnd

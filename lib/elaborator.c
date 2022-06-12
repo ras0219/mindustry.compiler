@@ -28,7 +28,7 @@ static int32_t i32constant_or_err(const TypeStr* ts, const Token* rc)
 {
     if (ts->c.is_const)
     {
-        if (!ts->c.is_lvalue && !ts->c.is_sym)
+        if (!ts->c.is_lvalue && !ts->c.sym)
         {
             return (int32_t)ts->c.value.lower;
         }
@@ -40,7 +40,7 @@ static uint64_t u64constant_or_err(const TypeStr* ts, const Token* rc)
 {
     if (ts->c.is_const)
     {
-        if (!ts->c.is_lvalue && !ts->c.is_sym)
+        if (!ts->c.is_lvalue && !ts->c.sym)
         {
             return ts->c.value.lower;
         }
@@ -391,7 +391,7 @@ static void elaborate_expr_ternary(struct Elaborator* elab,
     if (cond_ty.c.is_const && !cond_ty.c.is_lvalue && efalse_ty.c.is_const && !efalse_ty.c.is_lvalue &&
         etrue_ty.c.is_const && !etrue_ty.c.is_lvalue)
     {
-        if (!cond_ty.c.is_sym && !cond_ty.c.value.lower)
+        if (!cond_ty.c.sym && !cond_ty.c.value.lower)
         {
             rty->c = efalse_ty.c;
         }
@@ -406,17 +406,9 @@ static void elaborate_expr_ternary(struct Elaborator* elab,
     }
 }
 
-static int cnst_same_base(Constant c1, Constant c2)
-{
-    void* p1 = (c1.is_sym ? c1.is_lit ? (void*)c1.lit : (void*)c1.sym : NULL);
-    void* p2 = (c2.is_sym ? c2.is_lit ? (void*)c2.lit : (void*)c2.sym : NULL);
-    return p1 == p2;
-}
+static int cnst_same_base(Constant c1, Constant c2) { return c1.sym == c2.sym; }
 static int cnst_eq(Constant c1, Constant c2) { return cnst_same_base(c1, c2) && c1.value.lower == c2.value.lower; }
-static int cnst_truthy(Constant c1)
-{
-    return (c1.is_sym ? (NULL != (c1.is_lit ? (void*)c1.lit : (void*)c1.sym)) : 0) || c1.value.lower;
-}
+static int cnst_truthy(Constant c1) { return c1.sym || c1.value.lower; }
 
 static void elaborate_expr_ExprBinOp(struct Elaborator* elab,
                                      struct ElaborateDeclCtx* ctx,
@@ -648,33 +640,19 @@ static void elaborate_expr_ExprBinOp(struct Elaborator* elab,
                     typestr_assign_constant_value(rty, mp_fma(rhs_ty.c.value, e->info, rty->c.value));
                 break;
             case TOKEN_SYM1('-'):
-                if ((TYPE_FLAGS_POINTER & lhs_mask & rhs_mask) && rty->c.is_sym && rhs_ty.c.is_sym)
+                if ((TYPE_FLAGS_POINTER & lhs_mask & rhs_mask) && rty->c.sym && rhs_ty.c.sym)
                 {
-                    if (rty->c.is_lit)
+                    if (rty->c.sym != rhs_ty.c.sym)
                     {
-                        if (!rhs_ty.c.is_lit || rty->c.lit != rhs_ty.c.lit)
-                        {
-                            parser_tok_error(
-                                e->tok,
-                                "error: subtracting two pointers from different literals is undefined behavior.\n");
-                            return;
-                        }
+                        parser_tok_error(
+                            e->tok,
+                            "error: subtracting two pointers from different aggregates is undefined behavior.\n");
+                        return;
                     }
-                    else
-                    {
-                        if (rhs_ty.c.is_lit || rty->c.sym != rhs_ty.c.sym)
-                        {
-                            parser_tok_error(
-                                e->tok,
-                                "error: subtracting two pointers from different aggregates is undefined behavior.\n");
-                            return;
-                        }
-                    }
-                    rty->c.is_sym = 0;
-                    rty->c.is_lit = 0;
+                    rty->c.sym = NULL;
                     typestr_assign_constant_value(rty, mp_idiv(mp_sub(rty->c.value, rhs_ty.c.value), -e->info, e->tok));
                 }
-                else if (!(TYPE_FLAGS_POINTER & lhs_mask & rhs_mask) && !rty->c.is_sym && !rhs_ty.c.is_sym)
+                else if (!(TYPE_FLAGS_POINTER & lhs_mask & rhs_mask) && !rty->c.sym && !rhs_ty.c.sym)
                 {
                     typestr_assign_constant_value(rty, mp_fsm(rty->c.value, rhs_ty.c.value, e->info));
                 }
@@ -1281,13 +1259,16 @@ static void typestr_from_numlit(TypeStr* t, unsigned char byte, uint64_t numeric
 
 static void typestr_from_strlit(TypeStr* t, ExprLit* lit)
 {
-    *t = s_type_char;
-    typestr_add_array(t, lit->tok->tok_len + 1);
-    t->c.is_const = 1;
-    t->c.is_sym = 1;
-    t->c.is_lit = 1;
-    t->c.is_lvalue = 1;
-    t->c.lit = lit;
+    Symbol* sym = lit->sym;
+    if (sym->string_constant == lit)
+    {
+        sym->type = s_type_char;
+        typestr_add_array(&sym->type, lit->tok->tok_len + 1);
+        sym->type.c.is_const = 1;
+        sym->type.c.is_lvalue = 1;
+        sym->type.c.sym = sym;
+    }
+    *t = sym->type;
 }
 
 static void elaborate_expr_ExprLit(struct Elaborator* elab,
@@ -1621,14 +1602,14 @@ static int elaborate_constinit(
             memcpy(bytes, &ty.c.value.lower, sz);
             if (sz == 8)
             {
-                if (ty.c.is_lvalue && ty.c.is_sym && ty.c.is_lit)
+                if (ty.c.is_lvalue && ty.c.sym)
                 {
-                    memcpy(elab->constinit_bases.data + constinit_offset + offset, &ty.c.lit, 8);
+                    memcpy(elab->constinit_bases.data + constinit_offset + offset, &ty.c.sym, 8);
                 }
             }
             else
             {
-                if (ty.c.is_lvalue && ty.c.is_sym && ty.c.is_lit)
+                if (ty.c.is_lvalue)
                 {
                     return parser_tok_error(ast->tok, "error: expected integral constant expression\n");
                 }

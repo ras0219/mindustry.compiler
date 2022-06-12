@@ -49,24 +49,24 @@ typedef struct DeclSpecs
     struct DeclSpecs* prev_decl;
     struct TypeSymbol* sym;
 
-    unsigned int is_struct : 1;
-    unsigned int is_enum : 1;
-    unsigned int is_union : 1;
-    unsigned int is_const : 1;
-    unsigned int is_volatile : 1;
-    unsigned int is_unsigned : 1;
-    unsigned int is_long : 1;
-    unsigned int is_longlong : 1;
-    unsigned int is_short : 1;
-    unsigned int is_signed : 1;
+    unsigned char is_struct : 1;
+    unsigned char is_enum : 1;
+    unsigned char is_union : 1;
+    unsigned char is_const : 1;
+    unsigned char is_volatile : 1;
+    unsigned char is_unsigned : 1;
+    unsigned char is_long : 1;
+    unsigned char is_longlong : 1;
+    unsigned char is_short : 1;
+    unsigned char is_signed : 1;
 
-    unsigned int is_register : 1;
-    unsigned int is_extern : 1;
-    unsigned int is_inline : 1;
-    unsigned int is_static : 1;
-    unsigned int is_typedef : 1;
-    unsigned int is_stdcall : 1;
-    unsigned int is_fn_arg : 1;
+    unsigned char is_register : 1;
+    unsigned char is_extern : 1;
+    unsigned char is_inline : 1;
+    unsigned char is_static : 1;
+    unsigned char is_typedef : 1;
+    unsigned char is_stdcall : 1;
+    unsigned char is_fn_arg : 1;
 } DeclSpecs;
 
 #define AST_STRUCT_AST_DECLSPEC DeclSpecs
@@ -131,11 +131,12 @@ typedef struct Symbol
     Decl* def;
     struct TypeSymbol* parent;
     struct Symbol* next_field;
-    unsigned int is_enum_constant : 1;
+    unsigned char is_enum_constant : 1;
+    struct ExprLit* string_constant;
 
     // elaboration information
-    unsigned int is_aggregate : 1;
-    unsigned int is_array_or_fn : 1;
+    unsigned char is_aggregate : 1;
+    unsigned char is_array_or_fn : 1;
     TypeStr type;
 
     Sizing fn_ret_sizing;

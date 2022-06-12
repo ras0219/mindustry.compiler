@@ -119,18 +119,19 @@ void cg_string_constant(struct CodeGen* cg, size_t cidx, const char* str, size_t
     }
     array_appends(&cg->const_, "\"\n");
 }
-void cg_reserve_data(struct CodeGen* cg, const char* name, const char* data, const char* bases, size_t sz)
+void cg_reserve_data(struct CodeGen* cg, const char* name, const char* data, const TACAddress* const* bases, size_t sz)
 {
     if (sz == 0) abort();
     array_appendf(&cg->data, "_%s:\n", name);
     size_t zeroes = 0;
     size_t i = 0;
-    for (; i + 8 <= sz; i += 8)
+    size_t j = 0;
+    const size_t sz8 = sz >> 3;
+    for (; j < sz8; ++j, i = j * 8)
     {
         size_t offset;
         memcpy(&offset, data + i, 8);
-        size_t base;
-        memcpy(&base, bases + i, 8);
+        const TACAddress* base = bases[j];
         if (!base && !offset)
         {
             zeroes += 8;
@@ -141,9 +142,13 @@ void cg_reserve_data(struct CodeGen* cg, const char* name, const char* data, con
             array_appendf(&cg->data, ".space %zu\n", zeroes);
             zeroes = 0;
         }
-        if (base)
+        if (base && base->kind == TACA_CONST)
         {
-            array_appendf(&cg->data, ".quad L_.S%zu + %zu\n", base - 1, offset);
+            array_appendf(&cg->data, ".quad L_.S%zu + %zu\n", base->const_idx, offset);
+        }
+        else if (base)
+        {
+            abort();
         }
         else
         {

@@ -4,72 +4,69 @@
 
 #include "stdlibe.h"
 
-static size_t* sm_get_from(const struct StringMap* map, size_t start, const char* ntbs_key)
+size_t* bsm_get(const BStringMap* map, const void* key, size_t len)
 {
     char** keys = (char**)map->keys.arr.data;
-    size_t keys_sz = array_size(&map->keys.arr, sizeof(char*));
-    for (size_t i = start; i < keys_sz; ++i)
+    size_t* key_lens = map->key_lens.data;
+    size_t keys_sz = arrsz_size(&map->key_lens);
+    for (size_t i = 0; i < keys_sz; ++i)
     {
-        if (keys[i] && strcmp(ntbs_key, keys[i]) == 0)
+        if (key_lens[i] == len)
         {
-            return (size_t*)map->values.data + i;
+            if (memcmp(key, keys[i], len) == 0) return (size_t*)map->values.data + i;
         }
     }
     return NULL;
 }
-
-size_t* sm_get(const struct StringMap* map, const char* ntbs_key) { return sm_get_from(map, 0, ntbs_key); }
-void sm_insert(struct StringMap* map, const char* ntbs_key, size_t value)
+size_t* sm_get(const StringMap* map, const char* ntbs_key) { return bsm_get(&map->m, ntbs_key, strlen(ntbs_key) + 1); }
+void bsm_insert(BStringMap* map, const void* key, size_t len, size_t value)
 {
-    char** keys = (char**)map->keys.arr.data;
-    size_t keys_sz = array_size(&map->keys.arr, sizeof(char*));
-    for (size_t i = 0; i < keys_sz; ++i)
+    size_t* p = bsm_get(map, key, len);
+    if (p)
+        *p = value;
+    else
     {
-        if (keys[i])
-        {
-            if (strcmp(ntbs_key, keys[i]) == 0)
-            {
-                ((size_t*)map->values.data)[i] = value;
-                return;
-            }
-        }
-        else
-        {
-            // found a null
-            size_t* found = sm_get_from(map, i + 1, ntbs_key);
-            if (found)
-            {
-                *found = value;
-                return;
-            }
-            else
-            {
-                size_t len = strlen(ntbs_key);
-                keys[i] = my_malloc(len + 1);
-                memcpy(keys[i], ntbs_key, len + 1);
-                ((size_t*)map->values.data)[i] = value;
-                return;
-            }
-        }
+        char* new_key = autoheap_alloc(&map->keys, len);
+        memcpy(new_key, key, len);
+        arrsz_push(&map->key_lens, len);
+        arrsz_push(&map->values, value);
     }
-    size_t len = strlen(ntbs_key);
-    char* new_key = autoheap_alloc(&map->keys, len + 1);
-    memcpy(new_key, ntbs_key, len + 1);
-    arrsz_push(&map->values, value);
 }
-void sm_remove(struct StringMap* map, const char* ntbs_key)
+void sm_insert(StringMap* map, const char* ntbs_key, size_t value)
 {
-    size_t* v = sm_get(map, ntbs_key);
+    bsm_insert(&map->m, ntbs_key, strlen(ntbs_key) + 1, value);
+}
+void bsm_remove(BStringMap* map, const void* key, size_t len)
+{
+    size_t* v = bsm_get(map, key, len);
     if (v)
     {
         size_t offset = v - (size_t*)map->values.data;
-        char** key = ((char**)map->keys.arr.data) + offset;
+
+        char** key = (char**)map->keys.arr.data + offset;
         my_free(*key);
-        *key = NULL;
+
+        *key = arrptr_pop(&map->keys.arr);
+        *v = arrsz_pop(&map->values);
+        ((size_t*)map->key_lens.data)[offset] = arrsz_pop(&map->key_lens);
     }
 }
-void sm_destroy(struct StringMap* map)
+void sm_remove(StringMap* map, const char* ntbs_key) { bsm_remove(&map->m, ntbs_key, strlen(ntbs_key) + 1); }
+void bsm_destroy(BStringMap* map)
 {
     autoheap_destroy(&map->keys);
+    array_destroy(&map->key_lens);
     array_destroy(&map->values);
+}
+void sm_destroy(StringMap* map) { bsm_destroy(&map->m); }
+
+int sm_foreach(const StringMap* map, sm_foreach_cb cb, void* userp)
+{
+    int r = 0;
+    const size_t sz = arrsz_size(&map->m.values);
+    for (int i = 0; i < sz; ++i)
+    {
+        if (r = cb(userp, ((const char**)map->m.keys.arr.data)[i], ((size_t*)map->m.values.data)[i])) break;
+    }
+    return r;
 }

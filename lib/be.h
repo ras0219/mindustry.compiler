@@ -11,9 +11,6 @@ typedef struct BackEnd
     struct Elaborator* elab;
     struct CodeGen* cg;
 
-    // Set of program string literals for coalescing. Does not own their memory.
-    struct Array aszConstants;
-
     struct AutoHeap sym_renames;
 
     struct Array code;
@@ -30,6 +27,8 @@ typedef struct BackEnd
     size_t frame_size;
     size_t max_frame_size;
     size_t next_label;
+
+    size_t next_constant;
 
     unsigned debug_taces : 1;
 } BackEnd;

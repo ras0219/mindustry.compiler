@@ -100,6 +100,7 @@ typedef struct ExprLit
 {
     INHERIT_EXPR;
 
+    struct Symbol* sym;
     const char* text;
     uint64_t numeric;
     enum LitSuffix suffix;

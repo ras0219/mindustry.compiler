@@ -409,12 +409,23 @@ top:
             struct ExprLit* lhs_expr = parse_alloc_expr_lit(p, cur_tok++);
             if (lhs_expr->tok->type == LEX_NUMBER)
             {
-                lit_to_uint64(token_str(p, lhs_expr->tok), &lhs_expr->numeric, &lhs_expr->suffix, &lhs_expr->tok->rc);
+                lit_to_uint64(lhs_expr->text, &lhs_expr->numeric, &lhs_expr->suffix, &lhs_expr->tok->rc);
             }
-            if (lhs_expr->tok->type == LEX_CHARLIT)
+            else if (lhs_expr->tok->type == LEX_CHARLIT)
             {
-                const char* s = token_str(p, lhs_expr->tok);
-                lhs_expr->numeric = s[0];
+                lhs_expr->numeric = lhs_expr->text[0];
+            }
+            else
+            {
+                size_t* v = bsm_get(&p->strlit_map, lhs_expr->text, lhs_expr->tok->tok_len);
+                if (v)
+                    lhs_expr->sym = (Symbol*)*v;
+                else
+                {
+                    lhs_expr->sym = pool_alloc_zeroes(&p->sym_pool, sizeof(Symbol));
+                    lhs_expr->sym->string_constant = lhs_expr;
+                    bsm_insert(&p->strlit_map, lhs_expr->text, lhs_expr->tok->tok_len, (size_t)lhs_expr->sym);
+                }
             }
             return parse_expr_post_unary(p, cur_tok, (struct Expr*)lhs_expr, ppe);
         }
@@ -1784,6 +1795,7 @@ void parser_destroy(struct Parser* p)
     }
     pool_destroy(&p->sym_pool);
     pool_destroy(&p->typesym_pool);
+    bsm_destroy(&p->strlit_map);
     array_destroy(&p->expr_seqs);
     array_destroy(&p->callparams);
     array_destroy(&p->designators);

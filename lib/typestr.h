@@ -23,16 +23,10 @@ typedef struct Constant128
 
 typedef struct Constant
 {
-    union
-    {
-        struct Symbol* sym;
-        struct ExprLit* lit;
-    };
+    struct Symbol* sym;
     Constant128 value;
     unsigned char is_const : 1;
     unsigned char is_lvalue : 1;
-    unsigned char is_sym : 1;
-    unsigned char is_lit : 1;
 } Constant;
 
 static const struct Constant s_not_constant = {0};
@@ -114,7 +108,7 @@ void typestr_from_decltype_Decl(const struct Decl* const* expr_seqs,
 
 __forceinline static int typestr_is_constant_zero(const struct TypeStr* ts)
 {
-    return ts->c.is_const && !ts->c.is_lvalue && !ts->c.is_sym && 0 == ts->c.value.lower;
+    return ts->c.is_const && !ts->c.is_lvalue && !ts->c.sym && 0 == ts->c.value.lower;
 }
 
 unsigned long long typestr_get_size_i(const struct TypeTable* types, const TypeStr* ts, int i, const struct RowCol* rc);

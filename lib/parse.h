@@ -9,6 +9,7 @@
 #include "fwd.h"
 #include "pool.h"
 #include "scope.h"
+#include "stringmap.h"
 
 typedef struct Parser
 {
@@ -33,10 +34,13 @@ typedef struct Parser
     struct Array designators;
     /// Array<CallParam> from ExprCall::param_offset
     struct Array callparams;
+    /// Map<string, Symbol*>
+    struct BStringMap strlit_map;
 
     // top-level expressions
     struct StmtBlock* top;
 
+    // unowned data from preprocessor
     const char* tk_strdata;
     const struct Token* tok_data;
 } Parser;

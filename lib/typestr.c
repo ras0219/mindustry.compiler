@@ -307,7 +307,6 @@ void typestr_from_decltype_Decl(const Decl* const* expr_seqs, TypeTable* tt, str
         else
         {
             s->c.sym = d->sym;
-            s->c.is_sym = 1;
             s->c.is_lvalue = 1;
             s->c.is_const = 1;
         }
@@ -614,7 +613,7 @@ void typestr_fmt(const struct TypeTable* tt, const struct TypeStr* ts, struct Ar
         return;
     }
     typestr_fmt_i(tt, ts, ts->buf.buf[0], buf);
-    if (ts->c.is_const && !ts->c.is_lvalue && !ts->c.is_sym)
+    if (ts->c.is_const && !ts->c.is_lvalue && !ts->c.sym)
     {
         array_appendf(buf, " (constant %zu)", ts->c.value.lower);
     }
@@ -653,7 +652,7 @@ void typestr_dereference(struct TypeStr* ts)
         --ts->buf.buf[0];
         if (ts->c.is_const)
         {
-            if (ts->c.is_sym && !ts->c.is_lvalue)
+            if (ts->c.sym && !ts->c.is_lvalue)
             {
                 ts->c.is_lvalue = 1;
             }
@@ -728,7 +727,7 @@ void typestr_decay(struct TypeStr* t)
             if (t->c.is_const)
             {
                 if (!t->c.is_lvalue) abort();
-                if (!t->c.is_sym) abort();
+                if (!t->c.sym) abort();
                 t->c.is_lvalue = 0;
             }
             break;
@@ -740,7 +739,7 @@ void typestr_decay(struct TypeStr* t)
             if (t->c.is_const)
             {
                 if (!t->c.is_lvalue) abort();
-                if (!t->c.is_sym) abort();
+                if (!t->c.sym) abort();
                 t->c.is_lvalue = 0;
             }
             break;
@@ -780,7 +779,7 @@ FnTypeInfo typestr_strip_fn(const struct TypeTable* tt, struct TypeStr* t)
 void typestr_apply_integral_type(TypeStr* dst, const TypeStr* src)
 {
     dst->buf = src->buf;
-    if (dst->c.is_const && !dst->c.is_sym)
+    if (dst->c.is_const && !dst->c.sym)
     {
         typestr_assign_constant_value(dst, dst->c.value);
     }

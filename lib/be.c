@@ -407,31 +407,15 @@ fail:
     return rc;
 }
 
-/// <returns>index of matching elem, size on failure</returns>
-static size_t asz_find(struct Array* stringpool, size_t offset)
+static void be_compile_ExprLit_Sym(BackEnd* be, Symbol* sym)
 {
-    size_t const sz = arrsz_size(stringpool);
-    size_t const* const data = stringpool->data;
-    for (size_t i = 0; i < sz; ++i)
+    if (sym->addr.kind == TACA_VOID)
     {
-        if (data[i] == offset) return i;
+        const ExprLit* lit = sym->string_constant;
+        cg_string_constant(be->cg, be->next_constant, lit->text, lit->tok->tok_len);
+        sym->addr = taca_const_addr(be->next_constant);
+        ++be->next_constant;
     }
-    return sz;
-}
-
-static size_t be_compile_ExprLit_String(BackEnd* be, ExprLit* e)
-{
-    const size_t i = asz_find(&be->aszConstants, e->tok->sp_offset);
-    const size_t n = array_size(&be->aszConstants, sizeof(size_t));
-
-    if (i == n)
-    {
-        // not found, append and emit new constant
-        arrsz_push(&be->aszConstants, e->tok->sp_offset);
-        const char* const s = token_str(be->parser, e->tok);
-        cg_string_constant(be->cg, i, s, e->tok->tok_len);
-    }
-    return i;
 }
 
 static int be_compile_ExprLit(struct BackEnd* be, struct ExprLit* e, struct TACAddress* out)
@@ -445,8 +429,8 @@ static int be_compile_ExprLit(struct BackEnd* be, struct ExprLit* e, struct TACA
     }
     else if (e->tok->type == LEX_STRING)
     {
-        size_t i = be_compile_ExprLit_String(be, e);
-        *out = taca_const_addr(i);
+        be_compile_ExprLit_Sym(be, e->sym);
+        *out = e->sym->addr;
     }
     else
     {
@@ -467,8 +451,8 @@ static int be_compile_lvalue_ExprLit(struct BackEnd* be, struct ExprLit* e, stru
     }
     else if (e->tok->type == LEX_STRING)
     {
-        size_t i = be_compile_ExprLit_String(be, e);
-        *out = taca_const_addr(i);
+        be_compile_ExprLit_Sym(be, e->sym);
+        *out = e->sym->addr;
     }
     else
     {
@@ -1380,21 +1364,22 @@ static void be_compile_global(struct BackEnd* be, Decl* decl)
     // global variable
     if (decl->init)
     {
-        size_t* buf = my_malloc(sym->size.width);
+        const TACAddress** buf = my_malloc(sym->size.width);
         memset(buf, 0, sym->size.width);
         void* lit_ptrs = be->elab->constinit_bases.data + sym->constinit_offset;
         for (int j = 0; j < sym->size.width / 8; ++j)
         {
-            ExprLit* ptr;
+            Symbol* ptr;
             memcpy(&ptr, lit_ptrs + j * 8, 8);
             if (ptr)
             {
-                buf[j] = be_compile_ExprLit_String(be, ptr) + 1;
+                be_compile_ExprLit_Sym(be, ptr);
+                buf[j] = &ptr->addr;
             }
         }
 
         cg_reserve_data(
-            be->cg, sym->name, (char*)be->elab->constinit.data + sym->constinit_offset, (char*)buf, sym->size.width);
+            be->cg, sym->name, (char*)be->elab->constinit.data + sym->constinit_offset, buf, sym->size.width);
         my_free(buf);
     }
     else
@@ -1748,7 +1733,6 @@ fail:
 
 void be_destroy(struct BackEnd* be)
 {
-    array_destroy(&be->aszConstants);
     autoheap_destroy(&be->sym_renames);
     scope_destroy(&be->scope);
 }
