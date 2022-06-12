@@ -325,6 +325,7 @@ int main(int argc, const char* const* argv)
     const char* predefs[] = {
         "__LP64__",
         "__x86_64__",
+        "__x86_64",
         "__STDC__",
         "_POSIX_SOURCE",
         "_C99_SOURCE",

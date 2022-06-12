@@ -249,7 +249,7 @@ static Constant128 mp_mod(Constant128 a, Constant128 b, const Token* tok)
         parser_tok_error(tok, "error: remainder by 0 is undefined.\n");
         return s_zero_constant;
     }
-    Constant128 ret = {a.lower / b.lower};
+    Constant128 ret = {a.lower % b.lower};
     return ret;
 }
 static Constant128 mp_bor(Constant128 a, Constant128 b)

@@ -478,6 +478,8 @@ int parse_fdset(struct TestState* state)
                         "int arr3[1024 / (sizeof(int) * 8)];\n"
                         "int arr4[1024 == 1024];\n"
                         "int arr5[10 ? 20 : 30];\n"
+                        "typedef int int_t;\n"
+                        "int arr6[sizeof(int_t) % 10];\n"
                         "#define __DARWIN_howmany(x, y)  ((((x) % (y)) == 0) ? ((x) / (y)) : (((x) / (y)) + 1)) /* # "
                         "y's == x bits? */\n"
                         "\n"
