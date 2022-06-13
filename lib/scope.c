@@ -2,23 +2,19 @@
 
 #include <string.h>
 
+#include "stdio.h"
 #include "stdlib.h"
 #include "symbol.h"
 
-void scope_init(struct Scope* s)
-{
-    array_init(&s->binds);
-    array_init(&s->strings);
-    array_init(&s->subscopes);
-}
+void scope_init(struct Scope* s) { memset(s, 0, sizeof(Scope)); }
 void scope_destroy(struct Scope* s)
 {
     array_destroy(&s->binds);
     array_destroy(&s->strings);
     array_destroy(&s->subscopes);
 }
-static size_t scope_size(struct Scope* s) { return array_size(&s->binds, sizeof(Binding)); }
-static struct Binding* scope_data(struct Scope* s) { return s->binds.data; }
+static __forceinline size_t scope_size(struct Scope* s) { return array_size(&s->binds, sizeof(Binding)); }
+static __forceinline struct Binding* scope_data(struct Scope* s) { return s->binds.data; }
 void scope_push_subscope(Scope* s) { arrsz_push(&s->subscopes, scope_size(s)); }
 void scope_pop_subscope(Scope* s)
 {
@@ -28,6 +24,7 @@ void scope_pop_subscope(Scope* s)
     s->strings.sz = scope_data(s)[i].ident_offset;
     array_shrink(&s->binds, i, sizeof(Binding));
 }
+
 size_t scope_insert(struct Scope* s, void* sym, const char* name)
 {
     const size_t sz = scope_size(s);
@@ -37,34 +34,30 @@ size_t scope_insert(struct Scope* s, void* sym, const char* name)
     array_push(&s->strings, name, strlen(name) + 1);
     return sz;
 }
-struct Binding* scope_find(struct Scope* s, const char* id)
+static struct Binding* scope_find_impl(Scope* s, const char* id, size_t start)
 {
     struct Binding* const begin = scope_data(s);
     const size_t sz = scope_size(s);
-    for (size_t i = 0; i < sz; ++i)
+    for (size_t i = sz; i > start; --i)
     {
-        struct Binding* const e = begin + sz - i - 1;
+        struct Binding* const e = begin + i - 1;
         const char* const e_id = (char*)s->strings.data + e->ident_offset;
         if (strcmp(e_id, id) == 0)
         {
+#if defined(TRACING_SCOPES)
+            fprintf(stderr, "scope hit (from %zu): %zu: %s\n", start, i - 1, id);
+#endif
             return e;
         }
     }
+#if defined(TRACING_SCOPES)
+    fprintf(stderr, "scope miss (from %zu): %zu: %s\n", start, sz, id);
+#endif
     return NULL;
 }
+
+struct Binding* scope_find(struct Scope* s, const char* id) { return scope_find_impl(s, id, 0); }
 struct Binding* scope_find_subscope(struct Scope* s, const char* id)
 {
-    if (!s->subscopes.sz) return scope_find(s, id);
-    struct Binding* const begin = scope_data(s);
-    const size_t sz = scope_size(s);
-    for (size_t i = arrsz_back(&s->subscopes); i < sz; ++i)
-    {
-        struct Binding* const e = begin + sz - i - 1;
-        const char* const e_id = (char*)s->strings.data + e->ident_offset;
-        if (strcmp(e_id, id) == 0)
-        {
-            return e;
-        }
-    }
-    return NULL;
+    return scope_find_impl(s, id, s->subscopes.sz ? arrsz_back(&s->subscopes) : 0);
 }

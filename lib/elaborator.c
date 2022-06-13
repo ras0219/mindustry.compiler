@@ -1871,6 +1871,7 @@ void elaborator_init(struct Elaborator* elab, struct Parser* p)
 int elaborate(struct Elaborator* elab)
 {
     struct Parser* const p = elab->p;
+    if (!p->top) abort();
     elaborate_stmt(elab, NULL, &p->top->ast);
     return parser_has_errors();
 }

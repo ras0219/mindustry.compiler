@@ -351,18 +351,18 @@ enum MacroIfOp
 //     return 0;
 // }
 
-static const struct Token* pp_parse_if_expr(struct Preprocessor* pp, const struct Token* cur, int* out_value)
+static const struct Token* pp_parse_if_expr(struct Preprocessor* pp, const struct Token* cur, long* out_value)
 {
     unsigned int add_op = 0;
-    int add_value = 0;
+    long add_value = 0;
     unsigned int mul_op = 0;
-    int mul_value = 0;
+    long mul_value = 0;
     unsigned int relop = 0;
-    int rel_value = 0;
+    long rel_value = 0;
     unsigned int eqop = 0;
-    int eq_value = 0;
-    int or_value = 0;
-    int and_value = 1;
+    long eq_value = 0;
+    long or_value = 0;
+    long and_value = 1;
     int invert = 0;
     int negate = 0;
 top:
@@ -393,7 +393,7 @@ top:
         LitSuffix suffix;
         uint64_t u;
         if (lit_to_uint64(pp_token_str(pp, cur), &u, &suffix, &cur->rc)) return NULL;
-        if (u > INT_MAX) return parser_tok_error(cur, "error: literal value exceeded INT_MAX: %llu\n", u), NULL;
+        if (u > LONG_MAX) return parser_tok_error(cur, "error: literal value exceeded LONG_MAX: %llu\n", u), NULL;
         *out_value = u;
         ++cur;
     }
@@ -442,7 +442,7 @@ top:
     }
     if (negate)
     {
-        if (*out_value == INT32_MIN) abort();
+        if (*out_value == LONG_MIN) abort();
         *out_value = -*out_value;
         negate = 0;
     }
@@ -571,7 +571,7 @@ top:
 
     if (cur->type == TOKEN_SYM1('?'))
     {
-        int left, right;
+        long left, right;
         cur = pp_parse_if_expr(pp, cur + 1, &left);
         if (!cur) return NULL;
         if (cur->type != TOKEN_SYM1(':'))
@@ -606,7 +606,7 @@ static int pp_flush_expr(struct Preprocessor* pp)
         struct Token* back = array_push_zeroes(&pp->toks, sizeof(struct Token));
         back->type = back->basic_type = LEX_EOF;
 
-        int value = 0;
+        long value = 0;
         const struct Token* cur = pp_parse_if_expr(pp, (struct Token*)pp->toks.data + expansion_start, &value);
 
         UNWRAP(!cur);

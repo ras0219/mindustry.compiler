@@ -21,6 +21,7 @@ typedef struct Parser
     struct Scope scope;
     struct Scope type_scope;
     struct Scope typedef_scope;
+    struct Scope su_scope;
 
     // exprs
     struct Pool ast_pools[AST_KIND_END_POOLS + 1];

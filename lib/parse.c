@@ -1145,6 +1145,13 @@ static struct StmtDecls* push_stmt_decls(struct Parser* p, struct DeclSpecs* spe
     return pool_push(&p->ast_pools[STMT_DECLS], &ret, sizeof(ret));
 }
 
+static void make_new_sym(Parser* p, Decl* decl)
+{
+    decl->sym = pool_alloc_zeroes(&p->sym_pool, sizeof(Symbol));
+    if (decl->tok) decl->sym->name = token_str(p, decl->tok);
+    decl->sym->last_decl = decl;
+}
+
 static const struct Token* parse_enum_body(struct Parser* p, const struct Token* cur_tok, struct DeclSpecs* specs)
 {
     struct Array decls = {};
@@ -1164,9 +1171,7 @@ static const struct Token* parse_enum_body(struct Parser* p, const struct Token*
             decl.init = &init->ast;
         }
         struct Decl* enumerator = pool_push(&p->ast_pools[AST_DECL], &decl, sizeof(decl));
-        enumerator->sym = pool_alloc_zeroes(&p->sym_pool, sizeof(Symbol));
-        enumerator->sym->name = token_str(p, decl.tok);
-        enumerator->sym->last_decl = enumerator;
+        make_new_sym(p, enumerator);
         enumerator->sym->def = enumerator;
         enumerator->sym->is_enum_constant = 1;
         scope_insert(&p->scope, enumerator->sym, enumerator->sym->name);
@@ -1260,14 +1265,19 @@ fail:
 /// \returns nonzero on failures
 static int insert_declaration(Parser* p, Decl* decl, int in_subscope)
 {
+    Scope* const scope = scope_in_subscope(&p->su_scope) ? &p->su_scope : &p->scope;
     if (decl->tok)
     {
         const char* name = token_str(p, decl->tok);
-        struct Binding* prev_sym = in_subscope ? scope_find_subscope(&p->scope, name) : scope_find(&p->scope, name);
+        struct Binding* prev_sym = in_subscope ? scope_find_subscope(scope, name) : scope_find(scope, name);
         if (prev_sym)
         {
             decl->sym = prev_sym->sym;
             decl->prev_decl = decl->sym->last_decl;
+            decl->sym->last_decl = decl;
+#if defined(TRACING_SCOPES)
+            fprintf(stderr, "redecl: %s\n", decl->sym->name);
+#endif
             if (0)
             {
                 // TODO: ensure symbols match
@@ -1276,17 +1286,21 @@ static int insert_declaration(Parser* p, Decl* decl, int in_subscope)
         }
         else
         {
-            decl->sym = pool_alloc_zeroes(&p->sym_pool, sizeof(Symbol));
-            decl->sym->name = name;
-            scope_insert(&p->scope, decl->sym, decl->sym->name);
+            make_new_sym(p, decl);
+            scope_insert(scope, decl->sym, decl->sym->name);
         }
-        decl->sym->last_decl = decl;
     }
     else
     {
-        decl->sym = pool_alloc_zeroes(&p->sym_pool, sizeof(Symbol));
-        decl->sym->last_decl = decl;
+        make_new_sym(p, decl);
     }
+#if defined(TRACING_SCOPES)
+    if (scope == &p->su_scope)
+        fprintf(stderr, "declare su_scope(%d): %s\n", in_subscope, decl->sym->name);
+    else
+        fprintf(stderr, "declare scope(%d): %s\n", in_subscope, decl->sym->name);
+#endif
+
     return 0;
 }
 
@@ -1304,7 +1318,11 @@ static int insert_definition(Parser* p, Decl* decl)
         else
         {
             parser_tok_error(decl->sym->def->tok, "info: previous definition\n");
-            return parser_tok_error(decl->tok, "error: multiple definition of symbol\n");
+            if (decl->sym->name)
+                parser_tok_error(decl->tok, "error: multiple definition of symbol '%s'\n", decl->sym->name);
+            else
+                parser_tok_error(decl->tok, "error: multiple definition of symbol\n");
+            return 1;
         }
     }
     else
@@ -1325,6 +1343,7 @@ static int insert_typedef(Parser* p, Decl* decl)
     {
         decl->sym = prev_sym->sym;
         decl->prev_decl = decl->sym->last_decl;
+        decl->sym->last_decl = decl;
         if (0)
         {
             // TODO: ensure symbols match
@@ -1333,11 +1352,9 @@ static int insert_typedef(Parser* p, Decl* decl)
     }
     else
     {
-        decl->sym = pool_alloc_zeroes(&p->sym_pool, sizeof(Symbol));
-        decl->sym->name = name;
+        make_new_sym(p, decl);
         scope_insert(&p->typedef_scope, decl->sym, decl->sym->name);
     }
-    decl->sym->last_decl = decl;
     return 0;
 }
 
@@ -1381,6 +1398,8 @@ static const struct Token* parse_decls(Parser* p,
         if (cur_tok->type == TOKEN_SYM1('{'))
         {
             if (!pdecl->tok) PARSER_FAIL_TOK(cur_tok, "error: anonymous function declaration not allowed\n");
+            if (scope_in_subscope(&p->su_scope))
+                PARSER_FAIL_TOK(cur_tok, "error: member function definitions are not allowed\n");
             PARSER_CHECK_NOT(insert_definition(p, pdecl));
             PARSER_DO(parse_fnbody(p, cur_tok, pdecl));
             break;
@@ -1459,6 +1478,8 @@ static const struct Token* parse_conditional(Parser* p, const struct Token* cur_
     return token_consume_sym(p, cur_tok, ')', " in conditional statement");
 }
 
+static const struct Token* parse_su_body(struct Parser* p, const struct Token* cur_tok, struct DeclSpecs* specs);
+
 static const struct Token* parse_stmt_decl(Parser* p, const struct Token* cur_tok, struct Ast** past)
 {
     struct Array arr_decls = {};
@@ -1473,23 +1494,7 @@ static const struct Token* parse_stmt_decl(Parser* p, const struct Token* cur_to
         {
             if (specs->is_struct || specs->is_union)
             {
-                scope_push_subscope(&p->scope);
-                PARSER_DO(parse_stmt_block(p, cur_tok + 1, &specs->suinit));
-                for (size_t i = 0; i < specs->suinit->extent; ++i)
-                {
-                    StmtDecls* decls = ((StmtDecls**)p->expr_seqs.data)[specs->suinit->offset + i];
-                    if (decls->extent == 0 && !decls->specs->name)
-                    {
-                        // Inject anonymous declarations into suinit bodies
-                        Decl* anon_decl = parse_alloc_decl(p, decls->specs);
-                        anon_decl->type = &decls->specs->ast_type;
-                        decls->offset = array_size(&p->expr_seqs, sizeof(void*));
-                        decls->extent = 1;
-                        arrptr_push(&p->expr_seqs, anon_decl);
-                        PARSER_CHECK_NOT(insert_definition(p, anon_decl));
-                    }
-                }
-                scope_pop_subscope(&p->scope);
+                PARSER_DO(parse_su_body(p, cur_tok + 1, specs));
             }
             else if (specs->is_enum)
             {
@@ -1509,6 +1514,38 @@ finish:
     *past = &push_stmt_decls(p, specs, &arr_decls)->ast;
 fail:
     array_destroy(&arr_decls);
+    return cur_tok;
+}
+
+static const struct Token* parse_stmt_block(Parser* p, const struct Token* cur_tok, struct StmtBlock** p_expr);
+
+static const struct Token* parse_su_body(struct Parser* p, const struct Token* cur_tok, struct DeclSpecs* specs)
+{
+#if defined(TRACING_SCOPES)
+    fprintf(stderr, "parse_su_body(): push %s\n", specs->name);
+#endif
+    scope_push_subscope(&p->su_scope);
+    PARSER_DO(parse_stmt_block(p, cur_tok, &specs->suinit));
+    for (size_t i = 0; i < specs->suinit->extent; ++i)
+    {
+        StmtDecls* decls = ((StmtDecls**)p->expr_seqs.data)[specs->suinit->offset + i];
+        if (decls->extent == 0 && !decls->specs->name)
+        {
+            // Inject anonymous declarations into suinit bodies
+            Decl* anon_decl = parse_alloc_decl(p, decls->specs);
+            anon_decl->type = &decls->specs->ast_type;
+            decls->offset = array_size(&p->expr_seqs, sizeof(void*));
+            decls->extent = 1;
+            arrptr_push(&p->expr_seqs, anon_decl);
+            PARSER_CHECK_NOT(insert_definition(p, anon_decl));
+        }
+    }
+
+fail:
+#if defined(TRACING_SCOPES)
+    fprintf(stderr, "parse_su_body(): pop %s\n", specs->name);
+#endif
+    scope_pop_subscope(&p->su_scope);
     return cur_tok;
 }
 

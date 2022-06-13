@@ -1459,11 +1459,13 @@ int parse_enums(struct TestState* state)
                         "  sizeof(enum A);\n"
                         "W w, *pw = &w;\n"
                         "pw->a = a1;\n"
-                        "}\n"));
+                        "}\n"
+                        "struct N { enum { N1 = 4 } e; };\n"
+                        "char ch[N1];"));
     rc = 0;
 
     struct Expr** const exprs = (struct Expr**)test.parser->expr_seqs.data;
-    REQUIRE_EQ(3, test.parser->top->extent);
+    REQUIRE_EQ(5, test.parser->top->extent);
     REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->offset])
     {
         REQUIRE_EQ(0, decls->extent);
