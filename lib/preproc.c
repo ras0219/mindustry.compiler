@@ -1075,17 +1075,8 @@ static int pp_concat_token(struct Preprocessor* pp, struct Token* dst, const str
         // do nothing
         return 0;
     }
-    else if (src->basic_type == LEX_NUMBER)
-    {
-        if (dst->basic_type == LEX_NUMBER || dst->basic_type == LEX_IDENT)
-        {
-            pp_token_append(pp, dst, src);
-
-            return 0;
-        }
-        return parser_tok_error(src, "error: pasting formed an invalid preprocessing token\n");
-    }
-    else if (src->basic_type == LEX_IDENT && dst->basic_type == LEX_IDENT)
+    else if ((src->basic_type == LEX_NUMBER || src->basic_type == LEX_IDENT) &&
+             (dst->basic_type == LEX_NUMBER || dst->basic_type == LEX_IDENT))
     {
         pp_token_append(pp, dst, src);
         return 0;
@@ -1103,7 +1094,10 @@ static int pp_concat_token(struct Preprocessor* pp, struct Token* dst, const str
     }
     else
     {
-        return parser_tok_error(src, "error: pasting formed an invalid preprocessing token\n");
+        return parser_tok_error(src,
+                                "error: pasting formed an invalid preprocessing token (%s + %s)\n",
+                                lexstate_to_string(dst->basic_type),
+                                lexstate_to_string(src->basic_type));
     }
 }
 

@@ -146,6 +146,10 @@ void cg_reserve_data(struct CodeGen* cg, const char* name, const char* data, con
         {
             array_appendf(&cg->data, ".quad L_.S%zu + %zu\n", base->const_idx, offset);
         }
+        else if (base && base->kind == TACA_LNAME)
+        {
+            array_appendf(&cg->data, ".quad %s + %zu\n", base->name, offset);
+        }
         else if (base)
         {
             abort();
@@ -273,7 +277,10 @@ static int cg_gen_load(struct CodeGen* cg, struct TACAddress addr, int reg, stru
 {
     if (addr.kind == TACA_IMM)
     {
-        array_appendf(&cg->code, "    mov $%zu, %s\n", addr.imm, s_reg_names[reg]);
+        if (addr.sizing.is_signed)
+            array_appendf(&cg->code, "    mov $%zd, %s\n", (long long)addr.imm, s_reg_names[reg]);
+        else
+            array_appendf(&cg->code, "    mov $%zu, %s\n", addr.imm, s_reg_names[reg]);
         return 0;
     }
     int rc = 0;
@@ -520,7 +527,7 @@ static int cg_assign(struct CodeGen* cg, struct TACAddress arg1, struct TACAddre
             UNWRAP(cg_gen_store(cg, arg1, arg2.reg, frame));
         }
     }
-    else if (arg2.kind == TACA_IMM)
+    else if (arg2.kind == TACA_IMM && (arg2.imm <= INT32_MAX || arg2.imm >= (size_t)INT32_MIN))
     {
         const Sizing bytes = arg1.sizing;
         arg1.sizing.width = 8;
@@ -532,7 +539,7 @@ static int cg_assign(struct CodeGen* cg, struct TACAddress arg1, struct TACAddre
 
         if (ch)
         {
-            array_appendf(&cg->code, "    mov%c $%zu, ", sizing_suffix(bytes.width), arg2.imm);
+            array_appendf(&cg->code, "    mov%c $%d, ", sizing_suffix(bytes.width), (int)arg2.imm);
             if (arg1.is_addr)
             {
                 UNWRAP(cg_gen_taca(cg, arg1, frame));

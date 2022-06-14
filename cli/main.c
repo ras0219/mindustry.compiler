@@ -328,6 +328,8 @@ int main(int argc, const char* const* argv)
         "__x86_64",
         "__STDC__",
         "_POSIX_SOURCE",
+        "_POSIX_C_SOURCE=200112L",
+        "_DARWIN_C_SOURCE=200112L",
         "_C99_SOURCE",
         "__DARWIN_OS_INLINE=static inline",
         "__llvm__",
@@ -338,6 +340,9 @@ int main(int argc, const char* const* argv)
         "__FILE__=\"/path/to/__FILE__\"",
         "__LINE__=0",
         "__ras0219_cc__",
+        "__GNUC__=3",
+        "_FORTIFY_SOURCE=0",
+        "_OS__OSBYTEORDERI386_H"
     };
 
     for (size_t i = 0; i < sizeof(predefs) / sizeof(predefs[0]); ++i)

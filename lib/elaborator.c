@@ -511,6 +511,7 @@ static void elaborate_expr_ExprBinOp(struct Elaborator* elab,
         case TOKEN_SYM2('*', '='):
         case TOKEN_SYM2('%', '='):
         case TOKEN_SYM2('/', '='):
+        case TOKEN_SYM2('^', '='):
         case TOKEN_SYM2('&', '='):
         case TOKEN_SYM2('|', '='):
         case TOKEN_SYM3('<', '<', '='):
@@ -1490,6 +1491,9 @@ static void elaborate_expr(struct Elaborator* elab,
                 if (rty_mask & orig_mask & TYPE_FLAGS_POINTER)
                 {
                 }
+                else if ((rty_mask & TYPE_FLAGS_POINTER) && typestr_is_constant_zero(&orig))
+                {
+                }
                 else if (rty_mask & orig_mask & TYPE_FLAGS_INT)
                 {
                     typestr_assign_constant_value(rty, orig.c.value);
@@ -1509,7 +1513,7 @@ static void elaborate_expr(struct Elaborator* elab,
         default: parser_tok_error(NULL, "error: unknown expr kind: %s\n", ast_kind_to_string(top_expr->kind)); return;
     }
 
-    top_expr->sizing = typestr_calc_sizing(elab->types, rty, top_expr->tok ? &top_expr->tok->rc : NULL);
+    top_expr->sizing = typestr_calc_sizing_zero_void(elab->types, rty, top_expr->tok ? &top_expr->tok->rc : NULL);
 #if defined(TRACING_ELAB)
     fprintf(stderr, "}\n");
 #endif
@@ -1653,7 +1657,7 @@ static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
                 if (decl->type->kind != AST_DECLFN) abort();
                 TypeStr ts = sym->type;
                 typestr_pop_offset(&ts);
-                sym->fn_ret_sizing = typestr_calc_sizing(elab->types, &ts, &decl->tok->rc);
+                sym->fn_ret_sizing = typestr_calc_sizing_zero_void(elab->types, &ts, &decl->tok->rc);
             }
             if (decl->init && !sym->is_enum_constant)
             {

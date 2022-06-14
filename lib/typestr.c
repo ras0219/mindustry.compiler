@@ -426,6 +426,19 @@ unsigned long long typestr_get_add_size(const TypeTable* types, const struct Typ
     return ts->buf.buf[i] == TYPE_BYTE_POINTER ? typestr_get_size_i(types, ts, i - 1, rc) : 1;
 }
 
+Sizing typestr_calc_sizing_zero_void(const TypeTable* types, const TypeStr* ts, const RowCol* rc)
+{
+    int i = ts->buf.buf[0];
+    if (ts->buf.buf[i] == TYPE_BYTE_RESTRICT) --i;
+    if (ts->buf.buf[i] == TYPE_BYTE_VOLATILE) --i;
+    if (ts->buf.buf[i] == TYPE_BYTE_CONST) --i;
+    if (i == 1 && ts->buf.buf[1] == TYPE_BYTE_VOID)
+    {
+        const Sizing ret = {0};
+        return ret;
+    }
+    return typestr_calc_sizing(types, ts, rc);
+}
 Sizing typestr_calc_sizing(const TypeTable* types, const struct TypeStr* ts, const RowCol* rc)
 {
     size_t sz = typestr_get_size(types, ts, rc);

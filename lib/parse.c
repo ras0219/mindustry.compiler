@@ -346,6 +346,7 @@ static const struct Token* parse_paren_unary(Parser* p, const struct Token* cur_
     {
         // cast expression
         struct ExprCast* e = parse_alloc_expr_cast(p, NULL, NULL);
+        e->tok = cur_tok;
         PARSER_DO(parse_type(p, cur_tok, &e->specs, &e->type));
         *ppe = &e->expr_base;
         PARSER_DO(token_consume_sym(p, cur_tok, ')', " in cast"));
@@ -1407,7 +1408,7 @@ static const struct Token* parse_decls(Parser* p,
 
         if (specs->is_typedef && !pdecl->tok) abort();
 
-        if (specs->is_typedef && strcmp(token_str(p, pdecl->tok), "__builtin_va_list") != 0)
+        if (specs->is_typedef)
         {
             PARSER_CHECK_NOT(insert_typedef(p, pdecl));
         }
@@ -1419,6 +1420,8 @@ static const struct Token* parse_decls(Parser* p,
         {
             PARSER_CHECK_NOT(insert_declaration(p, pdecl, 0));
         }
+
+        if (!pdecl->sym) abort();
 
         if (cur_tok->type == TOKEN_SYM1(':'))
         {

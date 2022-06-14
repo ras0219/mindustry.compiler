@@ -143,7 +143,9 @@ static int is_constant(const TACAddress* a)
     }
 }
 
-static TACAddress taca_add(TACAddress lhs, size_t imm)
+static int is_constant_zero(const TACAddress* a) { return a->kind == TACA_IMM && a->imm == 0; }
+
+static TACAddress taca_add(TACAddress lhs, size_t imm, Sizing sizing)
 {
     switch (lhs.kind)
     {
@@ -152,6 +154,14 @@ static TACAddress taca_add(TACAddress lhs, size_t imm)
         case TACA_ARG: lhs.arg_offset += imm; break;
         case TACA_IMM: lhs.imm += imm; break;
         default: abort();
+    }
+    if (lhs.is_addr)
+    {
+        if (sizing.width != 8 || sizing.is_signed != 0) abort();
+    }
+    else
+    {
+        lhs.sizing = sizing;
     }
     return lhs;
 }
@@ -162,8 +172,17 @@ static struct TACAddress be_push_tace(struct BackEnd* be, const struct TACEntry*
     {
         if (e->op == TACO_ADD)
         {
-            if (e->arg1.kind == TACA_IMM && is_constant(&e->arg2)) return taca_add(e->arg2, e->arg1.imm);
-            if (e->arg2.kind == TACA_IMM && is_constant(&e->arg1)) return taca_add(e->arg1, e->arg2.imm);
+            if (e->arg1.kind == TACA_IMM && is_constant(&e->arg2)) return taca_add(e->arg2, e->arg1.imm, sizing);
+            if (e->arg2.kind == TACA_IMM && is_constant(&e->arg1)) return taca_add(e->arg1, e->arg2.imm, sizing);
+            if (e->arg1.kind == TACA_REF && is_constant_zero(&e->arg2) && sizing.width <= e->arg1.sizing.width)
+            {
+                TACAddress ret = {
+                    .kind = TACA_REF,
+                    .sizing = sizing,
+                    .ref = e->arg1.ref,
+                };
+                return ret;
+            }
         }
     }
 
@@ -1227,6 +1246,11 @@ static int be_compile_StmtReturn(struct BackEnd* be, struct StmtReturn* stmt)
             };
             be_push_tace(be, &retval, s_sizing_zero);
         }
+        else if (be->cur_sym->fn_ret_sizing.width == 0)
+        {
+            TACAddress addr;
+            UNWRAP(be_compile_expr(be, stmt->expr, &addr));
+        }
         else
         {
             struct TACEntry retval = {
@@ -1448,18 +1472,20 @@ fail:
 static int be_compile_ExprCast(struct BackEnd* be, struct ExprCast* e, struct TACAddress* out)
 {
     int rc = 0;
-    UNWRAP(be_compile_expr(be, e->expr, out));
-    if (out->sizing.width < e->sizing.width)
+    TACEntry tace = {
+        .op = TACO_ADD,
+        .arg2 = taca_imm(0),
+    };
+    UNWRAP(be_compile_expr(be, e->expr, &tace.arg1));
+    if (e->sizing.width == 0)
     {
-        TACEntry tace = {
-            .op = TACO_ADD,
-            .arg1 = *out,
-            .arg2 = taca_imm(0),
-        };
-        *out = be_push_tace(be, &tace, e->sizing);
+        *out = s_taca_void;
     }
     else
-        out->sizing = e->sizing;
+    {
+        if (tace.arg1.sizing.width > 8) abort();
+        *out = be_push_tace(be, &tace, e->sizing);
+    }
 
 fail:
     return rc;

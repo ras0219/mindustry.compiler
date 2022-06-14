@@ -132,6 +132,9 @@ unsigned long long typestr_get_add_size(const struct TypeTable* types,
                                         const struct RowCol* rc);
 
 struct Sizing typestr_calc_sizing(const struct TypeTable* types, const struct TypeStr* ts, const struct RowCol* rc);
+struct Sizing typestr_calc_sizing_zero_void(const struct TypeTable* types,
+                                            const struct TypeStr* ts,
+                                            const struct RowCol* rc);
 
 enum
 {
