@@ -333,16 +333,12 @@ int main(int argc, const char* const* argv)
         "_C99_SOURCE",
         "__DARWIN_OS_INLINE=static inline",
         "__llvm__",
-        "__builtin_bswap32",
-        "__builtin_bswap16",
-        "__builtin_bswap64",
         "__func__=\"__func__\"",
         "__FILE__=\"/path/to/__FILE__\"",
         "__LINE__=0",
         "__ras0219_cc__",
         "__GNUC__=3",
         "_FORTIFY_SOURCE=0",
-        "_OS__OSBYTEORDERI386_H"
     };
 
     for (size_t i = 0; i < sizeof(predefs) / sizeof(predefs[0]); ++i)

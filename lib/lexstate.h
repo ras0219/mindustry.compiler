@@ -49,6 +49,9 @@
     Y(LEX_UUVA_END, "__builtin_va_end")                                                                                \
     Y(LEX_UUVA_ARG, "__builtin_va_arg")                                                                                \
     Y(LEX_UUVA_COPY, "__builtin_va_copy")                                                                              \
+    Y(LEX_BUILTIN_BSWAP32, "__builtin_bswap32")                                                                        \
+    Y(LEX_BUILTIN_BSWAP64, "__builtin_bswap64")                                                                        \
+    Y(LEX_BUILTIN_CONSTANT_P, "__builtin_constant_p")                                                                  \
     Y(LEX_UURESTRICT, "__restrict")                                                                                    \
     Y(LEX_RESTRICT, "restrict")                                                                                        \
     Y(LEX_UUFORCEINLINE, "__forceinline")                                                                              \

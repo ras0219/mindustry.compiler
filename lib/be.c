@@ -873,6 +873,14 @@ static int be_compile_ExprBuiltin(struct BackEnd* be, struct ExprBuiltin* e, str
             break;
         case LEX_UUVA_END: *out = s_taca_void; break;
         case LEX_SIZEOF: *out = taca_imm(e->sizeof_size); break;
+        case LEX_BUILTIN_BSWAP32: tace.op = TACO_BSWAP32; goto bswap;
+        case LEX_BUILTIN_BSWAP64:
+            tace.op = TACO_BSWAP64;
+        bswap:
+            UNWRAP(be_compile_expr(be, e->expr1, &tace.arg1));
+            *out = be_push_tace(be, &tace, e->sizing);
+            break;
+        case LEX_BUILTIN_CONSTANT_P: *out = taca_imm(0); break;
         default:
             UNWRAP(parser_tok_error(
                 e->tok, "error: builtin operation not yet implemented: %s\n", token_str(be->parser, e->tok)));

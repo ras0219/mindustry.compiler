@@ -747,8 +747,13 @@ static int cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t 
             UNWRAP(cg_gen_taca(cg, tace->arg1, frame));
             array_appends(&cg->code, ":\n");
             break;
-        case TACO_PHI: break;
-        default: parser_ferror(NULL, "error: unimplemented TACO: %s\n", taco_to_string(tace->op)); break;
+        case TACO_BSWAP32:
+        case TACO_BSWAP64:
+            UNWRAP(cg_gen_load(cg, tace->arg1, REG_RAX, frame));
+            array_appendf(&cg->code, "    bswap %%%cax\n", tace->op == TACO_BSWAP32 ? 'e' : 'r');
+            UNWRAP(cg_gen_store_frame(cg, i, REG_RAX, frame));
+            break;
+        default: parser_ferror(tace->rc, "error: unimplemented TACO: %s\n", taco_to_string(tace->op)); break;
     }
 fail:
     return rc;

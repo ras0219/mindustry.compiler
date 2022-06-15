@@ -195,6 +195,8 @@ void typestr_assign_constant_value(TypeStr* t, Constant128 n);
 static const struct TypeStr s_type_unknown = {0};
 static const struct TypeStr s_type_void = {.buf = {1, TYPE_BYTE_VOID}};
 static const struct TypeStr s_type_int = {.buf = {1, TYPE_BYTE_INT}};
+static const struct TypeStr s_type_uint = {.buf = {1, TYPE_BYTE_UINT}};
+static const struct TypeStr s_type_ulong = {.buf = {1, TYPE_BYTE_ULONG}};
 static const struct TypeStr s_type_ptrdiff = {.buf = {1, TYPE_BYTE_LLONG}};
 static const struct TypeStr s_type_char = {.buf = {1, TYPE_BYTE_CHAR}};
 

@@ -430,6 +430,15 @@ top:
             }
             return parse_expr_post_unary(p, cur_tok, (struct Expr*)lhs_expr, ppe);
         }
+        case LEX_BUILTIN_CONSTANT_P:
+        case LEX_BUILTIN_BSWAP32:
+        case LEX_BUILTIN_BSWAP64:;
+            const struct Token* tok = cur_tok++;
+            PARSER_DO(token_consume_sym(p, cur_tok, '(', " in builtin operator"));
+            Expr* lhs;
+            PARSER_DO(parse_expr(p, cur_tok, &lhs, PRECEDENCE_COMMA));
+            *ppe = &parse_alloc_builtin(p, tok, lhs, NULL, NULL, NULL)->expr_base;
+            return token_consume_sym(p, cur_tok, ')', " in builtin operator");
         case LEX_UUVA_START:
         case LEX_UUVA_ARG:
         case LEX_UUVA_COPY:

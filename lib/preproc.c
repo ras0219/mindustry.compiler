@@ -1714,7 +1714,7 @@ static int preproc_dump_f(void* userp, const char* k, size_t def_offset)
     return 0;
 }
 
-void preproc_dump(const struct Preprocessor* pp)
+void preproc_debug(const struct Preprocessor* pp)
 {
     const struct Token* data = preproc_tokens(pp);
     do
@@ -1732,4 +1732,84 @@ void preproc_dump(const struct Preprocessor* pp)
     } while (1);
 
     sm_foreach(&pp->defines_map, preproc_dump_f, (Preprocessor*)pp);
+}
+
+static const signed char s_rmap_escapes[128] = {
+    ['\n'] = 'n',
+    ['\b'] = 'b',
+    ['\r'] = 'r',
+    ['\t'] = 't',
+    ['\0'] = '0',
+    ['\\'] = '\\',
+};
+
+static void emit_lit_byte(unsigned char ch, char extra_escape)
+{
+    if (ch >= 127)
+    {
+        goto octal;
+    }
+    else
+    {
+        signed char n = s_rmap_escapes[ch];
+        if (n)
+        {
+            printf("\\%c", n);
+        }
+        else if (ch < 32)
+        {
+            goto octal;
+        }
+        else if (ch == extra_escape)
+        {
+            printf("\\%c", ch);
+        }
+        else
+            printf("%c", ch);
+    }
+    return;
+octal:
+    printf("\\0%o", ch);
+}
+
+void preproc_dump(const struct Preprocessor* pp)
+{
+    const struct Token* data = preproc_tokens(pp);
+    const char* cur_file = 0;
+    int cur_row = 0;
+    for (; data->basic_type != LEX_EOF; ++data)
+    {
+        if (data->rc.file == cur_file && data->rc.row == cur_row)
+            fputc(' ', stdout);
+        else if (data->rc.file == cur_file && data->rc.row == cur_row + 1)
+        {
+            ++cur_row;
+            fputc('\n', stdout);
+        }
+        else
+        {
+            printf("\n/* %s:%d */\n", data->rc.file, data->rc.row);
+            cur_file = data->rc.file;
+            cur_row = data->rc.row;
+        }
+        const char* const s = pp_token_str(pp, data);
+        if (data->basic_type == LEX_STRING)
+        {
+            fputc('"', stdout);
+            for (size_t i = 0; i < data->tok_len; ++i)
+            {
+                emit_lit_byte(s[i], '"');
+            }
+            fputc('"', stdout);
+        }
+        else if (data->basic_type == LEX_CHARLIT)
+        {
+            fputc('\'', stdout);
+            emit_lit_byte(s[0], '\'');
+            fputc('\'', stdout);
+        }
+        else
+            printf("%.*s", data->tok_len, s);
+    }
+    printf("\n");
 }

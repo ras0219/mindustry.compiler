@@ -27,13 +27,13 @@
     Y(TACO_BNOT)                                                                                                       \
     Y(TACO_SHL)                                                                                                        \
     Y(TACO_SHR)                                                                                                        \
-    Y(TACO_ARR)                                                                                                        \
+    Y(TACO_BSWAP32)                                                                                                    \
+    Y(TACO_BSWAP64)                                                                                                    \
     Y(TACO_GOTO)                                                                                                       \
     Y(TACO_BRZ)                                                                                                        \
     Y(TACO_BRNZ)                                                                                                       \
     Y(TACO_CTBZ)                                                                                                       \
     Y(TACO_JUMP)                                                                                                       \
-    Y(TACO_PHI)                                                                                                        \
     Y(TACO_PARAM)                                                                                                      \
     Y(TACO_CALL)                                                                                                       \
     Y(TACO_RETURN)                                                                                                     \

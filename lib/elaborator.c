@@ -724,6 +724,21 @@ static void elaborate_expr_ExprBuiltin(struct Elaborator* elab,
             elaborate_expr(elab, ctx, e->expr1, rty);
             *rty = s_type_void;
             break;
+        case LEX_BUILTIN_CONSTANT_P:
+            *rty = s_type_int;
+            rty->c.is_const = 1;
+            rty->c.value = s_zero_constant;
+            break;
+        case LEX_BUILTIN_BSWAP32:
+        case LEX_BUILTIN_BSWAP64:;
+            TypeStr ty;
+            elaborate_expr(elab, ctx, e->expr1, &ty);
+            if (e->tok->type == LEX_BUILTIN_BSWAP32)
+                *rty = s_type_uint;
+            else
+                *rty = s_type_ulong;
+            typestr_implicit_conversion(elab->types, &e->tok->rc, &ty, rty);
+            break;
         default:
             parser_tok_error(e->tok, "error: unimplemented builtin\n");
             *rty = s_type_unknown;

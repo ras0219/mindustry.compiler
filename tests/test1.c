@@ -1266,6 +1266,9 @@ int parse_constants(struct TestState* state)
                         "'\\r';"
                         "'\\0';"
                         "'\\x20';"
+                        "0L;"
+                        "010;"
+                        "1234'5678;"
                         "}\n"));
     rc = 0;
 
@@ -1283,7 +1286,7 @@ int parse_constants(struct TestState* state)
         {
             REQUIRE_AST(StmtBlock, b, d->init)
             {
-                REQUIRE_EQ(11, b->extent);
+                REQUIRE_EQ(14, b->extent);
                 REQUIRE_EXPR(ExprLit, e, exprs[b->offset])
                 {
                     REQUIRE_EQ(1, e->numeric);
@@ -1348,6 +1351,24 @@ int parse_constants(struct TestState* state)
                 {
                     REQUIRE_EQ(32, e->numeric);
                     REQUIRE_EQ(LIT_SUFFIX_NONE, e->suffix);
+                    REQUIRE_SIZING_EQ(s_sizing_int, e->sizing);
+                }
+                REQUIRE_EXPR(ExprLit, e, exprs[b->offset + 11])
+                {
+                    REQUIRE_EQ(0, e->numeric);
+                    REQUIRE_EQ(LIT_SUFFIX_L, e->suffix);
+                    REQUIRE_SIZING_EQ(s_sizing_sptr, e->sizing);
+                }
+                REQUIRE_EXPR(ExprLit, e, exprs[b->offset + 12])
+                {
+                    REQUIRE_EQ(8, e->numeric);
+                    REQUIRE_EQ(LIT_SUFFIX_NONE, e->suffix);
+                    REQUIRE_SIZING_EQ(s_sizing_int, e->sizing);
+                }
+                REQUIRE_EXPR(ExprLit, e, exprs[b->offset + 13])
+                {
+                    REQUIRE_EQ(12345678, e->numeric);
+                    REQUIRE_EQ(LIT_SUFFIX_NONE_DECIMAL, e->suffix);
                     REQUIRE_SIZING_EQ(s_sizing_int, e->sizing);
                 }
             }

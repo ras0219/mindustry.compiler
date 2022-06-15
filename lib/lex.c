@@ -662,7 +662,7 @@ int lit_to_uint64(const char* s, uint64_t* out, LitSuffix* out_suffix, const str
                     break;
             }
         }
-        else if (s[1] == '\0')
+        else
         {
             i = 1;
         }
