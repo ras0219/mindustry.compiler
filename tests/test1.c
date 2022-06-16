@@ -1040,12 +1040,14 @@ int parse_unk_array(struct TestState* state)
     SUBTEST(stdtest_run(state,
                         &test,
                         "char txt6[] = \"hello\";\n"
-                        "struct Point { int x, y; } points5[] = {[3] = 1,2,3};\n"));
+                        "struct Point { int x, y; } points5[] = {[3] = 1,2,3};\n"
+                        "char txt7[] = {\"hello\"};\n"
+                        "static const char mode[][5] = { \"EPRT\", \"PORT\" };\n"));
     Parser* const parser = test.parser;
 
     // from https://en.cppreference.com/w/c/language/initialization
     struct Expr** const exprs = (struct Expr**)parser->expr_seqs.data;
-    REQUIRE_EQ(2, parser->top->extent);
+    REQUIRE_EQ(4, parser->top->extent);
     REQUIRE_EXPR(StmtDecls, decls, exprs[parser->top->offset])
     {
         REQUIRE_EQ(1, decls->extent);
@@ -1374,6 +1376,22 @@ int parse_constants(struct TestState* state)
             }
         }
     }
+
+fail:
+    stdtest_destroy(&test);
+    return rc;
+}
+
+int parse_constinit(struct TestState* state)
+{
+    int rc = 1;
+    StandardTest test;
+    SUBTEST(stdtest_run(state,
+                        &test,
+                        "void f();\n"
+                        "void (*p_f)() = f;\n"
+                        "void (*p_f2)() = (void(*)())f;\n"));
+    rc = 0;
 
 fail:
     stdtest_destroy(&test);
@@ -2382,6 +2400,42 @@ int test_be_memory_ret(TestState* state)
         TACO_ASSIGN,
         .arg1 = {TACA_REG, .is_addr = 1, .sizing = s_sizing_ptr, .reg = REG_RAX},
         .arg2 = {TACA_FRAME, .sizing = s_sizing_ptr, .frame_offset = 0},
+    });
+    REQUIRE_NEXT_TACE({TACO_RETURN});
+
+    REQUIRE_END_TACE();
+
+    rc = 0;
+fail:
+    betest_destroy(&test);
+    return rc;
+}
+
+int test_be_nested_array(TestState* state)
+{
+    int rc = 1;
+    BETest test;
+    SUBTEST(betest_run(state,
+                       &test,
+                       "static const char mode[][5] = { \"AAAA\", \"BBBB\" };\n"
+                       "const char* main() { return mode[0]; }"));
+
+    size_t index = 0;
+
+    REQUIRE_NEXT_TACE({
+        TACO_ADD,
+        .arg1 = {TACA_LNAME, .is_addr = 1, .name = "mode"},
+        .arg2 = {TACA_IMM, .sizing = s_sizing_int, .imm = 0},
+    });
+    REQUIRE_NEXT_TACE({
+        TACO_LOAD,
+        .arg1 = {TACA_FRAME, .sizing = 0, 5, .frame_offset = 0},
+        .arg2 = {TACA_REF, .sizing = s_sizing_ptr, .ref = index - 1},
+    });
+    REQUIRE_NEXT_TACE({
+        TACO_ASSIGN,
+        .arg1 = {TACA_REG, .is_addr = 1, .sizing = s_sizing_ptr, .reg = REG_RAX},
+        .arg2 = {TACA_FRAME, .sizing = 0, 5, .frame_offset = 0},
     });
     REQUIRE_NEXT_TACE({TACO_RETURN});
 
@@ -3781,6 +3835,7 @@ int main()
         _state.colorreset = "\033[m";
     }
 
+    RUN_TEST(parse_unk_array);
     RUN_TEST(parse_initializer_struct);
     RUN_TEST(preproc_ternary);
     RUN_TEST(parse_strings);
@@ -3791,6 +3846,7 @@ int main()
     RUN_TEST(parse_body);
     RUN_TEST(parse_sizeof);
     RUN_TEST(parse_constants);
+    RUN_TEST(parse_constinit);
     RUN_TEST(parse_typedef);
     RUN_TEST(parse_struct);
     RUN_TEST(parse_initializer);
@@ -3799,7 +3855,6 @@ int main()
     RUN_TEST(parse_initializer_array);
     RUN_TEST(parse_initializer2b);
     RUN_TEST(parse_initializer_designated);
-    RUN_TEST(parse_unk_array);
     RUN_TEST(parse_anon_decls);
     RUN_TEST(parse_decls_and_defs);
     RUN_TEST(parse_uuva_list);
@@ -3819,6 +3874,7 @@ int main()
     RUN_TEST(test_be_arithmetic);
     RUN_TEST(test_be_bitmath);
     RUN_TEST(test_be_memory_ret);
+    RUN_TEST(test_be_nested_array);
     RUN_TEST(test_be_cast);
     RUN_TEST(test_be_call);
     RUN_TEST(test_be_call2);

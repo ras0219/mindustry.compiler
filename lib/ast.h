@@ -59,11 +59,14 @@ enum
 int ast_kind_is_expr(enum AstKind k);
 const char* ast_kind_to_string(enum AstKind k);
 
+#define AST_FIELDS                                                                                                     \
+    const struct Token* tok;                                                                                           \
+    enum AstKind kind;                                                                                                 \
+    unsigned char elaborated
+
 typedef struct Ast
 {
-    enum AstKind kind;
-    const struct Token* tok;
-    unsigned int elaborated : 1;
+    AST_FIELDS;
 } Ast;
 
 #define INHERIT_AST                                                                                                    \
@@ -72,17 +75,19 @@ typedef struct Ast
         struct Ast ast;                                                                                                \
         struct                                                                                                         \
         {                                                                                                              \
-            enum AstKind kind;                                                                                         \
-            const struct Token* tok;                                                                                   \
-            unsigned int elaborated : 1;                                                                               \
+            AST_FIELDS;                                                                                                \
         };                                                                                                             \
     }
 
+#define EXPR_FIELDS                                                                                                    \
+    INHERIT_AST;                                                                                                       \
+    /* filled by elaboration */                                                                                        \
+    unsigned char take_address;                                                                                        \
+    Sizing sizing
+
 typedef struct Expr
 {
-    INHERIT_AST;
-
-    Sizing sizing;
+    EXPR_FIELDS;
 } Expr;
 
 #define INHERIT_EXPR                                                                                                   \
@@ -91,8 +96,7 @@ typedef struct Expr
         struct Expr expr_base;                                                                                         \
         struct                                                                                                         \
         {                                                                                                              \
-            INHERIT_AST;                                                                                               \
-            Sizing sizing;                                                                                             \
+            EXPR_FIELDS;                                                                                               \
         };                                                                                                             \
     }
 
@@ -221,7 +225,8 @@ typedef struct AstInit
 
     Sizing sizing;
     uint32_t offset;
-    uint8_t is_char_arr;
+    uint8_t is_aggregate_init;
+    uint8_t is_braced_strlit;
 } AstInit;
 #define AST_STRUCT_AST_INIT AstInit
 #define AST_KIND_AstInit AST_INIT

@@ -3,6 +3,7 @@
 #include "compilermacros.h"
 
 struct RowCol;
+struct Token;
 struct Array;
 struct Decl;
 struct DeclSpecs;
@@ -134,7 +135,7 @@ unsigned long long typestr_get_add_size(const struct TypeTable* types,
 struct Sizing typestr_calc_sizing(const struct TypeTable* types, const struct TypeStr* ts, const struct RowCol* rc);
 struct Sizing typestr_calc_sizing_zero_void(const struct TypeTable* types,
                                             const struct TypeStr* ts,
-                                            const struct RowCol* rc);
+                                            const struct Token* tok);
 
 enum
 {
@@ -220,6 +221,7 @@ static __forceinline int typestr_is_aggregate(const struct TypeStr* ts)
     return !!(typestr_mask(ts) & TYPE_MASK_AGGREGATE);
 }
 static __forceinline int typestr_is_unknown(const struct TypeStr* ts) { return ts->buf.buf[0] == 0; }
+int typestr_is_char_array(const struct TypeStr* ts);
 
 enum
 {
@@ -248,7 +250,8 @@ unsigned int typestr_pop_offset(struct TypeStr* ts);
 
 struct TypeSymbol* typestr_get_decl(struct TypeTable* tt, const struct TypeStr* ts);
 
-void typestr_decay(struct TypeStr* t);
+/// \return nonzero if address was taken
+int typestr_decay(struct TypeStr* t);
 
 typedef struct FnTypeInfo
 {

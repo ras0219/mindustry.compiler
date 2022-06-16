@@ -348,21 +348,27 @@ static int be_compile_stmt(struct BackEnd* be, struct Ast* e);
 static int be_compile_expr(struct BackEnd* be, struct Expr* e, struct TACAddress* out);
 static int be_compile_lvalue(struct BackEnd* be, struct Expr* e, struct TACAddress* out);
 static int be_compile_init(
-    struct BackEnd* be, struct Ast* e, size_t frame_base, size_t offset, Sizing sizing, uint8_t is_char_arr)
+    struct BackEnd* be, struct Ast* e, size_t frame_base, size_t offset, Sizing sizing, uint8_t is_aggregate_init)
 {
     int rc = 0;
     if (e->kind == AST_INIT)
     {
+        AstInit* block = (void*)e;
+        if (is_aggregate_init && block->is_braced_strlit)
+        {
+            e = block->init;
+            goto expr_init;
+        }
         const struct TACEntry tace = {
             TACO_ASSIGN,
             {TACA_FRAME, .is_addr = 1, .sizing = sizing, .frame_offset = frame_base + offset},
             {TACA_IMM, .sizing = s_sizing_int, .imm = 0},
         };
         be_push_tace(be, &tace, s_sizing_zero);
-        struct AstInit* block = (void*)e;
         for (; block->init; block = block->next)
         {
-            UNWRAP(be_compile_init(be, block->init, frame_base, block->offset, block->sizing, block->is_char_arr));
+            UNWRAP(
+                be_compile_init(be, block->init, frame_base, block->offset, block->sizing, block->is_aggregate_init));
         }
     }
     else if (!ast_kind_is_expr(e->kind))
@@ -371,6 +377,7 @@ static int be_compile_init(
     }
     else
     {
+    expr_init:;
         struct TACEntry assign = {
             .op = TACO_ASSIGN,
             .arg1 =
@@ -386,7 +393,7 @@ static int be_compile_init(
         if (e->kind == EXPR_LIT)
         {
             ExprLit* lit = (void*)e;
-            if (lit->tok->type == LEX_STRING && is_char_arr)
+            if (lit->tok->type == LEX_STRING && is_aggregate_init)
             {
                 assign.arg2.is_addr = 0;
                 assign.arg2.sizing.width = assign.arg1.sizing.width;
@@ -503,7 +510,7 @@ static int be_compile_ExprRef(struct BackEnd* be, struct ExprRef* esym, struct T
     else
     {
         UNWRAP(be_compile_lvalue_ExprRef(be, esym, out));
-        if (!esym->sym->is_array_or_fn)
+        if (!esym->take_address)
         {
             UNWRAP(be_dereference(be, out, esym->sizing, &esym->tok->rc));
         }

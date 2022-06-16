@@ -1200,8 +1200,23 @@ fail:
     array_destroy(&decls);
     return cur_tok;
 }
-
+static const struct Token* parse_initializer_list_impl(Parser* p,
+                                                       const struct Token* cur_tok,
+                                                       struct AstInit** out_expr);
 static const struct Token* parse_initializer_list(Parser* p, const struct Token* cur_tok, struct AstInit** out_expr)
+{
+    const Token* tk = parse_initializer_list_impl(p, cur_tok, out_expr);
+    if (tk)
+    {
+        AstInit* i = *out_expr;
+        i->is_braced_strlit =
+            i->init && !i->next->init && i->init->kind == EXPR_LIT && i->init->tok->type == LEX_STRING;
+    }
+    return tk;
+}
+static const struct Token* parse_initializer_list_impl(Parser* p,
+                                                       const struct Token* cur_tok,
+                                                       struct AstInit** out_expr)
 {
     for (;;)
     {
