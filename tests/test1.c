@@ -3342,7 +3342,7 @@ int test_be_fnstatic(TestState* state)
     REQUIRE_NEXT_TACE({
         TACO_ASSIGN,
         {TACA_REG, .is_addr = 1, .sizing = s_sizing_int, .reg = REG_RAX},
-        {TACA_LNAME, .sizing = s_sizing_int, .name = "x"},
+        {TACA_LNAME, .sizing = s_sizing_int, .name = "x$1"},
     });
     REQUIRE_NEXT_TACE({TACO_RETURN});
 

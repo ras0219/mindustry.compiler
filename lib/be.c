@@ -1386,14 +1386,14 @@ static void be_compile_global(struct BackEnd* be, Decl* decl)
         struct Decl* def = sym->def ? sym->def : decl;
         if ((decl->type->kind == AST_DECLFN && !def->init) || def->specs->is_extern)
         {
-            cg_declare_extern(be->cg, sym->name);
+            cg_declare_extern(be->cg, name);
         }
         else if (!decl->specs->is_static && !decl->specs->is_inline)
         {
-            cg_declare_public(be->cg, sym->name);
+            cg_declare_public(be->cg, name);
         }
         sym->addr.kind = decl->specs->is_static ? TACA_LNAME : TACA_NAME;
-        sym->addr.name = sym->name;
+        sym->addr.name = name;
     }
     if (decl->specs->is_extern || decl->type->kind == AST_DECLFN)
     {
@@ -1418,12 +1418,12 @@ static void be_compile_global(struct BackEnd* be, Decl* decl)
         }
 
         cg_reserve_data(
-            be->cg, sym->name, (char*)be->elab->constinit.data + sym->constinit_offset, buf, sym->size.width);
+            be->cg, sym->addr.name, (char*)be->elab->constinit.data + sym->constinit_offset, buf, sym->size.width);
         my_free(buf);
     }
     else
     {
-        cg_reserve_zeroes(be->cg, sym->name, sym->size.width);
+        cg_reserve_zeroes(be->cg, sym->addr.name, sym->size.width);
     }
 }
 
