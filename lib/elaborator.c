@@ -90,14 +90,19 @@ static void elaborate_expr_decay(struct Elaborator* elab,
                                  struct Expr* top_expr,
                                  struct TypeStr* rty);
 
+static void elaborate_expr_lvalue(struct Elaborator* elab,
+                                  struct ElaborateDeclCtx* ctx,
+                                  struct Expr* top_expr,
+                                  struct TypeStr* rty);
+
 enum
 {
-    BINOP_FLAGS_INT = 1,
-    BINOP_FLAGS_ARITH = 2,
-    BINOP_FLAGS_SCALAR = 4,
-    BINOP_FLAGS_ASSIGN = 8,
-    BINOP_FLAGS_INTPROMO = 16,
-    BINOP_FLAGS_COMMONTYPE = 32,
+    BINOP_FLAGS_INT = 1 << 0,
+    BINOP_FLAGS_ARITH = 1 << 1,
+    BINOP_FLAGS_SCALAR = 1 << 2,
+    BINOP_FLAGS_ASSIGN = 1 << 3,
+    BINOP_FLAGS_INTPROMO = 1 << 4,
+    BINOP_FLAGS_COMMONTYPE = 1 << 5,
 };
 
 static unsigned int binop_mask(unsigned int tok_type)
@@ -113,6 +118,7 @@ static unsigned int binop_mask(unsigned int tok_type)
         case TOKEN_SYM3('<', '<', '='):
         case TOKEN_SYM3('>', '>', '='):
         case TOKEN_SYM2('^', '='):
+        case TOKEN_SYM2('%', '='):
         case TOKEN_SYM2('&', '='):
         case TOKEN_SYM2('|', '='): return BINOP_FLAGS_INT | BINOP_FLAGS_ASSIGN | BINOP_FLAGS_INTPROMO;
         case TOKEN_SYM1('/'):
@@ -261,13 +267,16 @@ static Constant128 mp_bor(Constant128 a, Constant128 b)
     Constant128 ret = {a.lower | b.lower};
     return ret;
 }
-#if 0
 static Constant128 mp_bnot(Constant128 a)
 {
     Constant128 ret = {~a.lower};
     return ret;
 }
-#endif
+static Constant128 mp_lnot(Constant128 a)
+{
+    Constant128 ret = {!a.lower};
+    return ret;
+}
 static Constant128 mp_band(Constant128 a, Constant128 b)
 {
     Constant128 ret = {a.lower & b.lower};
@@ -343,7 +352,7 @@ static void elaborate_expr_ternary(struct Elaborator* elab,
             typestr_add_cvr(rty, combined_cvr);
             typestr_add_pointer(rty);
         }
-        if (typestr_match(&efalse_ty, &s_type_void))
+        else if (typestr_match(&efalse_ty, &s_type_void))
         {
             *rty = etrue_ty;
             typestr_add_cvr(rty, combined_cvr);
@@ -405,6 +414,168 @@ static int cnst_same_base(Constant c1, Constant c2) { return c1.sym == c2.sym; }
 static int cnst_eq(Constant c1, Constant c2) { return cnst_same_base(c1, c2) && c1.value.lower == c2.value.lower; }
 static int cnst_truthy(Constant c1) { return c1.sym || c1.value.lower; }
 
+static void elaborate_expr_ExprBinOp_impl(
+    Elaborator* elab, const RowCol* rc, TypeStr* rty, TypeStr* rhs, unsigned int op, int* info)
+{
+    const unsigned int binmask = binop_mask(op);
+    unsigned int lhs_mask = typestr_mask(rty);
+    unsigned int rhs_mask = typestr_mask(rhs);
+
+    // check lhs mask
+    if (binmask & BINOP_FLAGS_INT)
+    {
+        if (!(lhs_mask & TYPE_FLAGS_INT))
+        {
+            typestr_error1(rc, elab->types, "error: expected integer type in first argument but got '%.*s'\n", rty);
+            *rty = s_type_int;
+            return;
+        }
+        if (!(rhs_mask & TYPE_FLAGS_INT))
+        {
+            typestr_error1(rc, elab->types, "error: expected integer type in second argument but got '%.*s'\n", rhs);
+            *rty = s_type_int;
+            return;
+        }
+    }
+    else if (binmask & BINOP_FLAGS_ARITH)
+    {
+        if (!(lhs_mask & TYPE_MASK_ARITH))
+        {
+            typestr_error1(rc, elab->types, "error: expected arithmetic type in first argument but got '%.*s'\n", rty);
+            *rty = s_type_int;
+            return;
+        }
+        if (!(rhs_mask & TYPE_MASK_ARITH))
+        {
+            typestr_error1(rc, elab->types, "error: expected arithmetic type in second argument but got '%.*s'\n", rhs);
+            *rty = s_type_int;
+            return;
+        }
+    }
+    else if (binmask & BINOP_FLAGS_SCALAR || op == TOKEN_SYM1('?'))
+    {
+        if (!(lhs_mask & TYPE_MASK_SCALAR))
+        {
+            typestr_error1(rc, elab->types, "error: expected scalar type in first argument but got '%.*s'\n", rty);
+            *rty = s_type_int;
+            return;
+        }
+        if ((binmask & BINOP_FLAGS_SCALAR) && !(rhs_mask & TYPE_MASK_SCALAR))
+        {
+            typestr_error1(rc, elab->types, "error: expected scalar type in second argument but got '%.*s'\n", rhs);
+            *rty = s_type_int;
+            return;
+        }
+    }
+
+    // perform op-specifics
+    if (binmask & BINOP_FLAGS_INTPROMO)
+    {
+        typestr_promote_integer(rty);
+        typestr_promote_integer(rhs);
+        if (!((rhs_mask | lhs_mask) & TYPE_FLAGS_POINTER))
+        {
+            promote_common_type(rty, rhs);
+        }
+    }
+    switch (op)
+    {
+        case TOKEN_SYM1('&'):
+        case TOKEN_SYM1('|'):
+        case TOKEN_SYM1('^'):
+        case TOKEN_SYM1('*'):
+        case TOKEN_SYM1('%'):
+        case TOKEN_SYM2('<', '<'):
+        case TOKEN_SYM1('/'):
+        case TOKEN_SYM2('>', '>'): break;
+        case TOKEN_SYM1('+'):
+            if (rhs_mask & lhs_mask & TYPE_FLAGS_POINTER)
+            {
+                typestr_error2(
+                    rc, elab->types, "error: expected only one pointer type, but got '%.*s' and '%.*s'\n", rty, rhs);
+            }
+            *info = typestr_get_add_size(elab->types, rty, rc);
+            break;
+        case TOKEN_SYM1('-'):
+            *info = typestr_get_add_size(elab->types, rty, rc);
+            if (rhs_mask & TYPE_FLAGS_POINTER)
+            {
+                if (!(lhs_mask & TYPE_FLAGS_POINTER))
+                {
+                    typestr_error2(
+                        rc, elab->types, "error: expected both pointer types, but got '%.*s' and '%.*s'\n", rty, rhs);
+                }
+                *info = -*info;
+                rty->buf = s_type_ptrdiff.buf;
+            }
+            break;
+        case TOKEN_SYM1('>'):
+        case TOKEN_SYM1('<'):
+        case TOKEN_SYM2('=', '='):
+        case TOKEN_SYM2('!', '='):
+        case TOKEN_SYM2('>', '='):
+        case TOKEN_SYM2('<', '='):
+        case TOKEN_SYM2('&', '&'):
+        case TOKEN_SYM2('|', '|'): rty->buf = s_type_int.buf; break;
+        case TOKEN_SYM1('['):
+            if (rhs_mask & lhs_mask & TYPE_FLAGS_POINTER || !((rhs_mask | lhs_mask) & TYPE_FLAGS_POINTER))
+            {
+                typestr_error2(
+                    rc, elab->types, "error: expected exactly one pointer type, but got '%.*s' and '%.*s'\n", rty, rhs);
+            }
+            if (rhs_mask & TYPE_FLAGS_POINTER)
+            {
+                *rty = *rhs;
+            }
+            typestr_dereference(rty);
+            *info = typestr_get_size(elab->types, rty, rc);
+            break;
+        case TOKEN_SYM1(','): *rty = *rhs; break;
+        default:;
+            const char o1 = TOKEN_GET_SYM1(op), o2 = TOKEN_GET_SYM2(op), o3 = TOKEN_GET_SYM3(op);
+            fprintf(stderr, "warning: untyped binary operator '%c%c%c'\n", o1 ? o1 : ' ', o2 ? o2 : ' ', o3 ? o3 : ' ');
+            *rty = s_type_unknown;
+            break;
+    }
+}
+
+static void elaborate_expr_ExprBinOp_assign(
+    struct Elaborator* elab, struct ElaborateDeclCtx* ctx, struct ExprBinOp* e, struct TypeStr* rty, unsigned int op)
+{
+    const RowCol* const rc = &e->tok->rc;
+    elaborate_expr_lvalue(elab, ctx, e->lhs, rty);
+    typestr_dereference(rty);
+    const struct TypeStr orig_lhs = *rty;
+    struct TypeStr rhs_ty;
+    elaborate_expr_decay(elab, ctx, e->rhs, &rhs_ty);
+    switch (op)
+    {
+        case TOKEN_SYM1('='): typestr_implicit_conversion(elab->types, rc, &rhs_ty, rty); break;
+        case TOKEN_SYM2('+', '='):
+        case TOKEN_SYM2('-', '='):
+            if (typestr_mask(&rhs_ty) & TYPE_FLAGS_POINTER)
+            {
+                typestr_error1(
+                    rc, elab->types, "error: expected integer type on right-hand side, but got '%.*s'\n", &rhs_ty);
+            }
+            // passthrough
+        case TOKEN_SYM2('*', '='):
+        case TOKEN_SYM2('%', '='):
+        case TOKEN_SYM2('/', '='):
+        case TOKEN_SYM2('^', '='):
+        case TOKEN_SYM2('&', '='):
+        case TOKEN_SYM2('|', '='):
+            elaborate_expr_ExprBinOp_impl(elab, &e->tok->rc, rty, &rhs_ty, TOKEN_SLICE_SYM1(op), &e->info);
+            break;
+        case TOKEN_SYM3('<', '<', '='):
+        case TOKEN_SYM3('>', '>', '='):
+            elaborate_expr_ExprBinOp_impl(elab, &e->tok->rc, rty, &rhs_ty, TOKEN_SLICE_SYM2(op), &e->info);
+            break;
+        default: abort();
+    }
+    *rty = orig_lhs;
+}
+
 static void elaborate_expr_ExprBinOp(struct Elaborator* elab,
                                      struct ElaborateDeclCtx* ctx,
                                      struct ExprBinOp* e,
@@ -418,251 +589,98 @@ static void elaborate_expr_ExprBinOp(struct Elaborator* elab,
         if (!e->rhs || e->rhs->kind != EXPR_BINOP) abort();
         return elaborate_expr_ternary(elab, ctx, e, ((ExprBinOp*)e->rhs)->lhs, ((ExprBinOp*)e->rhs)->rhs, rty);
     }
-    elaborate_expr_decay(elab, ctx, e->lhs, rty);
-    const struct TypeStr orig_lhs = *rty;
-    unsigned int lhs_mask = typestr_mask(rty);
-
-    struct TypeStr rhs_ty;
-    elaborate_expr_decay(elab, ctx, e->rhs, &rhs_ty);
-    const struct TypeStr orig_rhs = rhs_ty;
-    unsigned int rhs_mask = typestr_mask(&rhs_ty);
-
-    const unsigned int binmask = binop_mask(e->tok->type);
-
-    // check lhs mask
-    if (binmask & BINOP_FLAGS_INT)
+    const unsigned op = e->tok->type;
+    const unsigned int binmask = binop_mask(op);
+    if (binmask & BINOP_FLAGS_ASSIGN)
     {
-        if (!(lhs_mask & TYPE_FLAGS_INT))
-        {
-            typestr_error1(
-                &e->tok->rc, elab->types, "error: expected integer type in first argument but got '%.*s'\n", &orig_lhs);
-            *rty = s_type_int;
-            return;
-        }
-        if (!(rhs_mask & TYPE_FLAGS_INT))
-        {
-            typestr_error1(&e->tok->rc,
-                           elab->types,
-                           "error: expected integer type in second argument but got '%.*s'\n",
-                           &orig_rhs);
-            *rty = s_type_int;
-            return;
-        }
-    }
-    else if (binmask & BINOP_FLAGS_ARITH)
-    {
-        if (!(lhs_mask & TYPE_MASK_ARITH))
-        {
-            typestr_error1(&e->tok->rc,
-                           elab->types,
-                           "error: expected arithmetic type in first argument but got '%.*s'\n",
-                           &orig_lhs);
-            *rty = s_type_int;
-            return;
-        }
-        if (!(rhs_mask & TYPE_MASK_ARITH))
-        {
-            typestr_error1(&e->tok->rc,
-                           elab->types,
-                           "error: expected arithmetic type in second argument but got '%.*s'\n",
-                           &orig_rhs);
-            *rty = s_type_int;
-            return;
-        }
-    }
-    else if (binmask & BINOP_FLAGS_SCALAR || e->tok->type == TOKEN_SYM1('?'))
-    {
-        if (!(lhs_mask & TYPE_MASK_SCALAR))
-        {
-            typestr_error1(
-                &e->tok->rc, elab->types, "error: expected scalar type in first argument but got '%.*s'\n", &orig_lhs);
-            *rty = s_type_int;
-            return;
-        }
-        if ((binmask & BINOP_FLAGS_SCALAR) && !(rhs_mask & TYPE_MASK_SCALAR))
-        {
-            typestr_error1(
-                &e->tok->rc, elab->types, "error: expected scalar type in second argument but got '%.*s'\n", &orig_rhs);
-            *rty = s_type_int;
-            return;
-        }
-    }
-
-    // perform op-specifics
-    const int rty_is_lhs = !!(binmask & BINOP_FLAGS_ASSIGN);
-    if (binmask & BINOP_FLAGS_INTPROMO)
-    {
-        typestr_promote_integer(rty);
-        typestr_promote_integer(&rhs_ty);
-        if (!((rhs_mask | lhs_mask) & TYPE_FLAGS_POINTER))
-        {
-            promote_common_type(rty, &rhs_ty);
-        }
-    }
-    switch (e->tok->type)
-    {
-        case TOKEN_SYM2('*', '='):
-        case TOKEN_SYM2('%', '='):
-        case TOKEN_SYM2('/', '='):
-        case TOKEN_SYM2('^', '='):
-        case TOKEN_SYM2('&', '='):
-        case TOKEN_SYM2('|', '='):
-        case TOKEN_SYM3('<', '<', '='):
-        case TOKEN_SYM3('>', '>', '='):
-        case TOKEN_SYM1('&'):
-        case TOKEN_SYM1('|'):
-        case TOKEN_SYM1('^'):
-        case TOKEN_SYM1('*'):
-        case TOKEN_SYM1('%'):
-        case TOKEN_SYM2('<', '<'):
-        case TOKEN_SYM1('/'):
-        case TOKEN_SYM2('>', '>'): break;
-        case TOKEN_SYM2('+', '='):
-        case TOKEN_SYM2('-', '='):
-            if (rhs_mask & TYPE_FLAGS_POINTER)
-            {
-                typestr_error1(&e->tok->rc,
-                               elab->types,
-                               "error: expected integer type on right-hand side, but got '%.*s'\n",
-                               &orig_rhs);
-            }
-            e->info = typestr_get_add_size(elab->types, rty, &e->tok->rc);
-            break;
-        case TOKEN_SYM1('+'):
-            if (rhs_mask & lhs_mask & TYPE_FLAGS_POINTER)
-            {
-                typestr_error2(&e->tok->rc,
-                               elab->types,
-                               "error: expected only one pointer type, but got '%.*s' and '%.*s'\n",
-                               &orig_lhs,
-                               &orig_rhs);
-            }
-            if (rhs_mask & TYPE_FLAGS_POINTER) rty->buf = rhs_ty.buf;
-            e->info = typestr_get_add_size(elab->types, rty, &e->tok->rc);
-            break;
-        case TOKEN_SYM1('-'):
-            e->info = typestr_get_add_size(elab->types, rty, &e->tok->rc);
-            if (rhs_mask & TYPE_FLAGS_POINTER)
-            {
-                if (!(lhs_mask & TYPE_FLAGS_POINTER))
-                {
-                    typestr_error2(&e->tok->rc,
-                                   elab->types,
-                                   "error: expected both pointer types, but got '%.*s' and '%.*s'\n",
-                                   &orig_lhs,
-                                   &orig_rhs);
-                }
-                e->info = -e->info;
-                rty->buf = s_type_ptrdiff.buf;
-            }
-            break;
-        case TOKEN_SYM1('>'):
-        case TOKEN_SYM1('<'):
-        case TOKEN_SYM2('=', '='):
-        case TOKEN_SYM2('!', '='):
-        case TOKEN_SYM2('>', '='):
-        case TOKEN_SYM2('<', '='):
-        case TOKEN_SYM2('&', '&'):
-        case TOKEN_SYM2('|', '|'): rty->buf = s_type_int.buf; break;
-        case TOKEN_SYM1('='): typestr_implicit_conversion(elab->types, &e->tok->rc, &rhs_ty, rty); break;
-        case TOKEN_SYM1('['):
-            if (rhs_mask & lhs_mask & TYPE_FLAGS_POINTER || !((rhs_mask | lhs_mask) & TYPE_FLAGS_POINTER))
-            {
-                typestr_error2(&e->tok->rc,
-                               elab->types,
-                               "error: expected exactly one pointer type, but got '%.*s' and '%.*s'\n",
-                               &orig_lhs,
-                               &orig_rhs);
-            }
-            if (rhs_mask & TYPE_FLAGS_POINTER)
-            {
-                // normalize operation so pointer is always the LHS
-                struct Expr* f = e->lhs;
-                e->lhs = e->rhs;
-                e->rhs = f;
-                *rty = rhs_ty;
-            }
-            typestr_dereference(rty);
-            e->info = typestr_get_size(elab->types, rty, &e->tok->rc);
-            break;
-        case TOKEN_SYM1(','): *rty = rhs_ty; break;
-        default:
-            fprintf(stderr, "warning: untyped binary operator '%s'\n", token_str(elab->p, e->tok));
-            *rty = s_type_unknown;
-            break;
-    }
-
-    if (rty_is_lhs)
-    {
-        *rty = orig_lhs;
-    }
-    else if (rty->c.is_const && rhs_ty.c.is_const && !rty->c.is_lvalue && !rhs_ty.c.is_lvalue)
-    {
-        switch (e->tok->type)
-        {
-            case TOKEN_SYM2('=', '='):
-                typestr_assign_constant_value(rty, cnst_eq(rty->c, rhs_ty.c) ? s_one_constant : s_zero_constant);
-                break;
-            case TOKEN_SYM2('&', '&'):
-                typestr_assign_constant_value(
-                    rty, (cnst_truthy(rty->c) && cnst_truthy(rhs_ty.c)) ? s_one_constant : s_zero_constant);
-                break;
-            case TOKEN_SYM2('|', '|'):
-                typestr_assign_constant_value(
-                    rty, (cnst_truthy(rty->c) || cnst_truthy(rhs_ty.c)) ? s_one_constant : s_zero_constant);
-                break;
-            case TOKEN_SYM1('&'): typestr_assign_constant_value(rty, mp_band(rty->c.value, rhs_ty.c.value)); break;
-            case TOKEN_SYM1('|'): typestr_assign_constant_value(rty, mp_bor(rty->c.value, rhs_ty.c.value)); break;
-            case TOKEN_SYM1('^'): typestr_assign_constant_value(rty, mp_bxor(rty->c.value, rhs_ty.c.value)); break;
-            case TOKEN_SYM1('*'): typestr_assign_constant_value(rty, mp_mul(rty->c.value, rhs_ty.c.value)); break;
-            case TOKEN_SYM1('%'):
-                typestr_assign_constant_value(rty, mp_mod(rty->c.value, rhs_ty.c.value, e->tok));
-                break;
-            case TOKEN_SYM1('/'):
-                typestr_assign_constant_value(rty, mp_div(rty->c.value, rhs_ty.c.value, e->tok));
-                break;
-            case TOKEN_SYM2('<', '<'):
-                typestr_assign_constant_value(rty, mp_shl(rty->c.value, rhs_ty.c.value, e->tok));
-                break;
-            case TOKEN_SYM2('>', '>'):
-                typestr_assign_constant_value(rty, mp_shr(rty->c.value, rhs_ty.c.value, e->tok));
-                break;
-            case TOKEN_SYM1('+'):
-                if (rhs_mask & TYPE_FLAGS_POINTER)
-                    typestr_assign_constant_value(rty, mp_fma(rty->c.value, e->info, rhs_ty.c.value));
-                else
-                    typestr_assign_constant_value(rty, mp_fma(rhs_ty.c.value, e->info, rty->c.value));
-                break;
-            case TOKEN_SYM1('-'):
-                if ((TYPE_FLAGS_POINTER & lhs_mask & rhs_mask) && rty->c.sym && rhs_ty.c.sym)
-                {
-                    if (rty->c.sym != rhs_ty.c.sym)
-                    {
-                        parser_tok_error(
-                            e->tok,
-                            "error: subtracting two pointers from different aggregates is undefined behavior.\n");
-                        return;
-                    }
-                    rty->c.sym = NULL;
-                    typestr_assign_constant_value(rty, mp_idiv(mp_sub(rty->c.value, rhs_ty.c.value), -e->info, e->tok));
-                }
-                else if (!(TYPE_FLAGS_POINTER & lhs_mask & rhs_mask) && !rty->c.sym && !rhs_ty.c.sym)
-                {
-                    typestr_assign_constant_value(rty, mp_fsm(rty->c.value, rhs_ty.c.value, e->info));
-                }
-                else
-                {
-                    typestr_error2(
-                        &e->tok->rc, elab->types, "error: invalid constants '%.*s' and '%.*s'\n", rty, &rhs_ty);
-                    return;
-                }
-                break;
-            default: rty->c = s_not_constant; break;
-        }
+        elaborate_expr_ExprBinOp_assign(elab, ctx, e, rty, op);
     }
     else
     {
-        rty->c = s_not_constant;
+        elaborate_expr_decay(elab, ctx, e->lhs, rty);
+        unsigned int lhs_mask = typestr_mask(rty);
+        struct TypeStr rhs_ty;
+        elaborate_expr_decay(elab, ctx, e->rhs, &rhs_ty);
+        unsigned int rhs_mask = typestr_mask(&rhs_ty);
+        if ((op == TOKEN_SYM1('+') || op == TOKEN_SYM1('[')) && (rhs_mask & TYPE_FLAGS_POINTER))
+        {
+            Expr* tmp = e->lhs;
+            e->lhs = e->rhs;
+            e->rhs = tmp;
+            unsigned int tmp_mask = lhs_mask;
+            lhs_mask = rhs_mask;
+            rhs_mask = tmp_mask;
+            TypeStr tmp_ty = *rty;
+            *rty = rhs_ty;
+            rhs_ty = tmp_ty;
+        }
+        elaborate_expr_ExprBinOp_impl(elab, &e->tok->rc, rty, &rhs_ty, op, &e->info);
+        if (rty->c.is_const && rhs_ty.c.is_const && !rty->c.is_lvalue && !rhs_ty.c.is_lvalue)
+        {
+            switch (op)
+            {
+                case TOKEN_SYM2('=', '='):
+                    typestr_assign_constant_value(rty, cnst_eq(rty->c, rhs_ty.c) ? s_one_constant : s_zero_constant);
+                    break;
+                case TOKEN_SYM2('&', '&'):
+                    typestr_assign_constant_value(
+                        rty, (cnst_truthy(rty->c) && cnst_truthy(rhs_ty.c)) ? s_one_constant : s_zero_constant);
+                    break;
+                case TOKEN_SYM2('|', '|'):
+                    typestr_assign_constant_value(
+                        rty, (cnst_truthy(rty->c) || cnst_truthy(rhs_ty.c)) ? s_one_constant : s_zero_constant);
+                    break;
+                case TOKEN_SYM1('&'): typestr_assign_constant_value(rty, mp_band(rty->c.value, rhs_ty.c.value)); break;
+                case TOKEN_SYM1('|'): typestr_assign_constant_value(rty, mp_bor(rty->c.value, rhs_ty.c.value)); break;
+                case TOKEN_SYM1('^'): typestr_assign_constant_value(rty, mp_bxor(rty->c.value, rhs_ty.c.value)); break;
+                case TOKEN_SYM1('*'): typestr_assign_constant_value(rty, mp_mul(rty->c.value, rhs_ty.c.value)); break;
+                case TOKEN_SYM1('%'):
+                    typestr_assign_constant_value(rty, mp_mod(rty->c.value, rhs_ty.c.value, e->tok));
+                    break;
+                case TOKEN_SYM1('/'):
+                    typestr_assign_constant_value(rty, mp_div(rty->c.value, rhs_ty.c.value, e->tok));
+                    break;
+                case TOKEN_SYM2('<', '<'):
+                    typestr_assign_constant_value(rty, mp_shl(rty->c.value, rhs_ty.c.value, e->tok));
+                    break;
+                case TOKEN_SYM2('>', '>'):
+                    typestr_assign_constant_value(rty, mp_shr(rty->c.value, rhs_ty.c.value, e->tok));
+                    break;
+                case TOKEN_SYM1('+'):
+                    typestr_assign_constant_value(rty, mp_fma(rhs_ty.c.value, e->info, rty->c.value));
+                    break;
+                case TOKEN_SYM1('-'):
+                    if ((TYPE_FLAGS_POINTER & lhs_mask & rhs_mask) && rty->c.sym && rhs_ty.c.sym)
+                    {
+                        if (rty->c.sym != rhs_ty.c.sym)
+                        {
+                            parser_tok_error(
+                                e->tok,
+                                "error: subtracting two pointers from different aggregates is undefined behavior.\n");
+                            return;
+                        }
+                        rty->c.sym = NULL;
+                        typestr_assign_constant_value(rty,
+                                                      mp_idiv(mp_sub(rty->c.value, rhs_ty.c.value), -e->info, e->tok));
+                    }
+                    else if (!(TYPE_FLAGS_POINTER & lhs_mask & rhs_mask) && !rty->c.sym && !rhs_ty.c.sym)
+                    {
+                        typestr_assign_constant_value(rty, mp_fsm(rty->c.value, rhs_ty.c.value, e->info));
+                    }
+                    else
+                    {
+                        typestr_error2(
+                            &e->tok->rc, elab->types, "error: invalid constants '%.*s' and '%.*s'\n", rty, &rhs_ty);
+                        return;
+                    }
+                    break;
+                default: rty->c = s_not_constant; break;
+            }
+        }
+        else
+        {
+            rty->c = s_not_constant;
+        }
     }
 }
 
@@ -743,6 +761,12 @@ static void elaborate_expr_ExprUnOp(struct Elaborator* elab,
                                     struct ExprUnOp* e,
                                     struct TypeStr* rty)
 {
+    if (e->tok->type == TOKEN_SYM1('&'))
+    {
+        elaborate_expr_lvalue(elab, ctx, e->lhs, rty);
+        return;
+    }
+
     elaborate_expr_decay(elab, ctx, e->lhs, rty);
     const struct TypeStr orig_lhs = *rty;
     unsigned int lhs_mask = typestr_mask(rty);
@@ -767,6 +791,9 @@ static void elaborate_expr_ExprUnOp(struct Elaborator* elab,
                                &orig_lhs);
                 *rty = s_type_int;
             }
+            if (rty->c.is_const && !rty->c.sym && !rty->c.is_lvalue)
+            {
+            }
             break;
         case TOKEN_SYM1('*'):
             if (typestr_is_pointer(rty))
@@ -779,18 +806,6 @@ static void elaborate_expr_ExprUnOp(struct Elaborator* elab,
                 *rty = s_type_unknown;
             }
             break;
-        case TOKEN_SYM1('&'):
-        {
-            *rty = orig_lhs;
-            if (e->lhs->kind == EXPR_REF && (typestr_mask(&((ExprRef*)e->lhs)->sym->type) & TYPE_MASK_FN_ARR))
-            {
-            }
-            else
-            {
-                typestr_add_pointer(rty);
-            }
-            break;
-        }
         case TOKEN_SYM2('+', '+'):
         case TOKEN_SYM2('-', '-'):
             if (!(lhs_mask & TYPE_MASK_SCALAR))
@@ -809,6 +824,7 @@ static void elaborate_expr_ExprUnOp(struct Elaborator* elab,
             {
                 e->sizeof_ = 1;
             }
+            rty->c = s_not_constant;
             break;
         case TOKEN_SYM1('~'):
             if (!(lhs_mask & TYPE_FLAGS_INT))
@@ -818,7 +834,7 @@ static void elaborate_expr_ExprUnOp(struct Elaborator* elab,
                                "error: expected integer type in first argument but got '%.*s'\n",
                                &orig_lhs);
             }
-            *rty = s_type_int;
+            typestr_apply_integral_type(rty, &s_type_int);
             break;
         case TOKEN_SYM1('!'):
             if (!(lhs_mask & TYPE_MASK_SCALAR))
@@ -828,12 +844,31 @@ static void elaborate_expr_ExprUnOp(struct Elaborator* elab,
                                "error: expected scalar type in first argument but got '%.*s'\n",
                                &orig_lhs);
             }
-            *rty = s_type_int;
+            typestr_apply_integral_type(rty, &s_type_int);
             break;
         default:
             fprintf(stderr, "warning: untyped unary operator '%s'\n", token_str(elab->p, e->tok));
             *rty = s_type_unknown;
             break;
+    }
+
+    if (rty->c.is_const)
+    {
+        if (!rty->c.is_lvalue && !rty->c.sym)
+        {
+            switch (e->tok->type)
+            {
+                case TOKEN_SYM1('~'): rty->c.value = mp_bnot(rty->c.value); break;
+                case TOKEN_SYM1('!'): rty->c.value = mp_lnot(rty->c.value); break;
+                case TOKEN_SYM1('+'):
+                case TOKEN_SYM1('-'): break;
+                default: rty->c = s_not_constant; break;
+            }
+        }
+        else
+        {
+            rty->c = s_not_constant;
+        }
     }
 }
 static void elaborate_stmts(struct Elaborator* elab, struct ElaborateDeclCtx* ctx, size_t offset, size_t extent)
@@ -1055,7 +1090,7 @@ static void elaborate_init_ty_AstInit(struct Elaborator* elab, size_t offset, co
         if (init->init->kind == AST_INIT)
         {
             init->offset = back->offset;
-            init->sizing = typestr_calc_sizing(elab->types, &back->ty, &init->init->tok->rc);
+            init->sizing = typestr_calc_sizing(elab->types, &back->ty, init->init->tok);
             elaborate_init_ty_AstInit(elab, back->offset, &back->ty, (AstInit*)init->init);
         }
         else
@@ -1089,7 +1124,7 @@ static void elaborate_init_ty_AstInit(struct Elaborator* elab, size_t offset, co
         skip_conversion:
             init->is_aggregate_init = typestr_is_aggregate(&back->ty);
             init->offset = back->offset;
-            init->sizing = typestr_calc_sizing(elab->types, &back->ty, &init->init->tok->rc);
+            init->sizing = typestr_calc_sizing(elab->types, &back->ty, init->init->tok);
         }
     }
 
@@ -1368,7 +1403,7 @@ static void elaborate_expr_ExprCall(struct Elaborator* elab,
             const struct TypeStr* orig_tt_arg = typestr_get_arg(elab->types, &fn_info, i);
             typestr_implicit_conversion(
                 elab->types, arg_expr->tok ? &arg_expr->tok->rc : NULL, &arg_expr_ty, orig_tt_arg);
-            param->sizing = typestr_calc_sizing(elab->types, orig_tt_arg, arg_expr->tok ? &arg_expr->tok->rc : NULL);
+            param->sizing = typestr_calc_sizing(elab->types, orig_tt_arg, arg_expr->tok);
             param->align = typestr_get_align(elab->types, orig_tt_arg);
         }
         else
@@ -1478,6 +1513,132 @@ static void elaborate_expr(struct Elaborator* elab,
 {
     elaborate_expr_impl(elab, ctx, top_expr, rty);
     top_expr->sizing = typestr_calc_sizing_zero_void(elab->types, rty, top_expr->tok);
+}
+
+static void elaborate_expr_lvalue(struct Elaborator* elab,
+                                  struct ElaborateDeclCtx* ctx,
+                                  struct Expr* top_expr,
+                                  struct TypeStr* rty)
+{
+    enum AstKind kind = top_expr->kind;
+    if (kind == EXPR_REF)
+    {
+        elaborate_expr_impl(elab, ctx, top_expr, rty);
+        typestr_addressof(rty);
+        top_expr->take_address = 1;
+    }
+    else if (kind == EXPR_BINOP)
+    {
+        ExprBinOp* const binop = (ExprBinOp*)top_expr;
+        const unsigned mask = binop_mask(binop->tok->type);
+        if (binop->tok->type == TOKEN_SYM1('['))
+        {
+            struct TypeStr rhs_ty;
+            elaborate_expr_decay(elab, ctx, binop->lhs, rty);
+            elaborate_expr_decay(elab, ctx, binop->rhs, &rhs_ty);
+            if (typestr_mask(&rhs_ty) & TYPE_FLAGS_POINTER)
+            {
+                elaborate_expr_ExprBinOp_impl(elab, &binop->tok->rc, &rhs_ty, rty, TOKEN_SYM1('+'), &binop->info);
+                *rty = rhs_ty;
+                Expr* e = binop->lhs;
+                binop->lhs = binop->rhs;
+                binop->rhs = e;
+            }
+            else
+            {
+                elaborate_expr_ExprBinOp_impl(elab, &binop->tok->rc, rty, &rhs_ty, TOKEN_SYM1('+'), &binop->info);
+            }
+        }
+        else if (mask & BINOP_FLAGS_ASSIGN)
+        {
+            elaborate_expr_impl(elab, ctx, top_expr, rty);
+            typestr_addressof(rty);
+            top_expr->take_address = 1;
+        }
+        else
+            goto notmatch;
+    }
+    else if (kind == EXPR_UNOP)
+    {
+        ExprUnOp* const unop = (ExprUnOp*)top_expr;
+        if (unop->tok->type == TOKEN_SYM1('*'))
+        {
+            elaborate_expr_decay(elab, ctx, unop->lhs, rty);
+        }
+        else
+            goto notmatch;
+    }
+    else if (kind == EXPR_FIELD)
+    {
+        ExprField* e = (ExprField*)top_expr;
+        if (e->is_arrow)
+        {
+            elaborate_expr_decay(elab, ctx, e->lhs, rty);
+        }
+        else
+        {
+            elaborate_expr_lvalue(elab, ctx, e->lhs, rty);
+        }
+        if (typestr_is_unknown(rty)) return;
+        const struct TypeStr orig_lhs = *rty;
+        typestr_dereference(rty);
+        unsigned int cvr_mask = typestr_strip_cvr(rty);
+        TypeSymbol* sym = typestr_get_decl(elab->types, rty);
+        if (sym)
+        {
+            if (sym->def)
+            {
+                // find field in decl
+                Symbol* field = find_field_by_name(sym, e->fieldname, &e->field_offset);
+                if (field)
+                {
+                    e->sym = field;
+                    typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, rty, field->def);
+                    typestr_add_cvr(rty, cvr_mask);
+                    typestr_addressof(rty);
+                }
+                else
+                {
+                    DeclSpecs* first_spec = sym->last_decl;
+                    while (first_spec->prev_decl)
+                        first_spec = first_spec->prev_decl;
+
+                    struct Array buf = {0};
+                    typestr_fmt(elab->types, rty, &buf);
+                    array_push_byte(&buf, 0);
+                    parser_tok_error(
+                        e->tok, "error: could not find member '%s' in type '%s'\n", e->fieldname, buf.data);
+                    array_destroy(&buf);
+                    *rty = s_type_unknown;
+                }
+            }
+            else
+            {
+                typestr_error1(&e->tok->rc, elab->types, "error: first argument was of incomplete type %.*s\n", rty);
+                *rty = s_type_unknown;
+            }
+        }
+        else
+        {
+            const char* err_fmt;
+            if (e->is_arrow)
+                err_fmt = "error: expected first argument to be pointer to struct or union type, but got "
+                          "'%.*s'\n";
+            else
+                err_fmt = "error: expected first argument to be of struct or union type, but got '%.*s'\n";
+            typestr_error1(&e->tok->rc, elab->types, err_fmt, &orig_lhs);
+            *rty = s_type_unknown;
+        }
+    }
+    else
+    {
+    notmatch:
+        elaborate_expr(elab, ctx, top_expr, rty);
+        typestr_error1(
+            &top_expr->tok->rc, elab->types, "error: expected lvalue but got expression of type %.*s\n", rty);
+        *rty = s_type_unknown;
+    }
+    top_expr->sizing = typestr_calc_elem_sizing(elab->types, rty, top_expr->tok);
 }
 
 static void elaborate_expr_decay(struct Elaborator* elab,
@@ -1764,8 +1925,7 @@ static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
                 }
             }
 
-            sym->size =
-                typestr_calc_sizing(elab->types, &sym->type, decl->tok ? &decl->tok->rc : &decl->specs->tok->rc);
+            sym->size = typestr_calc_sizing(elab->types, &sym->type, decl->tok);
             sym->align = typestr_get_align(elab->types, &sym->type);
 
             if (sym->size.width == 0)

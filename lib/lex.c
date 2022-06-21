@@ -685,12 +685,12 @@ int lit_to_uint64(const char* s, uint64_t* out, LitSuffix* out_suffix, const str
         }
     }
 next_suffix:
-    if (!(suffix & 1) && s[i] == 'U')
+    if (!(suffix & 1) && (s[i] | 32) == 'u')
     {
         ++i;
         ++suffix;
     }
-    if (!(suffix & 4) && (s[i] == 'L' || s[i] == 'l'))
+    if (!(suffix & 4) && (s[i] | 32) == 'l')
     {
         ++i;
         suffix += 2;

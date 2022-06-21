@@ -111,12 +111,46 @@ void typestr_add_array(struct TypeStr* s, unsigned int n)
         typestr_append_offset(s, n, TYPE_BYTE_ARRAY);
 }
 
-void typestr_add_pointer(struct TypeStr* s)
+void typestr_add_pointer(TypeStr* s)
 {
-    if (s->buf.buf[0] == 0) return;
-    unsigned o = ++s->buf.buf[0];
+    unsigned o = s->buf.buf[0] + 1;
     if (o >= TYPESTR_BUF_SIZE) abort();
     s->buf.buf[o] = TYPE_BYTE_POINTER;
+    s->buf.buf[0] = o;
+    if (s->c.is_const && s->c.is_lvalue)
+    {
+        s->c.is_lvalue = 0;
+    }
+    else
+    {
+        s->c = s_not_constant;
+    }
+}
+
+void typestr_addressof(struct TypeStr* s)
+{
+    int i = s->buf.buf[0];
+    if (i == 0) return;
+    typestr_skip_cvr_i(s, &i);
+    const unsigned char byte = s->buf.buf[i];
+    if (byte == TYPE_BYTE_ARRAY)
+    {
+        i -= 4;
+    }
+    else if (byte == TYPE_BYTE_UNK_ARRAY)
+    {
+    }
+    else if (byte == TYPE_BYTE_FUNCTION)
+    {
+        ++i;
+    }
+    else
+    {
+        i = s->buf.buf[0] + 1;
+    }
+    if (i >= TYPESTR_BUF_SIZE) abort();
+    s->buf.buf[i] = TYPE_BYTE_POINTER;
+    s->buf.buf[0] = i;
     if (s->c.is_const && s->c.is_lvalue)
     {
         s->c.is_lvalue = 0;
@@ -434,6 +468,34 @@ unsigned long long typestr_get_add_size(const TypeTable* types, const struct Typ
 }
 
 static const Sizing s_sizing_zero = {0};
+static const Sizing s_sizing_one = {.width = 1};
+
+static Sizing typestr_calc_sizing_i(const TypeTable* types, const TypeStr* ts, int i, const Token* tok)
+{
+    typestr_skip_cvr_i(ts, &i);
+    const size_t sz = typestr_get_size_i(types, ts, i, tok ? &tok->rc : NULL);
+    if (sz > INT32_MAX) abort();
+    const Sizing ret = {.width = sz, .is_signed = !!(s_typestr_mask_data[ts->buf.buf[i]] & TYPE_FLAGS_SIGNED)};
+    return ret;
+}
+
+Sizing typestr_calc_elem_sizing(const TypeTable* types, const TypeStr* ts, const Token* tok)
+{
+    int i = ts->buf.buf[0];
+    if (i == 0) return s_sizing_one;
+
+    typestr_skip_cvr_i(ts, &i);
+    if (ts->buf.buf[i] == TYPE_BYTE_POINTER)
+    {
+        --i;
+        return typestr_calc_sizing_i(types, ts, i, tok);
+    }
+    else
+    {
+        typestr_error1(tok ? &tok->rc : NULL, types, "error: expected pointer type: %.*s\n", ts);
+        return s_sizing_zero;
+    }
+}
 
 Sizing typestr_calc_sizing_zero_void(const TypeTable* types, const TypeStr* ts, const Token* tok)
 {
@@ -443,14 +505,11 @@ Sizing typestr_calc_sizing_zero_void(const TypeTable* types, const TypeStr* ts, 
     {
         return s_sizing_zero;
     }
-    return typestr_calc_sizing(types, ts, tok ? &tok->rc : NULL);
+    return typestr_calc_sizing_i(types, ts, i, tok);
 }
-Sizing typestr_calc_sizing(const TypeTable* types, const struct TypeStr* ts, const RowCol* rc)
+Sizing typestr_calc_sizing(const TypeTable* types, const struct TypeStr* ts, const Token* tok)
 {
-    size_t sz = typestr_get_size(types, ts, rc);
-    if (sz > INT32_MAX) abort();
-    const Sizing ret = {.width = sz, .is_signed = !!(typestr_mask(ts) & TYPE_FLAGS_SIGNED)};
-    return ret;
+    return typestr_calc_sizing_i(types, ts, ts->buf.buf[0], tok);
 }
 const unsigned int s_typestr_mask_data[256] = {
     [TYPE_BYTE_VARIADIC] = TYPE_FLAGS_VAR,

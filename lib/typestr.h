@@ -98,9 +98,11 @@ void typestr_append_offset(struct TypeStr* s, unsigned int offset, char offset_t
 
 void typestr_add_array(struct TypeStr* s, unsigned int n);
 
+void typestr_add_cvr(struct TypeStr* s, unsigned int mask);
+
 void typestr_add_pointer(struct TypeStr* s);
 
-void typestr_add_cvr(struct TypeStr* s, unsigned int mask);
+void typestr_addressof(struct TypeStr* s);
 
 void typestr_from_decltype_Decl(const struct Decl* const* expr_seqs,
                                 struct TypeTable* tt,
@@ -132,10 +134,13 @@ unsigned long long typestr_get_add_size(const struct TypeTable* types,
                                         const struct TypeStr* ts,
                                         const struct RowCol* rc);
 
-struct Sizing typestr_calc_sizing(const struct TypeTable* types, const struct TypeStr* ts, const struct RowCol* rc);
+struct Sizing typestr_calc_sizing(const struct TypeTable* types, const struct TypeStr* ts, const struct Token* rc);
 struct Sizing typestr_calc_sizing_zero_void(const struct TypeTable* types,
                                             const struct TypeStr* ts,
                                             const struct Token* tok);
+struct Sizing typestr_calc_elem_sizing(const struct TypeTable* types,
+                                       const struct TypeStr* ts,
+                                       const struct Token* tok);
 
 enum
 {

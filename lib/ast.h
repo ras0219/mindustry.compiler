@@ -174,7 +174,7 @@ typedef struct ExprBinOp
 #define AST_STRUCT_EXPR_BINOP ExprBinOp
 #define AST_KIND_ExprBinOp EXPR_BINOP
 
-struct ExprUnOp
+typedef struct ExprUnOp
 {
     INHERIT_EXPR;
 
@@ -184,7 +184,7 @@ struct ExprUnOp
     //  * 'sizeof', size of decl
     uint32_t postfix : 1;
     uint32_t sizeof_;
-};
+} ExprUnOp;
 #define AST_STRUCT_EXPR_UNOP ExprUnOp
 #define AST_KIND_ExprUnOp EXPR_UNOP
 

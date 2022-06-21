@@ -1390,7 +1390,34 @@ int parse_constinit(struct TestState* state)
                         &test,
                         "void f();\n"
                         "void (*p_f)() = f;\n"
-                        "void (*p_f2)() = (void(*)())f;\n"));
+                        "void (*p_f2)() = (void(*)())f;\n"
+                        "enum { A = 0xffff & ~(1<<5) };"));
+    rc = 0;
+
+fail:
+    stdtest_destroy(&test);
+    return rc;
+}
+
+int parse_lvalues(struct TestState* state)
+{
+    int rc = 1;
+    StandardTest test;
+    SUBTEST(stdtest_run(state,
+                        &test,
+                        "void f() {\n"
+                        "  int x;\n"
+                        "  struct { int x; } y, *py;\n"
+                        "  int z[2];\n"
+                        "  int *p;\n"
+                        "\n"
+                        "  x = 0;\n"
+                        "  y.x = 0;\n"
+                        "  py->x = 0;\n"
+                        "  z[0] = 0;\n"
+                        "  *p = 0;\n"
+                        "  (x) = 0;\n"
+                        "}\n"));
     rc = 0;
 
 fail:
@@ -3029,7 +3056,7 @@ int test_be_conversions(TestState* state)
                        "x = 11;"
                        "int y = x;"
                        "y = x;"
-                       "x += 1;"
+                       "char* px = &(x += 1);"
                        "x++;"
                        "char h[] = \"he\\\\\\\\\\\\\";"
                        "char *p = h;"
@@ -3038,29 +3065,31 @@ int test_be_conversions(TestState* state)
                        "}"));
     int index = 0;
 
-    // prologue;
+    // char x = 10;
     REQUIRE_NEXT_TACE({
         TACO_ASSIGN,
         {TACA_FRAME, .is_addr = 1, .sizing = s_sizing_schar, .frame_offset = 0},
         {TACA_IMM, .sizing = s_sizing_int, .imm = 10},
     });
+    // x = 11;
     REQUIRE_NEXT_TACE({
         TACO_ASSIGN,
         {TACA_FRAME, .is_addr = 1, .sizing = s_sizing_schar, .frame_offset = 0},
         {TACA_IMM, .sizing = s_sizing_int, .imm = 11},
     });
+    // int y = x;
     REQUIRE_NEXT_TACE({
         TACO_ASSIGN,
         {TACA_FRAME, .is_addr = 1, .sizing = s_sizing_int, .frame_offset = 4},
         {TACA_FRAME, .sizing = s_sizing_schar, .frame_offset = 0},
     });
+    // y = x;
     REQUIRE_NEXT_TACE({
         TACO_ASSIGN,
         {TACA_FRAME, .is_addr = 1, .sizing = s_sizing_int, .frame_offset = 4},
         {TACA_FRAME, .sizing = s_sizing_schar, .frame_offset = 0},
     });
-
-    // x += 1;
+    // char* px = &(x += 1);
     REQUIRE_NEXT_TACE({
         TACO_ADD,
         {TACA_FRAME, .sizing = s_sizing_schar, .frame_offset = 0},
@@ -3070,6 +3099,11 @@ int test_be_conversions(TestState* state)
         TACO_ASSIGN,
         {TACA_FRAME, .is_addr = 1, .sizing = s_sizing_schar, .frame_offset = 0},
         {TACA_REF, .sizing = s_sizing_schar, .ref = index - 1},
+    });
+    REQUIRE_NEXT_TACE({
+        TACO_ASSIGN,
+        {TACA_FRAME, .is_addr = 1, .sizing = s_sizing_ptr, .frame_offset = 8},
+        {TACA_FRAME, .is_addr = 1, .frame_offset = 0},
     });
     // x++;
     REQUIRE_NEXT_TACE({
@@ -3090,14 +3124,14 @@ int test_be_conversions(TestState* state)
     // h[] = "hello"
     REQUIRE_NEXT_TACE({
         TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = 0, 6, .frame_offset = 8},
+        {TACA_FRAME, .is_addr = 1, .sizing = 0, 6, .frame_offset = 16},
         {TACA_CONST, .sizing = 0, 6, .const_idx = 0},
     });
     // p = h;
     REQUIRE_NEXT_TACE({
         TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = s_sizing_ptr, .frame_offset = 16},
-        {TACA_FRAME, .is_addr = 1, .frame_offset = 8},
+        {TACA_FRAME, .is_addr = 1, .sizing = s_sizing_ptr, .frame_offset = 24},
+        {TACA_FRAME, .is_addr = 1, .frame_offset = 16},
     });
     // z = x * 2;
     REQUIRE_NEXT_TACE({
@@ -3107,18 +3141,18 @@ int test_be_conversions(TestState* state)
     });
     REQUIRE_NEXT_TACE({
         TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = s_sizing_ptr, .frame_offset = 24},
+        {TACA_FRAME, .is_addr = 1, .sizing = s_sizing_ptr, .frame_offset = 32},
         {TACA_REF, .sizing = s_sizing_int, .ref = index - 1},
     });
     // w = z * 2;
     REQUIRE_NEXT_TACE({
         TACO_MULT,
-        {TACA_FRAME, .sizing = s_sizing_ptr, .frame_offset = 24},
+        {TACA_FRAME, .sizing = s_sizing_ptr, .frame_offset = 32},
         {TACA_IMM, .sizing = s_sizing_int, .imm = 2},
     });
     REQUIRE_NEXT_TACE({
         TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = s_sizing_ptr, .frame_offset = 32},
+        {TACA_FRAME, .is_addr = 1, .sizing = s_sizing_ptr, .frame_offset = 40},
         {TACA_REF, .sizing = s_sizing_ptr, .ref = index - 1},
     });
     REQUIRE_END_TACE();
@@ -3847,6 +3881,7 @@ int main()
     RUN_TEST(parse_sizeof);
     RUN_TEST(parse_constants);
     RUN_TEST(parse_constinit);
+    RUN_TEST(parse_lvalues);
     RUN_TEST(parse_typedef);
     RUN_TEST(parse_struct);
     RUN_TEST(parse_initializer);

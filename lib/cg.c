@@ -146,7 +146,7 @@ void cg_reserve_data(struct CodeGen* cg, const char* name, const char* data, con
         {
             array_appendf(&cg->data, ".quad L_.S%zu + %zu\n", base->const_idx, offset);
         }
-        else if (base && base->kind == TACA_LNAME)
+        else if (base && (base->kind == TACA_LNAME || base->kind == TACA_NAME))
         {
             array_appendf(&cg->data, ".quad %s + %zu\n", base->name, offset);
         }
