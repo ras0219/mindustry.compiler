@@ -337,7 +337,7 @@ static void typestr_append_decltype(const Decl* const* expr_seqs, TypeTable* tt,
     }
 }
 
-void typestr_from_decltype_Decl(const Decl* const* expr_seqs, TypeTable* tt, struct TypeStr* s, const Decl* d)
+void typestr_from_decltype_Decl(const Decl* const* expr_seqs, TypeTable* tt, TypeStr* s, const Decl* d)
 {
     // initialize type
     *s = s_type_unknown;

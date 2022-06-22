@@ -684,6 +684,14 @@ int lit_to_uint64(const char* s, uint64_t* out, LitSuffix* out_suffix, const str
                 break;
         }
     }
+    if (s[i] == '.')
+    {
+        do
+        {
+            ++i;
+        } while (s[i] >= '0' && s[i] <= '9');
+    }
+
 next_suffix:
     if (!(suffix & 1) && (s[i] | 32) == 'u')
     {

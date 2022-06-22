@@ -1226,7 +1226,7 @@ static void elaborate_stmt(struct Elaborator* elab, struct ElaborateDeclCtx* ctx
             if (stmt->expr)
             {
                 struct TypeStr ts;
-                elaborate_expr(elab, ctx, stmt->expr, &ts);
+                elaborate_expr_decay(elab, ctx, stmt->expr, &ts);
                 struct TypeStr fn = elab->cur_decl->sym->type;
                 typestr_pop_offset(&fn);
                 typestr_implicit_conversion(elab->types, &stmt->tok->rc, &ts, &fn);
@@ -1813,7 +1813,10 @@ static int elaborate_constinit(
         {
             TypeStr ty = {0};
             elaborate_expr(elab, NULL, (Expr*)ast, &ty);
-            if (!ty.c.is_const) return parser_tok_error(ast->tok, "error: expected constant expression\n");
+            if (!ty.c.is_const)
+            {
+                return parser_tok_error(ast->tok, "error: expected constant expression\n");
+            }
             memcpy(bytes, &ty.c.value.lower, sz);
             if (sz == 8)
             {
@@ -1923,6 +1926,9 @@ static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
                             "error: array initializer must be either a string literal or an initializer list\n"));
                     }
                 }
+                sym->type.c.is_const = 1;
+                sym->type.c.is_lvalue = 1;
+                sym->type.c.sym = sym;
             }
 
             sym->size = typestr_calc_sizing(elab->types, &sym->type, decl->tok);

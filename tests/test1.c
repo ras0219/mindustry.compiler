@@ -2456,13 +2456,13 @@ int test_be_nested_array(TestState* state)
     });
     REQUIRE_NEXT_TACE({
         TACO_LOAD,
-        .arg1 = {TACA_FRAME, .sizing = 0, 5, .frame_offset = 0},
+        .arg1 = {TACA_FRAME, .sizing = 0, 8, .frame_offset = 0},
         .arg2 = {TACA_REF, .sizing = s_sizing_ptr, .ref = index - 1},
     });
     REQUIRE_NEXT_TACE({
         TACO_ASSIGN,
         .arg1 = {TACA_REG, .is_addr = 1, .sizing = s_sizing_ptr, .reg = REG_RAX},
-        .arg2 = {TACA_FRAME, .sizing = 0, 5, .frame_offset = 0},
+        .arg2 = {TACA_FRAME, .sizing = 0, 8, .frame_offset = 0},
     });
     REQUIRE_NEXT_TACE({TACO_RETURN});
 

@@ -340,6 +340,7 @@ int main(int argc, const char* const* argv)
         "__GNUC__=3",
         "_FORTIFY_SOURCE=0",
         "double=long",
+        "float=int",
     };
 
     for (size_t i = 0; i < sizeof(predefs) / sizeof(predefs[0]); ++i)
