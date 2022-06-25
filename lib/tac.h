@@ -55,7 +55,8 @@
     Y(TACA_REF)                                                                                                        \
     Y(TACA_CONST)                                                                                                      \
     Y(TACA_PARAM)                                                                                                      \
-    Y(TACA_REG)
+    Y(TACA_REG)                                                                                                        \
+    Y(TACA_THROUGH_REG)
 
 #define Y_SUM(Z) +1
 #define Y_COMMA(Z) Z,

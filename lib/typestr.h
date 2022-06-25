@@ -1,6 +1,7 @@
 #pragma once
 
 #include "compilermacros.h"
+#include "mp.h"
 
 struct RowCol;
 struct Token;
@@ -15,12 +16,6 @@ enum
 {
     TYPESTR_BUF_SIZE = 16,
 };
-
-typedef struct Constant128
-{
-    unsigned long long lower;
-    unsigned char is_signed;
-} Constant128;
 
 typedef struct Constant
 {
@@ -192,8 +187,6 @@ __forceinline static unsigned int typestr_mask(const struct TypeStr* ts)
 {
     return s_typestr_mask_data[typestr_byte(ts)];
 }
-
-Constant128 mp_cast(Constant128 a, unsigned flags);
 
 void typestr_apply_integral_type(TypeStr* dst, const TypeStr* src);
 void typestr_assign_constant_value(TypeStr* t, Constant128 n);

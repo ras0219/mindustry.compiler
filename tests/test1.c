@@ -413,6 +413,7 @@ int preproc_ternary(struct TestState* state)
                               "#if 0 ? 1 : 0\n#error 'should not execute'\n#endif\n"
                               "#if 1 ? 1 ? 0 : 1 : 1\n#error 'should not execute'\n#endif\n"
                               "#if 1 ? 0 ? 1 : 0 : 1\n#error 'should not execute'\n#endif\n"
+                              "#if (3 == 3 && 0 >= 5 || 3 > 3)\n#error 'invalid'\n#endif\n"
                               ""));
 
     rc = 0;
@@ -1042,12 +1043,13 @@ int parse_unk_array(struct TestState* state)
                         "char txt6[] = \"hello\";\n"
                         "struct Point { int x, y; } points5[] = {[3] = 1,2,3};\n"
                         "char txt7[] = {\"hello\"};\n"
-                        "static const char mode[][5] = { \"EPRT\", \"PORT\" };\n"));
+                        "static const char mode[][5] = { \"EPRT\", \"PORT\" };\n"
+                        "struct Foo { int a; int last[]; };\n"));
     Parser* const parser = test.parser;
 
     // from https://en.cppreference.com/w/c/language/initialization
     struct Expr** const exprs = (struct Expr**)parser->expr_seqs.data;
-    REQUIRE_EQ(4, parser->top->extent);
+    REQUIRE_EQ(5, parser->top->extent);
     REQUIRE_EXPR(StmtDecls, decls, exprs[parser->top->offset])
     {
         REQUIRE_EQ(1, decls->extent);
@@ -2549,28 +2551,28 @@ int test_be_cast(TestState* state)
     index = 0;
     REQUIRE_NEXT_TEXT("_main:");
     REQUIRE_NEXT_TEXT("subq $120, %rsp");
-    REQUIRE_NEXT_TEXT("movsb 0(%rsp), %r10");
-    REQUIRE_NEXT_TEXT("mov %r10, 104(%rsp)");
+    REQUIRE_NEXT_TEXT("movsb 0(%rsp), %rax");
+    REQUIRE_NEXT_TEXT("mov %rax, 104(%rsp)");
 
-    REQUIRE_NEXT_TEXT("movsb 0(%rsp), %r10");
-    REQUIRE_NEXT_TEXT("add $1, %r10");
-    REQUIRE_NEXT_TEXT("mov %r10, 112(%rsp)");
+    REQUIRE_NEXT_TEXT("movsb 0(%rsp), %rax");
+    REQUIRE_NEXT_TEXT("add $1, %rax");
+    REQUIRE_NEXT_TEXT("mov %rax, 112(%rsp)");
 
     REQUIRE_NEXT_TEXT("movsb 112(%rsp), %r11");
     REQUIRE_NEXT_TEXT("mov %r11b, 0(%rsp)");
 
-    REQUIRE_NEXT_TEXT("movsb 104(%rsp), %r10");
-    REQUIRE_NEXT_TEXT("mov %r10, 104(%rsp)");
+    REQUIRE_NEXT_TEXT("movsb 104(%rsp), %rax");
+    REQUIRE_NEXT_TEXT("mov %rax, 104(%rsp)");
 
     REQUIRE_NEXT_TEXT("movsl 104(%rsp), %r11");
     REQUIRE_NEXT_TEXT("mov %r11d, 4(%rsp)");
 
-    REQUIRE_NEXT_TEXT("movsb 0(%rsp), %r10");
-    REQUIRE_NEXT_TEXT("mov %r10, 104(%rsp)");
+    REQUIRE_NEXT_TEXT("movsb 0(%rsp), %rax");
+    REQUIRE_NEXT_TEXT("mov %rax, 104(%rsp)");
 
-    REQUIRE_NEXT_TEXT("movsl 104(%rsp), %r10");
-    REQUIRE_NEXT_TEXT("add $2, %r10");
-    REQUIRE_NEXT_TEXT("mov %r10, 104(%rsp)");
+    REQUIRE_NEXT_TEXT("movsl 104(%rsp), %rax");
+    REQUIRE_NEXT_TEXT("add $2, %rax");
+    REQUIRE_NEXT_TEXT("mov %rax, 104(%rsp)");
 
     REQUIRE_NEXT_TEXT("movsl 104(%rsp), %r11");
     REQUIRE_NEXT_TEXT("mov %r11d, 8(%rsp)");
@@ -2995,18 +2997,18 @@ int test_be_va_args(TestState* state)
     REQUIRE_NEXT_TEXT("mov 112(%rsp), %rax");
     REQUIRE_NEXT_TEXT("cmp $0, %rax");
     REQUIRE_NEXT_TEXT("jz  L$2");
-    REQUIRE_NEXT_TEXT("mov 72(%rsp), %r10");
-    REQUIRE_NEXT_TEXT("movsl 56(%rsp), %r11");
-    REQUIRE_NEXT_TEXT("add %r11, %r10");
-    REQUIRE_NEXT_TEXT("mov %r10, 112(%rsp)");
+    REQUIRE_NEXT_TEXT("mov 72(%rsp), %rax");
+    REQUIRE_NEXT_TEXT("movsl 56(%rsp), %rdx");
+    REQUIRE_NEXT_TEXT("add %rdx, %rax");
+    REQUIRE_NEXT_TEXT("mov %rax, 112(%rsp)");
 
     REQUIRE_NEXT_TEXT("mov 112(%rsp), %rsi");
     REQUIRE_NEXT_TEXT("leaq 84(%rsp), %rdi");
     REQUIRE_NEXT_TEXT("movsd");
 
-    REQUIRE_NEXT_TEXT("movsl 56(%rsp), %r10");
-    REQUIRE_NEXT_TEXT("add $8, %r10");
-    REQUIRE_NEXT_TEXT("mov %r10, 112(%rsp)");
+    REQUIRE_NEXT_TEXT("movsl 56(%rsp), %rax");
+    REQUIRE_NEXT_TEXT("add $8, %rax");
+    REQUIRE_NEXT_TEXT("mov %rax, 112(%rsp)");
     REQUIRE_NEXT_TEXT("movsl 112(%rsp), %r11");
     REQUIRE_NEXT_TEXT("mov %r11d, 56(%rsp)");
     REQUIRE_NEXT_TEXT("jmp L$1");
@@ -3015,9 +3017,9 @@ int test_be_va_args(TestState* state)
     REQUIRE_NEXT_TEXT("leaq 84(%rsp), %rdi");
     REQUIRE_NEXT_TEXT("movsd");
 
-    REQUIRE_NEXT_TEXT("mov 64(%rsp), %r10");
-    REQUIRE_NEXT_TEXT("add $8, %r10");
-    REQUIRE_NEXT_TEXT("mov %r10, 112(%rsp)");
+    REQUIRE_NEXT_TEXT("mov 64(%rsp), %rax");
+    REQUIRE_NEXT_TEXT("add $8, %rax");
+    REQUIRE_NEXT_TEXT("mov %rax, 112(%rsp)");
     REQUIRE_NEXT_TEXT("mov 112(%rsp), %r11");
     REQUIRE_NEXT_TEXT("mov %r11, 64(%rsp)");
     REQUIRE_NEXT_TEXT("L$1:");
@@ -3596,14 +3598,14 @@ int test_cg_refs(TestState* state)
     size_t index = 0;
     REQUIRE_NEXT_TEXT("subq $120, %rsp");
 
-    REQUIRE_NEXT_TEXT("leaq _a(%rip), %r10");
-    REQUIRE_NEXT_TEXT("movsl _b(%rip), %r11");
-    REQUIRE_NEXT_TEXT("add %r11, %r10");
+    REQUIRE_NEXT_TEXT("leaq _a(%rip), %rax");
+    REQUIRE_NEXT_TEXT("movsl _b(%rip), %rdx");
+    REQUIRE_NEXT_TEXT("add %rdx, %rax");
 
-    REQUIRE_NEXT_TEXT("movq _a@GOTPCREL(%rip), %r10");
-    REQUIRE_NEXT_TEXT("movq _b@GOTPCREL(%rip), %r11");
-    REQUIRE_NEXT_TEXT("movsl (%r11), %r11");
-    REQUIRE_NEXT_TEXT("add %r11, %r10");
+    REQUIRE_NEXT_TEXT("movq _a@GOTPCREL(%rip), %rax");
+    REQUIRE_NEXT_TEXT("movq _b@GOTPCREL(%rip), %rdx");
+    REQUIRE_NEXT_TEXT("movsl (%rdx), %rdx");
+    REQUIRE_NEXT_TEXT("add %rdx, %rax");
 
     REQUIRE_NEXT_TEXT("addq $120, %rsp");
     REQUIRE_NEXT_TEXT("ret");
@@ -3769,14 +3771,14 @@ int test_cg_add(TestState* state)
     size_t index = 0;
     REQUIRE_NEXT_TEXT("subq $120, %rsp");
 
-    REQUIRE_NEXT_TEXT("leaq 0(%rsp), %r10");
-    REQUIRE_NEXT_TEXT("add $7, %r10");
+    REQUIRE_NEXT_TEXT("leaq 0(%rsp), %rax");
+    REQUIRE_NEXT_TEXT("add $7, %rax");
 
-    REQUIRE_NEXT_TEXT("movsl 0(%rsp), %r10");
-    REQUIRE_NEXT_TEXT("add $7, %r10");
+    REQUIRE_NEXT_TEXT("movsl 0(%rsp), %rax");
+    REQUIRE_NEXT_TEXT("add $7, %rax");
 
-    REQUIRE_NEXT_TEXT("movsb 0(%rsp), %r10");
-    REQUIRE_NEXT_TEXT("add $7, %r10");
+    REQUIRE_NEXT_TEXT("movsb 0(%rsp), %rax");
+    REQUIRE_NEXT_TEXT("add $7, %rax");
 
     REQUIRE_NEXT_TEXT("addq $120, %rsp");
     REQUIRE_NEXT_TEXT("ret");

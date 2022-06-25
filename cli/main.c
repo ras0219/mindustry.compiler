@@ -338,9 +338,12 @@ int main(int argc, const char* const* argv)
         "__LINE__=0",
         "__ras0219_cc__",
         "__GNUC__=3",
+        "__GNUC_MINOR__=0",
         "_FORTIFY_SOURCE=0",
         "double=long",
         "float=int",
+        "__asm__(X)=",
+        "__attribute__(X)=",
     };
 
     for (size_t i = 0; i < sizeof(predefs) / sizeof(predefs[0]); ++i)

@@ -880,24 +880,6 @@ void typestr_apply_integral_type(TypeStr* dst, const TypeStr* src)
     }
 }
 
-Constant128 mp_cast(Constant128 a, unsigned flags)
-{
-    switch (flags & (TYPE_MASK_WIDTH))
-    {
-        case TYPE_FLAGS_SIGNED | TYPE_FLAGS_WIDTH1: a.lower = (int8_t)a.lower; break;
-        case TYPE_FLAGS_SIGNED | TYPE_FLAGS_WIDTH2: a.lower = (int16_t)a.lower; break;
-        case TYPE_FLAGS_SIGNED | TYPE_FLAGS_WIDTH4: a.lower = (int32_t)a.lower; break;
-        case TYPE_FLAGS_SIGNED | TYPE_FLAGS_WIDTH8: a.lower = (int64_t)a.lower; break;
-
-        case TYPE_FLAGS_WIDTH1: a.lower = (uint8_t)a.lower; break;
-        case TYPE_FLAGS_WIDTH2: a.lower = (uint16_t)a.lower; break;
-        case TYPE_FLAGS_WIDTH4: a.lower = (uint32_t)a.lower; break;
-        case TYPE_FLAGS_WIDTH8: a.lower = (uint64_t)a.lower; break;
-        default: abort();
-    }
-    return a;
-}
-
 void typestr_assign_constant_value(TypeStr* t, Constant128 n)
 {
     unsigned mask = typestr_mask(t);

@@ -15,7 +15,10 @@ typedef struct Parser
 {
     struct AutoHeap strings_to_free;
 
-    struct Ast* parent;
+    /// Current Function
+    struct Decl* parent;
+    /// Current struct/union
+    struct TypeSymbol* cur_su;
     size_t anon_idx;
 
     struct Scope scope;

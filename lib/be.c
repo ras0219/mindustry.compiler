@@ -43,7 +43,6 @@ const char* register_to_string(enum Register k)
 #undef Y
 static const struct TACAddress s_taca_void = {};
 
-// static const int s_ms_arg_reg[] = {REG_RCX, REG_RDX, REG_R8, REG_R9};
 static const int s_sysv_arg_reg[] = {REG_RDI, REG_RSI, REG_RDX, REG_RCX, REG_R8, REG_R9};
 
 static __forceinline size_t round_to_alignment(size_t size, size_t align)

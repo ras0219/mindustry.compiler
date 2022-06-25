@@ -1079,8 +1079,8 @@ fail:
 
 static const struct Token* parse_declarator(Parser* p, const struct Token* cur_tok, struct Decl* decl)
 {
-    struct Ast* const prev_parent = p->parent;
-    p->parent = &decl->ast;
+    Decl* const prev_parent = p->parent;
+    p->parent = decl;
     while (cur_tok->type == LEX_ATTRIBUTE)
     {
         ++cur_tok;
@@ -1353,6 +1353,7 @@ static int insert_definition(Parser* p, Decl* decl)
     else
     {
         decl->sym->def = decl;
+        decl->sym->parent_su = p->cur_su;
     }
     return 0;
 }
@@ -1385,7 +1386,7 @@ static int insert_typedef(Parser* p, Decl* decl)
 
 static const struct Token* parse_fnbody(Parser* p, const struct Token* cur_tok, Decl* pdecl)
 {
-    Ast* const prev_parent = p->parent;
+    Decl* const prev_parent = p->parent;
     scope_push_subscope(&p->scope);
     if (pdecl->type->kind != AST_DECLFN)
         PARSER_FAIL_TOK(cur_tok, "error: only function types can be defined with a code block\n");
@@ -1396,7 +1397,7 @@ static const struct Token* parse_fnbody(Parser* p, const struct Token* cur_tok, 
         StmtDecls* argdecl = decls[fn->offset + i];
         PARSER_CHECK_NOT(insert_definition(p, decls[argdecl->offset]));
     }
-    p->parent = &pdecl->ast;
+    p->parent = pdecl;
     struct StmtBlock* init;
     PARSER_DO(parse_stmt_block(p, cur_tok + 1, &init));
     pdecl->init = &init->ast;
@@ -1551,6 +1552,8 @@ static const struct Token* parse_su_body(struct Parser* p, const struct Token* c
 #if defined(TRACING_SCOPES)
     fprintf(stderr, "parse_su_body(): push %s\n", specs->name);
 #endif
+    TypeSymbol* const prev_su = p->cur_su;
+    p->cur_su = specs->sym;
     scope_push_subscope(&p->su_scope);
     PARSER_DO(parse_stmt_block(p, cur_tok, &specs->suinit));
     for (size_t i = 0; i < specs->suinit->extent; ++i)
@@ -1573,6 +1576,7 @@ fail:
     fprintf(stderr, "parse_su_body(): pop %s\n", specs->name);
 #endif
     scope_pop_subscope(&p->su_scope);
+    p->cur_su = prev_su;
     return cur_tok;
 }
 
@@ -1616,6 +1620,7 @@ static const struct Token* parse_stmt(Parser* p, const struct Token* cur_tok, st
         case LEX_EXTERN:
         case LEX_STATIC:
         case LEX_ATTRIBUTE:
+        case LEX_INLINE:
         case LEX_AUTO:
         case LEX_REGISTER:
         {

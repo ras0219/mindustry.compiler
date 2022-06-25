@@ -4,6 +4,8 @@
 #include "tac.h"
 #include "typestr.h"
 
+struct Decl;
+
 typedef struct Attribute
 {
     char ch;
@@ -39,8 +41,8 @@ typedef struct DeclSpecs
 {
     INHERIT_ASTTYPE;
 
-    /// encompassing function or struct
-    Ast* parent;
+    /// encompassing function declaration
+    struct Decl* parent;
     const char* name;
     struct Attribute attr;
     struct Symbol* _typedef;
@@ -129,7 +131,7 @@ typedef struct Symbol
     const char* name;
     Decl* last_decl;
     Decl* def;
-    struct TypeSymbol* parent;
+    struct TypeSymbol* parent_su;
     struct Symbol* next_field;
     unsigned char is_enum_constant : 1;
     struct ExprLit* string_constant;

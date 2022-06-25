@@ -188,126 +188,6 @@ static void promote_common_type(TypeStr* l, TypeStr* r)
     }
 }
 
-static const Constant128 s_zero_constant = {0};
-static const Constant128 s_one_constant = {.lower = 1};
-
-static Constant128 mp_u64(uint64_t u)
-{
-    Constant128 n = {.lower = u};
-    return n;
-}
-static Constant128 mp_i64(int64_t u)
-{
-    Constant128 n = {.lower = u};
-    return n;
-}
-#if 0
-static Constant128 mp_add(Constant128 a, Constant128 b)
-{
-    Constant128 ret = {a.lower + b.lower};
-    return ret;
-}
-#endif
-/// a*ca + b
-static Constant128 mp_fma(Constant128 a, int ca, Constant128 b)
-{
-    a.lower *= ca;
-    a.lower += b.lower;
-    return a;
-}
-/// a - b*cb
-static Constant128 mp_fsm(Constant128 a, Constant128 b, int cb)
-{
-    b.lower *= cb;
-    a.lower -= b.lower;
-    return a;
-}
-static Constant128 mp_sub(Constant128 a, Constant128 b)
-{
-    Constant128 ret = {a.lower - b.lower};
-    return ret;
-}
-static Constant128 mp_mul(Constant128 a, Constant128 b)
-{
-    Constant128 ret = {a.lower * b.lower};
-    return ret;
-}
-static Constant128 mp_div(Constant128 a, Constant128 b, const Token* tok)
-{
-    if (b.lower == 0)
-    {
-        parser_tok_error(tok, "error: divide by 0 is undefined.\n");
-        return s_zero_constant;
-    }
-    Constant128 ret = {a.lower / b.lower};
-    return ret;
-}
-static Constant128 mp_idiv(Constant128 a, int b, const Token* tok)
-{
-    if (b == 0)
-    {
-        parser_tok_error(tok, "error: divide by 0 is undefined.\n");
-        return s_zero_constant;
-    }
-    a.lower /= b;
-    return a;
-}
-static Constant128 mp_mod(Constant128 a, Constant128 b, const Token* tok)
-{
-    if (b.lower == 0)
-    {
-        parser_tok_error(tok, "error: remainder by 0 is undefined.\n");
-        return s_zero_constant;
-    }
-    Constant128 ret = {a.lower % b.lower};
-    return ret;
-}
-static Constant128 mp_bor(Constant128 a, Constant128 b)
-{
-    Constant128 ret = {a.lower | b.lower};
-    return ret;
-}
-static Constant128 mp_bnot(Constant128 a)
-{
-    Constant128 ret = {~a.lower};
-    return ret;
-}
-static Constant128 mp_lnot(Constant128 a)
-{
-    Constant128 ret = {!a.lower};
-    return ret;
-}
-static Constant128 mp_band(Constant128 a, Constant128 b)
-{
-    Constant128 ret = {a.lower & b.lower};
-    return ret;
-}
-static Constant128 mp_bxor(Constant128 a, Constant128 b)
-{
-    Constant128 ret = {a.lower ^ b.lower};
-    return ret;
-}
-static Constant128 mp_shl(Constant128 a, Constant128 b, const Token* tok)
-{
-    if (b.lower >= 64)
-    {
-        parser_tok_error(tok, "error: left-shifting a value by <0 or >=64 is undefined behavior.\n");
-        return s_zero_constant;
-    }
-    a.lower <<= b.lower;
-    return a;
-}
-static Constant128 mp_shr(Constant128 a, Constant128 b, const Token* tok)
-{
-    if (b.lower >= 64)
-    {
-        parser_tok_error(tok, "error: right-shifting a value by <0 or >=64 is undefined behavior.\n");
-        return s_zero_constant;
-    }
-    a.lower >>= b.lower;
-    return a;
-}
-
 static void elaborate_expr_ternary(struct Elaborator* elab,
                                    struct ElaborateDeclCtx* ctx,
                                    struct ExprBinOp* e,
@@ -411,8 +291,8 @@ static void elaborate_expr_ternary(struct Elaborator* elab,
 }
 
 static int cnst_same_base(Constant c1, Constant c2) { return c1.sym == c2.sym; }
-static int cnst_eq(Constant c1, Constant c2) { return cnst_same_base(c1, c2) && c1.value.lower == c2.value.lower; }
-static int cnst_truthy(Constant c1) { return c1.sym || c1.value.lower; }
+static int cnst_eq(Constant c1, Constant c2) { return cnst_same_base(c1, c2) && mp_is_eq(c1.value, c2.value); }
+static int cnst_truthy(Constant c1) { return c1.sym || mp_is_nonzero(c1.value); }
 
 static void elaborate_expr_ExprBinOp_impl(
     Elaborator* elab, const RowCol* rc, TypeStr* rty, TypeStr* rhs, unsigned int op, int* info)
@@ -647,7 +527,7 @@ static void elaborate_expr_ExprBinOp(struct Elaborator* elab,
                     typestr_assign_constant_value(rty, mp_shr(rty->c.value, rhs_ty.c.value, e->tok));
                     break;
                 case TOKEN_SYM1('+'):
-                    typestr_assign_constant_value(rty, mp_fma(rhs_ty.c.value, e->info, rty->c.value));
+                    typestr_assign_constant_value(rty, mp_fma(rty->c.value, rhs_ty.c.value, e->info));
                     break;
                 case TOKEN_SYM1('-'):
                     if ((TYPE_FLAGS_POINTER & lhs_mask & rhs_mask) && rty->c.sym && rhs_ty.c.sym)
@@ -1888,8 +1768,16 @@ static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
                 const size_t elem_size = typestr_get_size(elab->types, &sym->type, &decl->tok->rc);
                 if (!decl->init)
                 {
-                    UNWRAP(parser_tok_error(
-                        decl->tok, "error: definition of object with unknown array bounds must have an initializer\n"));
+                    if (!decl->sym->next_field && decl->sym->parent_su)
+                    {
+                        typestr_append_offset(&sym->type, 0, TYPE_BYTE_ARRAY);
+                    }
+                    else
+                    {
+                        UNWRAP(parser_tok_error(
+                            decl->tok,
+                            "error: definition of object with unknown array bounds must have an initializer\n"));
+                    }
                 }
                 else
                 {
@@ -1931,24 +1819,30 @@ static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
                 sym->type.c.sym = sym;
             }
 
-            sym->size = typestr_calc_sizing(elab->types, &sym->type, decl->tok);
             sym->align = typestr_get_align(elab->types, &sym->type);
-
-            if (sym->size.width == 0)
+            if (tyb == TYPE_BYTE_UNK_ARRAY && !decl->sym->next_field && decl->sym->parent_su)
             {
-                /* type may be incomplete */
-                if (decl->specs->is_extern)
+            }
+            else
+            {
+                sym->size = typestr_calc_sizing(elab->types, &sym->type, decl->tok);
+
+                if (sym->size.width == 0)
                 {
-                    /* it's extern -- OK */
-                }
-                else if (decl->specs->is_fn_arg && !((struct Decl*)decl->specs->parent)->init)
-                {
-                    /* arg of function prototype -- OK */
-                }
-                else
-                {
-                    parser_tok_error(decl->tok, "error: definition of object with incomplete size\n");
-                    return 0;
+                    /* type may be incomplete */
+                    if (decl->specs->is_extern)
+                    {
+                        /* it's extern -- OK */
+                    }
+                    else if (decl->specs->is_fn_arg && !((struct Decl*)decl->specs->parent)->init)
+                    {
+                        /* arg of function prototype -- OK */
+                    }
+                    else
+                    {
+                        parser_tok_error(decl->tok, "error: definition of object with incomplete size\n");
+                        return 0;
+                    }
                 }
             }
 

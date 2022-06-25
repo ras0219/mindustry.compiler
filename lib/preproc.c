@@ -2,6 +2,8 @@
 
 #include <limits.h>
 #include <string.h>
+
+#include "mp.h"
 #ifndef _WIN32
 #include <sys/errno.h>
 #endif
@@ -351,240 +353,263 @@ enum MacroIfOp
 //     return 0;
 // }
 
-static const struct Token* pp_parse_if_expr(struct Preprocessor* pp, const struct Token* cur, long* out_value)
+static int lit_to_mp(const char* s, Constant128* out, const struct RowCol* rc)
 {
-    unsigned int add_op = 0;
-    long add_value = 0;
-    unsigned int mul_op = 0;
-    long mul_value = 0;
-    unsigned int relop = 0;
-    long rel_value = 0;
-    unsigned int eqop = 0;
-    long eq_value = 0;
-    long or_value = 0;
-    long and_value = 1;
-    int invert = 0;
-    int negate = 0;
-top:
-#if defined(TRACING_PREPROC)
-    fprintf(stderr,
-            "pp_parse_if_expr(): *out_value = %d, cur = %d '%s' %s:%d:%d\n",
-            *out_value,
-            cur->type,
-            pp_token_str(pp, cur),
-            cur->rc.file,
-            cur->rc.row,
-            cur->rc.col);
-    fflush(stderr);
-#endif
-    if (cur->type == TOKEN_SYM1('('))
+    uint64_t u;
+    LitSuffix suffix;
+    if (lit_to_uint64(s, &u, &suffix, rc)) return 1;
+
+    if (suffix & LIT_SUFFIX_MASK_UNSIGNED)
     {
-        cur = pp_parse_if_expr(pp, cur + 1, out_value);
-        if (!cur) return NULL;
-        if (cur->type != TOKEN_SYM1(')'))
-        {
-            parser_tok_error(cur, "error: expected ')' in macro condition\n");
-            return NULL;
-        }
-        ++cur;
-    }
-    else if (cur->type == LEX_NUMBER)
-    {
-        LitSuffix suffix;
-        uint64_t u;
-        if (lit_to_uint64(pp_token_str(pp, cur), &u, &suffix, &cur->rc)) return NULL;
-        if (u > LONG_MAX) return parser_tok_error(cur, "error: literal value exceeded LONG_MAX: %llu\n", u), NULL;
-        *out_value = u;
-        ++cur;
-    }
-    else if (cur->basic_type == LEX_IDENT)
-    {
-        *out_value = 0;
-        ++cur;
-    }
-    else if (cur->type == TOKEN_SYM1('!'))
-    {
-        ++invert;
-        ++cur;
-        goto top;
-    }
-    else if (cur->type == TOKEN_SYM1('-'))
-    {
-        if (!invert)
-        {
-            negate = !negate;
-        }
-        ++cur;
-        goto top;
+        *out = mp_u64(u);
     }
     else
     {
-        parser_tok_error(cur, "error: expected primary expression in macro condition\n");
-        return NULL;
+        *out = mp_i64(u);
     }
+    return 0;
+}
 
+static const Token* pp_parse_if_expr(struct Preprocessor* pp, const Token* cur, Constant128* out_value)
+{
+    const Token* add_op = 0;
+    const Token* mul_op = 0;
+    const Token* relop = 0;
+    const Token* eqop = 0;
+    Constant128 add_value;
+    Constant128 mul_value;
+    Constant128 rel_value;
+    Constant128 eq_value;
+
+    // booleans
+    char or_value = 0;
+    char and_value = 1;
+    char lnot = 0;
+    char negate = 0;
+
+    for (;; ++cur)
+    {
 #if defined(TRACING_PREPROC)
-    fprintf(stderr,
-            "pp_parse_if_expr(): *out_value = %d, cur = %d '%s' %s:%d:%d\n",
-            *out_value,
-            cur->type,
-            pp_token_str(pp, cur),
-            cur->rc.file,
-            cur->rc.row,
-            cur->rc.col);
-    fflush(stderr);
+        fprintf(stderr,
+                "pp_parse_if_expr(): *out_value = %d, cur = %d '%s' %s:%d:%d\n",
+                *out_value,
+                cur->type,
+                pp_token_str(pp, cur),
+                cur->rc.file,
+                cur->rc.row,
+                cur->rc.col);
+        fflush(stderr);
 #endif
-
-    if (invert)
-    {
-        *out_value = (invert & 1) ^ (*out_value != 0);
-        invert = 0;
-    }
-    if (negate)
-    {
-        if (*out_value == LONG_MIN) abort();
-        *out_value = -*out_value;
-        negate = 0;
-    }
-
-    if (mul_op)
-    {
-        int64_t v;
-        switch (mul_op)
+        if (cur->type == TOKEN_SYM1('('))
         {
-            case TOKEN_SYM1('*'): v = (int64_t)mul_value * (int64_t)*out_value; break;
-            case TOKEN_SYM1('/'):
-                if (*out_value == 0) abort();
-                v = (int64_t)mul_value / (int64_t)*out_value;
-                break;
-            case TOKEN_SYM1('%'):
-                if (*out_value <= 0) abort();
-                v = (int64_t)mul_value % (int64_t)*out_value;
-                break;
-            default: abort();
-        }
-        if (v > INT_MAX || v < INT_MIN) abort();
-        *out_value = v;
-    }
-    mul_op = 0;
-    switch (cur->type)
-    {
-        case TOKEN_SYM1('*'):
-        case TOKEN_SYM1('/'):
-        case TOKEN_SYM1('%'):
-            mul_op = cur->type;
-            mul_value = *out_value;
+            cur = pp_parse_if_expr(pp, cur + 1, out_value);
+            if (!cur) return NULL;
+            if (cur->type != TOKEN_SYM1(')'))
+            {
+                parser_tok_error(cur, "error: expected ')' in macro condition\n");
+                return NULL;
+            }
             ++cur;
-            goto top;
-        default: break;
-    }
-
-    if (add_op)
-    {
-        int64_t v;
-        switch (add_op)
-        {
-            case TOKEN_SYM1('+'): v = (int64_t)add_value + (int64_t)*out_value; break;
-            case TOKEN_SYM1('-'): v = (int64_t)add_value - (int64_t)*out_value; break;
-            default: abort();
         }
-        if (v > INT_MAX || v < INT_MIN) abort();
-        *out_value = v;
-    }
-    add_op = 0;
-    switch (cur->type)
-    {
-        case TOKEN_SYM1('+'):
-        case TOKEN_SYM1('-'):
-            add_op = cur->type;
-            add_value = *out_value;
-            ++cur;
-            goto top;
-        default: break;
-    }
-
-    if (relop)
-    {
-        switch (relop)
+        else if (cur->type == LEX_NUMBER)
         {
-            case TOKEN_SYM1('<'): *out_value = rel_value < *out_value; break;
-            case TOKEN_SYM1('>'): *out_value = rel_value > *out_value; break;
-            case TOKEN_SYM2('<', '='): *out_value = rel_value <= *out_value; break;
-            case TOKEN_SYM2('>', '='): *out_value = rel_value >= *out_value; break;
-            default: abort();
+            if (lit_to_mp(pp_token_str(pp, cur), out_value, &cur->rc)) return NULL;
+            ++cur;
         }
-    }
-    relop = 0;
-    switch (cur->type)
-    {
-        case TOKEN_SYM1('<'):
-        case TOKEN_SYM1('>'):
-        case TOKEN_SYM2('<', '='):
-        case TOKEN_SYM2('>', '='):
-            relop = cur->type;
-            rel_value = *out_value;
-            ++cur;
-            goto top;
-        default: break;
-    }
-
-    if (eqop)
-    {
-        switch (eqop)
+        else if (cur->basic_type == LEX_IDENT)
         {
-            case TOKEN_SYM2('=', '='): *out_value = eq_value == *out_value; break;
-            case TOKEN_SYM2('!', '='): *out_value = eq_value != *out_value; break;
-            default: abort();
+            *out_value = s_zero_constant;
+            ++cur;
         }
-    }
-    eqop = 0;
-    switch (cur->type)
-    {
-        case TOKEN_SYM2('=', '='):
-        case TOKEN_SYM2('!', '='):
-            eqop = cur->type;
-            eq_value = *out_value;
-            ++cur;
-            goto top;
-        default: break;
-    }
-
-    if (*out_value) *out_value = 1;
-
-    if (!and_value) *out_value = 0;
-    and_value = 1;
-    if (cur->type == TOKEN_SYM2('&', '&'))
-    {
-        ++cur;
-        and_value = *out_value;
-        goto top;
-    }
-
-    if (or_value) *out_value = 1;
-    or_value = 0;
-    if (cur->type == TOKEN_SYM2('|', '|'))
-    {
-        ++cur;
-        or_value = *out_value;
-        goto top;
-    }
-
-    if (cur->type == TOKEN_SYM1('?'))
-    {
-        long left, right;
-        cur = pp_parse_if_expr(pp, cur + 1, &left);
-        if (!cur) return NULL;
-        if (cur->type != TOKEN_SYM1(':'))
+        else if (cur->type == TOKEN_SYM1('!'))
         {
-            parser_tok_error(cur, "error: incomplete ternary operator in macro expression\n");
+            ++lnot;
+            continue;
+        }
+        else if (cur->type == TOKEN_SYM1('-'))
+        {
+            if (!lnot)
+            {
+                negate = !negate;
+            }
+            continue;
+        }
+        else
+        {
+            parser_tok_error(cur, "error: expected primary expression in macro condition\n");
             return NULL;
         }
-        cur = pp_parse_if_expr(pp, cur + 1, &right);
-        if (!cur) return NULL;
-        *out_value = *out_value ? left : right;
-    }
 
-    return cur;
+#if defined(TRACING_PREPROC)
+        fprintf(stderr,
+                "pp_parse_if_expr(): *out_value = %d, cur = %d '%s' %s:%d:%d\n",
+                *out_value,
+                cur->type,
+                pp_token_str(pp, cur),
+                cur->rc.file,
+                cur->rc.row,
+                cur->rc.col);
+        fflush(stderr);
+#endif
+
+        if (lnot)
+        {
+            if ((lnot & 1) == mp_is_nonzero(*out_value))
+            {
+                *out_value = s_zero_constant;
+            }
+            else
+            {
+                *out_value = s_one_constant;
+            }
+            lnot = 0;
+        }
+
+        if (negate)
+        {
+            *out_value = mp_neg(*out_value);
+            negate = 0;
+        }
+
+        if (mul_op)
+        {
+            switch (mul_op->type)
+            {
+                case TOKEN_SYM1('*'): *out_value = mp_mul(mul_value, *out_value); break;
+                case TOKEN_SYM1('/'): *out_value = mp_div(mul_value, *out_value, mul_op); break;
+                case TOKEN_SYM1('%'): *out_value = mp_mod(mul_value, *out_value, mul_op); break;
+                default: abort();
+            }
+        }
+        mul_op = 0;
+        switch (cur->type)
+        {
+            case TOKEN_SYM1('*'):
+            case TOKEN_SYM1('/'):
+            case TOKEN_SYM1('%'):
+                mul_op = cur;
+                mul_value = *out_value;
+                continue;
+            default: break;
+        }
+
+        if (add_op)
+        {
+            switch (add_op->type)
+            {
+                case TOKEN_SYM1('-'): *out_value = mp_neg(*out_value);
+                case TOKEN_SYM1('+'): mpa_add(out_value, add_value); break;
+                default: abort();
+            }
+        }
+        add_op = 0;
+        switch (cur->type)
+        {
+            case TOKEN_SYM1('+'):
+            case TOKEN_SYM1('-'):
+                add_op = cur;
+                add_value = *out_value;
+                continue;
+            default: break;
+        }
+
+        if (relop)
+        {
+            int s = 0;
+            int r;
+            switch (relop->type)
+            {
+                case TOKEN_SYM2('>', '='): s = 1;
+                case TOKEN_SYM1('<'): r = mp_is_lt(rel_value, *out_value); break;
+                case TOKEN_SYM2('<', '='): s = 1;
+                case TOKEN_SYM1('>'): r = mp_is_lt(*out_value, rel_value); break;
+                default: abort();
+            }
+            if (s == r)
+                *out_value = s_zero_constant;
+            else
+                *out_value = s_one_constant;
+        }
+        relop = 0;
+        switch (cur->type)
+        {
+            case TOKEN_SYM1('<'):
+            case TOKEN_SYM1('>'):
+            case TOKEN_SYM2('<', '='):
+            case TOKEN_SYM2('>', '='):
+                relop = cur;
+                rel_value = *out_value;
+                continue;
+            default: break;
+        }
+
+        if (eqop)
+        {
+            int r = mp_is_eq(eq_value, *out_value);
+            if (r == (eqop->type == TOKEN_SYM2('=', '=')))
+            {
+                *out_value = s_one_constant;
+            }
+            else
+            {
+                *out_value = s_zero_constant;
+            }
+        }
+        eqop = 0;
+        switch (cur->type)
+        {
+            case TOKEN_SYM2('=', '='):
+            case TOKEN_SYM2('!', '='):
+                eqop = cur;
+                eq_value = *out_value;
+                continue;
+            default: break;
+        }
+
+        if (mp_is_nonzero(*out_value)) *out_value = s_one_constant;
+
+        if (!and_value) *out_value = s_zero_constant;
+        and_value = 1;
+        if (cur->type == TOKEN_SYM2('&', '&'))
+        {
+            and_value = mp_is_nonzero(*out_value);
+            continue;
+        }
+
+        if (or_value) *out_value = s_one_constant;
+        or_value = 0;
+        if (cur->type == TOKEN_SYM2('|', '|'))
+        {
+            or_value = mp_is_nonzero(*out_value);
+            continue;
+        }
+
+        if (cur->type == TOKEN_SYM1('?'))
+        {
+            Constant128 ignore, *left, *right;
+            if (mp_is_nonzero(*out_value))
+            {
+                left = out_value;
+                right = &ignore;
+            }
+            else
+            {
+                left = &ignore;
+                right = out_value;
+            }
+            cur = pp_parse_if_expr(pp, cur + 1, left);
+            if (!cur) return NULL;
+            if (cur->type != TOKEN_SYM1(':'))
+            {
+                parser_tok_error(cur, "error: incomplete ternary operator in macro expression\n");
+                return NULL;
+            }
+            cur = pp_parse_if_expr(pp, cur + 1, right);
+            if (!cur) return NULL;
+        }
+
+        return cur;
+    }
 }
 
 // increments either if_false_depth or if_true_depth
@@ -606,7 +631,7 @@ static int pp_flush_expr(struct Preprocessor* pp)
         struct Token* back = array_push_zeroes(&pp->toks, sizeof(struct Token));
         back->type = back->basic_type = LEX_EOF;
 
-        long value = 0;
+        Constant128 value;
         const struct Token* cur = pp_parse_if_expr(pp, (struct Token*)pp->toks.data + expansion_start, &value);
 
         UNWRAP(!cur);
@@ -618,13 +643,14 @@ static int pp_flush_expr(struct Preprocessor* pp)
         fprintf(stderr, "pp_flush_expr(): %d\n", value);
 #endif
 
-        if (value)
+        if (mp_is_nonzero(value))
             ++pp->if_true_depth;
         else
             ++pp->if_false_depth;
         if (pp->debug_print_ifs)
         {
-            fprintf(stderr, "%s:%d: #if %s\n", pp->dir_rc.file, pp->dir_rc.row, value ? "true" : "false");
+            fprintf(
+                stderr, "%s:%d: #if %s\n", pp->dir_rc.file, pp->dir_rc.row, mp_is_nonzero(value) ? "true" : "false");
         }
         pp->exp = exp;
     }
