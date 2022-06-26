@@ -195,6 +195,11 @@ static int parse_arguments(int argc, const char* const* argv, struct Arguments* 
                 array_appends(&out->macro_name, argv[i] + 2);
                 array_push_byte(&out->macro_name, 0);
             }
+            else if (argv[i][1] == 'W')
+            {
+                // Ignore
+                fprintf(stderr, "warning: unrecognized flag %s\n", argv[i]);
+            }
             else
             {
                 fprintf(stderr, "error: unrecognized flag %s\n", argv[i]);

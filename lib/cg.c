@@ -290,10 +290,7 @@ static int cg_gen_taca_offset(struct CodeGen* cg, struct TACAddress addr, int of
             if (frame->temp_offset <= frame->locals_offset + addr.frame_offset) abort();
             array_appendf(&cg->code, "%zu(%%rsp)", offset + frame->locals_offset + addr.frame_offset);
             break;
-        case TACA_THROUGH_REG:
-            array_appendf(&cg->code, "%d", offset);
-            rc = cg_gen_taca(cg, addr, frame);
-            break;
+        case TACA_THROUGH_REG: array_appendf(&cg->code, "%d(%s)", offset, s_reg_names[addr.reg]); break;
         case TACA_ARG:
             array_appendf(&cg->code, "%zu(%%rsp)", offset + 8 + frame->total_frame_size + addr.arg_offset);
             break;
@@ -390,10 +387,11 @@ not_address:;
 skip:
     if (addr.sizing.width - offset >= 2)
     {
+        if (reg == REG_R10) abort();
         array_appends(&cg->code, "    movzw ");
         UNWRAP(cg_gen_taca_offset(cg, addr, offset, frame));
         array_appendf(&cg->code,
-                      /*   movzw .*/ ", %%r10\n",
+                      ", %%r10\n"
                       "    shl $%d, %%r10\n"
                       "    or %%r10, %s\n",
                       offset * 8,
@@ -402,10 +400,11 @@ skip:
     }
     if (addr.sizing.width - offset >= 1)
     {
+        if (reg == REG_R10) abort();
         array_appends(&cg->code, "    movzb ");
         UNWRAP(cg_gen_taca_offset(cg, addr, offset, frame));
         array_appendf(&cg->code,
-                      /*   movzb .*/ ", %%r10\n",
+                      ", %%r10\n"
                       "    shl $%d, %%r10\n"
                       "    or %%r10, %s\n",
                       offset * 8,
@@ -447,36 +446,70 @@ static void ffs_push(struct FreeFrameSlots* ffs, unsigned char s)
     ffs->freestack[i] = s - i;
 }
 
+static const Sizing s_sizing_u[] = {
+    {0, 1},
+    {0, 2},
+    {0, 4},
+    {0, 8},
+};
+
 static int cg_gen_store(struct CodeGen* cg, struct TACAddress addr, int reg, struct ActivationRecord* frame)
 {
-    array_appends(&cg->code, "    mov ");
-
-    if (addr.kind == TACA_REG && !addr.is_addr)
-    {
-        cg_gen_taca_reg(cg, reg, addr.sizing);
-        array_appends(&cg->code, ", 0(");
-        array_appends(&cg->code, s_reg_names[addr.reg]);
-        array_appends(&cg->code, ")\n");
-        return 0;
-    }
-
-    if (addr.is_addr)
-    {
-        cg_gen_taca_reg(cg, reg, addr.sizing);
-        array_appends(&cg->code, ", ");
-    }
-    int rc = cg_gen_taca(cg, addr, frame);
+    int rc = 0;
     if (!addr.is_addr)
     {
-        array_appends(&cg->code, ", %r10\n");
-        array_appends(&cg->code, "    mov ");
-        cg_gen_taca_reg(cg, reg, addr.sizing);
-        array_appends(&cg->code, ", (%r10)\n");
+        if (addr.kind != TACA_REG)
+        {
+            Sizing orig = addr.sizing;
+            addr.sizing = s_sizing_u[3];
+            UNWRAP(cg_gen_load(cg, addr, REG_R10, frame));
+            addr.reg = REG_R10;
+            addr.sizing = orig;
+        }
+        addr.kind = TACA_THROUGH_REG;
+        addr.is_addr = 1;
     }
+
+    const int tmp =
+        addr.kind == TACA_THROUGH_REG && addr.reg == REG_R10 ? (reg == REG_RAX ? REG_RCX : REG_RAX) : REG_R10;
+
+    int i = 0;
+    if (addr.sizing.width == 8)
+        i = 3;
+    else if (addr.sizing.width >= 4)
+        i = 2;
+    else if (addr.sizing.width >= 2)
+        i = 1;
     else
+        i = 0;
+    size_t offset = s_sizing_u[i].width;
+    array_appends(&cg->code, "    mov ");
+    cg_gen_taca_reg(cg, reg, s_sizing_u[i]);
+    array_appends(&cg->code, ", ");
+    UNWRAP(cg_gen_taca(cg, addr, frame));
+    array_push_byte(&cg->code, '\n');
+    if (addr.sizing.width - offset > 0)
     {
-        array_push_byte(&cg->code, '\n');
+        array_appends(&cg->code, "    mov ");
+        cg_gen_taca_reg(cg, reg, s_sizing_u[3]);
+        array_appendf(&cg->code, ", %s\n", s_reg_names[tmp]);
+        array_appendf(&cg->code, "    shr $%d, %s\n", offset * 8, s_reg_names[tmp]);
+        if (addr.sizing.width - offset >= 2)
+        {
+            array_appendf(&cg->code, "    mov %s, ", s_reg_names_2[tmp]);
+            UNWRAP(cg_gen_taca_offset(cg, addr, offset, frame));
+            array_push_byte(&cg->code, '\n');
+            offset += 2;
+            if (addr.sizing.width - offset > 0) array_appendf(&cg->code, "    shr $16, %s\n", s_reg_names[tmp]);
+        }
+        if (addr.sizing.width - offset > 0)
+        {
+            array_appendf(&cg->code, "    mov %s, ", s_reg_names_1[tmp]);
+            UNWRAP(cg_gen_taca_offset(cg, addr, offset, frame));
+            array_push_byte(&cg->code, '\n');
+        }
     }
+fail:
     return rc;
 }
 

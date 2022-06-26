@@ -3501,8 +3501,20 @@ int test_cg_assign(TestState* state)
         // mixed sizes
         {
             TACO_ASSIGN,
-            {TACA_FRAME, .is_addr = 1, .sizing = s_sizing_int, .param_offset = 4},
+            {TACA_FRAME, .is_addr = 1, .sizing = s_sizing_int, .frame_offset = 4},
             {TACA_FRAME, .sizing = s_sizing_schar, .frame_offset = 0},
+        },
+        // small odd size load
+        {
+            TACO_ASSIGN,
+            {TACA_FRAME, .is_addr = 1, .sizing = s_sizing_ptr, .frame_offset = 4},
+            {TACA_FRAME, .sizing = 0, 3, .frame_offset = 0},
+        },
+        // small odd size store
+        {
+            TACO_ASSIGN,
+            {TACA_FRAME, .is_addr = 1, .sizing = 0, 3, .frame_offset = 4},
+            {TACA_FRAME, .sizing = 0, 8, .frame_offset = 0},
         },
     };
     rc = cg_gen_taces(test.cg, taces, sizeof(taces) / sizeof(taces[0]), 100);
@@ -3529,10 +3541,10 @@ int test_cg_assign(TestState* state)
 
     REQUIRE_NEXT_TEXT("leaq 32(%rsp), %rax");
 
-    REQUIRE_NEXT_TEXT("mov %ebx, 0(%rax)");
+    REQUIRE_NEXT_TEXT("mov %ebx, (%rax)");
 
     REQUIRE_NEXT_TEXT("leaq 9(%rsp), %r11");
-    REQUIRE_NEXT_TEXT("mov %r11, 0(%rax)");
+    REQUIRE_NEXT_TEXT("mov %r11, (%rax)");
 
     REQUIRE_NEXT_TEXT("leaq 128(%rsp), %rax");
     REQUIRE_NEXT_TEXT("mov %rax, 0(%rsp)");
@@ -3557,6 +3569,25 @@ int test_cg_assign(TestState* state)
     // mixed sizes
     REQUIRE_NEXT_TEXT("movsb 8(%rsp), %r11");
     REQUIRE_NEXT_TEXT("mov %r11d, 12(%rsp)");
+
+    // small odd size load
+    REQUIRE_NEXT_TEXT("movzw 8(%rsp), %r11");
+    REQUIRE_NEXT_TEXT("movzb 10(%rsp), %r10");
+    REQUIRE_NEXT_TEXT("shl $16, %r10");
+    REQUIRE_NEXT_TEXT("or %r10, %r11");
+    REQUIRE_NEXT_TEXT("mov %r11, 12(%rsp)");
+
+    // small odd size store
+    REQUIRE_NEXT_TEXT("movzw 8(%rsp), %r11");
+    REQUIRE_NEXT_TEXT("movzb 10(%rsp), %r10");
+    REQUIRE_NEXT_TEXT("shl $16, %r10");
+    REQUIRE_NEXT_TEXT("or %r10, %r11");
+
+    REQUIRE_NEXT_TEXT("mov 12(%rsp), %r10");
+    REQUIRE_NEXT_TEXT("mov %r11w, (%r10)");
+    REQUIRE_NEXT_TEXT("mov %r11, %rax");
+    REQUIRE_NEXT_TEXT("shr $16, %rax");
+    REQUIRE_NEXT_TEXT("mov %al, 2(%r10)");
 
     REQUIRE_NEXT_TEXT("addq $120, %rsp");
     REQUIRE_NEXT_TEXT("ret");
