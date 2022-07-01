@@ -123,7 +123,7 @@ void cg_string_constant(struct CodeGen* cg, size_t cidx, const char* str, size_t
 void cg_reserve_data(struct CodeGen* cg, const char* name, const char* data, const TACAddress* const* bases, size_t sz)
 {
     if (sz == 0) abort();
-    array_appendf(&cg->data, "_%s:\n", name);
+    array_appendf(&cg->data, ".p2align 3\n_%s:\n", name);
     size_t zeroes = 0;
     size_t i = 0;
     size_t j = 0;
@@ -149,7 +149,7 @@ void cg_reserve_data(struct CodeGen* cg, const char* name, const char* data, con
         }
         else if (base && (base->kind == TACA_LNAME || base->kind == TACA_NAME))
         {
-            array_appendf(&cg->data, ".quad %s + %zu\n", base->name, offset);
+            array_appendf(&cg->data, ".quad _%s + %zu\n", base->name, offset);
         }
         else if (base)
         {
@@ -872,26 +872,22 @@ fail:
 
 static void cg_emit_rc(struct CodeGen* cg, const RowCol* rc, const char* opts)
 {
-    static size_t next_file_num = 0;
     const char* filename = rc->file;
+    size_t num;
     size_t* file_idx = sm_get(&cg->file_numbers, filename);
-    if (!file_idx)
+    if (file_idx)
     {
-        ++next_file_num;
-        sm_insert(&cg->file_numbers, filename, next_file_num);
-        array_appendf(&cg->code, "    .file %zu \"%s\"\n", next_file_num, filename);
-        file_idx = &next_file_num;
+        num = *file_idx;
+    }
+    else
+    {
+        num = ++cg->next_file_num;
+        sm_insert(&cg->file_numbers, filename, num);
+        array_appendf(&cg->code, "    .file %zu \"%s\"\n", num, filename);
     }
 
-    array_appendf(&cg->code,
-                  "    .loc %zu %d %d %s ## %s:%d:%d\n",
-                  *file_idx,
-                  rc->row,
-                  rc->col,
-                  opts,
-                  filename,
-                  rc->row,
-                  rc->col);
+    array_appendf(
+        &cg->code, "    .loc %zu %d %d %s ## %s:%d:%d\n", num, rc->row, rc->col, opts, filename, rc->row, rc->col);
 }
 
 static __forceinline size_t round_to_alignment(size_t size, size_t align)

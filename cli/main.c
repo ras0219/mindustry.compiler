@@ -46,6 +46,7 @@ void fe_destroy(struct FrontEnd* fe)
         free(fe->parser);
     }
     if (fe->pp) preproc_free(fe->pp);
+    if (fe->fout) fclose(fe->fout);
 }
 
 int fe_preproc(struct FrontEnd* fe, const char* filename)
@@ -83,9 +84,11 @@ int usage(const char* self)
     return 1;
 }
 
-struct Arguments
+typedef struct Arguments
 {
-    const char* input;
+    struct Array inputs;
+    struct Array input_offsets;
+    struct Array link_flags;
     const char* output;
     const char* env_file;
     struct Array inc;
@@ -95,7 +98,45 @@ struct Arguments
     unsigned fParseOnly : 1;
     unsigned fDebugBE : 1;
     struct Array macro_name;
-};
+} Arguments;
+
+static void args_destroy(Arguments* args)
+{
+    array_destroy(&args->inputs);
+    array_destroy(&args->link_flags);
+    array_destroy(&args->input_offsets);
+    array_destroy(&args->inc);
+    array_destroy(&args->macro_name);
+}
+
+static int my_system(const char* cmd)
+{
+    int ec = system(cmd);
+    if (WIFEXITED(ec))
+    {
+        return WEXITSTATUS(ec);
+    }
+    else
+    {
+        return WTERMSIG(ec);
+    }
+}
+
+static void append_cli_arg(Array* arr, const char* s, size_t sz)
+{
+    if (arr->sz) array_push_byte(arr, ' ');
+    array_push(arr, s, sz);
+}
+
+static int matches_link_switch(const char* arg)
+{
+    if (arg[0] == '-' && arg[1] == 'W' && arg[2] == 'l') return 1;
+    return strcmp(arg, "-dynamiclib") == 0;
+}
+static int matches_link_setting(const char* arg)
+{
+    return strcmp(arg, "-install_name") == 0 || strcmp(arg, "-framework") == 0;
+}
 
 static int parse_arguments(int argc, const char* const* argv, struct Arguments* out)
 {
@@ -195,10 +236,20 @@ static int parse_arguments(int argc, const char* const* argv, struct Arguments* 
                 array_appends(&out->macro_name, argv[i] + 2);
                 array_push_byte(&out->macro_name, 0);
             }
-            else if (argv[i][1] == 'W')
+            else if (matches_link_switch(argv[i]))
             {
-                // Ignore
-                fprintf(stderr, "warning: unrecognized flag %s\n", argv[i]);
+                append_cli_arg(&out->link_flags, argv[i], strlen(argv[i]));
+            }
+            else if (matches_link_setting(argv[i]))
+            {
+                append_cli_arg(&out->link_flags, argv[i], strlen(argv[i]));
+                ++i;
+                if (i == argc)
+                {
+                    fprintf(stderr, "error: expected macro name after %s\n", argv[i - 1]);
+                    goto usage;
+                }
+                append_cli_arg(&out->link_flags, argv[i], strlen(argv[i]));
             }
             else
             {
@@ -208,12 +259,9 @@ static int parse_arguments(int argc, const char* const* argv, struct Arguments* 
         }
         else
         {
-            if (out->input)
-            {
-                fprintf(stderr, "error: input already specified\n");
-                goto usage;
-            }
-            out->input = argv[i];
+            arrsz_push(&out->input_offsets, out->inputs.sz);
+            array_appends(&out->inputs, argv[i]);
+            array_push_byte(&out->inputs, '\0');
         }
     }
 
@@ -248,11 +296,22 @@ static int parse_arguments(int argc, const char* const* argv, struct Arguments* 
         }
         array_appends(&out->inc, inc);
     }
+
+#ifdef __APPLE__
+    if (out->inc.sz)
+    {
+        array_push_byte(&out->inc, ';');
+    }
+    array_appends(&out->inc,
+                  "/Library/Developer/CommandLineTools/SDKs/MacOSX11.3.sdk/usr/include"
+                  ";/Library/Developer/CommandLineTools/usr/lib/clang/13.0.0/include");
+#endif
+
     array_push_byte(&out->inc, 0);
 
-    if (!out->input)
+    if (out->input_offsets.sz == 0)
     {
-        fprintf(stderr, "error: no input file\n");
+        fprintf(stderr, "error: no input files\n");
         goto usage;
     }
 
@@ -262,7 +321,14 @@ usage:
     return usage(argv[0]);
 }
 
-static void extract_basename(const char* path, Array* out)
+typedef struct PathComponents
+{
+    int basename;
+    int ext;
+    int end;
+} PathComponents;
+
+static void parse_path(const char* path, PathComponents* comps)
 {
     int x = 0;
     int b = 0;
@@ -276,173 +342,239 @@ static void extract_basename(const char* path, Array* out)
     }
 
     if (c == b) c = x;
-    array_push(out, path + b, c - b);
+
+    comps->basename = b;
+    comps->ext = c;
+    comps->end = x;
 }
+
+static int path_ext_is(const char* input, const PathComponents* comps, const char* ext)
+{
+    const size_t extlen = strlen(ext);
+    return comps->end - comps->ext == extlen && memcmp(input + comps->ext, ext, extlen) == 0;
+}
+
+static const char* predefs[] = {
+    "__LP64__",
+    "__x86_64__",
+    "__x86_64",
+    "__STDC__",
+    "__APPLE__",
+    "__MACH__",
+    "_POSIX_SOURCE",
+    "_POSIX_C_SOURCE=200112L",
+    "_DARWIN_C_SOURCE=200112L",
+    "_C99_SOURCE",
+    "__DARWIN_OS_INLINE=static inline",
+    "__llvm__",
+    "__func__=\"__func__\"",
+    "__FILE__=\"/path/to/__FILE__\"",
+    "__LINE__=0",
+    "__ras0219_cc__",
+    "__GNUC__=3",
+    "__GNUC_MINOR__=0",
+    "_FORTIFY_SOURCE=0",
+    "double=long",
+    "float=int",
+    "__asm__(X)=",
+    "__attribute__(X)=",
+    "TARGET_CPU_X86_64",
+};
 
 int main(int argc, const char* const* argv)
 {
     int rc = 0;
-    struct Arguments args = {};
-    if (rc = parse_arguments(argc, argv, &args)) return rc;
-
-    struct Array asm_file = {0};
-    struct Array obj_file = {0};
-    struct Array exe_file = {0};
+    struct Arguments args = {0};
+    struct Array files_buf = {0};
     struct Array cmd_buf = {0};
-    extract_basename(args.input, &asm_file);
-    array_push(&obj_file, asm_file.data, asm_file.sz);
-    array_appends(&asm_file, ".s");
-    array_appends(&obj_file, ".o");
-    array_appends(&exe_file, "a.out");
-    if (args.output)
+    struct Array link_line = {0};
+    struct FrontEnd fe = {0};
+    UNWRAP(parse_arguments(argc, argv, &args));
+
+    const size_t n_inputs = arrsz_size(&args.input_offsets);
+    if (args.output && (args.fCompile || args.fAssembleOnly) && n_inputs > 1)
     {
-        if (args.fAssembleOnly)
-        {
-            array_clear(&asm_file);
-            array_appends(&asm_file, args.output);
-        }
-        else if (args.fCompile)
-        {
-            array_clear(&obj_file);
-            array_appends(&obj_file, args.output);
-        }
-        else
-        {
-            array_clear(&exe_file);
-            array_appends(&exe_file, args.output);
-        }
-    }
-    array_push_byte(&asm_file, 0);
-    array_push_byte(&obj_file, 0);
-    array_push_byte(&exe_file, 0);
-    struct FrontEnd fe = {};
-
-    fe.pp = preproc_alloc(args.inc.data);
-
-    const char* macro_names = args.macro_name.data;
-    for (size_t i = 0; i < args.macro_name.sz;)
-    {
-        preproc_define(fe.pp, macro_names + i);
-        size_t name_len = strlen(macro_names + i);
-        i += name_len + 1;
-    }
-
-    const char* predefs[] = {
-        "__LP64__",
-        "__x86_64__",
-        "__x86_64",
-        "__STDC__",
-        "_POSIX_SOURCE",
-        "_POSIX_C_SOURCE=200112L",
-        "_DARWIN_C_SOURCE=200112L",
-        "_C99_SOURCE",
-        "__DARWIN_OS_INLINE=static inline",
-        "__llvm__",
-        "__func__=\"__func__\"",
-        "__FILE__=\"/path/to/__FILE__\"",
-        "__LINE__=0",
-        "__ras0219_cc__",
-        "__GNUC__=3",
-        "__GNUC_MINOR__=0",
-        "_FORTIFY_SOURCE=0",
-        "double=long",
-        "float=int",
-        "__asm__(X)=",
-        "__attribute__(X)=",
-    };
-
-    for (size_t i = 0; i < sizeof(predefs) / sizeof(predefs[0]); ++i)
-    {
-        preproc_define(fe.pp, predefs[i]);
-    }
-
-    UNWRAP(fe_preproc(&fe, args.input));
-    if (args.fPreprocOnly)
-    {
-        preproc_dump(fe.pp);
-        goto fail;
-    }
-
-    fe.parser = (struct Parser*)my_malloc(sizeof(struct Parser));
-    parser_init(fe.parser);
-    UNWRAP(parser_parse(fe.parser, preproc_tokens(fe.pp), preproc_stringpool(fe.pp)));
-    parser_debug_check(fe.parser);
-    UNWRAP(parser_has_errors());
-
-    if (args.fParseOnly)
-    {
-        parser_dump(fe.parser, stdout);
-        goto fail;
-    }
-
-    fe.elab = (struct Elaborator*)my_malloc(sizeof(struct Elaborator));
-    elaborator_init(fe.elab, fe.parser);
-    UNWRAP(elaborate(fe.elab));
-    UNWRAP(parser_has_errors());
-
-    fe.cg = (struct CodeGen*)my_malloc(sizeof(struct CodeGen));
-    cg_init(fe.cg);
-
-    fe.be = (struct BackEnd*)my_malloc(sizeof(struct BackEnd));
-    be_init(fe.be, fe.parser, fe.elab, fe.cg);
-    fe.be->debug_taces = args.fDebugBE;
-
-    UNWRAP(be_compile(fe.be));
-    UNWRAP(parser_has_errors());
-    fe.fout = fopen(asm_file.data, "wbT");
-
-    if (!fe.fout)
-    {
-        perror(asm_file.data);
+        fprintf(stderr, "error: cannot specify multiple inputs with -S or -c\n");
         UNWRAP(1);
     }
 
-    UNWRAP(cg_emit(fe.cg, args.input, fe.fout));
-    fclose(fe.fout);
-    fe.fout = NULL;
-    UNWRAP(parser_has_errors());
-
-    if (!args.fAssembleOnly)
+    array_appends(&link_line, "clang -target x86_64-apple-darwin20.3.0 ");
+    array_push(&link_line, args.link_flags.data, args.link_flags.sz);
+    for (size_t i = 0; i < n_inputs; ++i)
     {
-        array_clear(&cmd_buf);
-        array_appendf(&cmd_buf,
-                      "clang -target x86_64-apple-darwin20.3.0 -g -c %s -o %s",
-                      (char*)asm_file.data,
-                      (char*)obj_file.data);
-        array_push_byte(&cmd_buf, 0);
-        printf("%s\n", (char*)cmd_buf.data);
-        UNWRAP(system((char*)cmd_buf.data));
-        if (!args.fCompile)
+        const char* input = (const char*)args.inputs.data + arrsz_at(&args.input_offsets, i);
+        const char* c_file = NULL;
+        const char* asm_file = NULL;
+        const char* obj_file = NULL;
+        PathComponents comps;
+        parse_path(input, &comps);
+
+        if (path_ext_is(input, &comps, ".c"))
         {
-#ifdef _WIN32
-            const char* exe_file = args.output ? args.output : "test.exe";
-            char buf[512];
-            rc = sizeof(buf) <=
-                 snprintf(buf, sizeof(buf), "ml64 /Zd /Zi /Sa %s /link /OPT:REF /OPT:ICF /out:%s", asm_file, exe_file);
-            if (!rc) rc = system(buf);
-#else
+            // C file
+            c_file = input;
+
+            if (args.fAssembleOnly && args.output)
+            {
+                asm_file = args.output;
+            }
+            else
+            {
+                array_clear(&files_buf);
+                array_push(&files_buf, input + comps.basename, comps.ext - comps.basename);
+                array_push(&files_buf, ".s", 3);
+
+                if (args.fCompile && args.output)
+                {
+                    obj_file = args.output;
+                }
+                else
+                {
+                    const size_t obj_start = files_buf.sz;
+                    array_push(&files_buf, input + comps.basename, comps.ext - comps.basename);
+                    array_push(&files_buf, ".o", 3);
+                    obj_file = files_buf.data + obj_start;
+                }
+                asm_file = files_buf.data;
+            }
+        }
+        else if (path_ext_is(input, &comps, ".s"))
+        {
+            // asm file
+            asm_file = input;
+            if (args.fCompile && args.output)
+            {
+                obj_file = args.output;
+            }
+            else
+            {
+                array_clear(&files_buf);
+                array_push(&files_buf, input + comps.basename, comps.ext - comps.basename);
+                array_push(&files_buf, ".o", 3);
+
+                obj_file = files_buf.data;
+            }
+        }
+        else
+        {
+            // Unknown -- pass to linker
+            obj_file = input;
+        }
+
+        if (c_file)
+        {
+            fe.pp = preproc_alloc(args.inc.data);
+
+            const char* macro_names = args.macro_name.data;
+            for (size_t i = 0; i < args.macro_name.sz;)
+            {
+                preproc_define(fe.pp, macro_names + i);
+                size_t name_len = strlen(macro_names + i);
+                i += name_len + 1;
+            }
+
+            for (size_t i = 0; i < sizeof(predefs) / sizeof(predefs[0]); ++i)
+            {
+                preproc_define(fe.pp, predefs[i]);
+            }
+
+            UNWRAP(fe_preproc(&fe, c_file));
+            if (args.fPreprocOnly)
+            {
+                preproc_dump(fe.pp);
+                goto fail;
+            }
+
+            fe.parser = (struct Parser*)my_malloc(sizeof(struct Parser));
+            parser_init(fe.parser);
+            UNWRAP(parser_parse(fe.parser, preproc_tokens(fe.pp), preproc_stringpool(fe.pp)));
+            parser_debug_check(fe.parser);
+            UNWRAP(parser_has_errors());
+
+            if (args.fParseOnly)
+            {
+                parser_dump(fe.parser, stdout);
+                goto fail;
+            }
+
+            fe.elab = (struct Elaborator*)my_malloc(sizeof(struct Elaborator));
+            elaborator_init(fe.elab, fe.parser);
+            UNWRAP(elaborate(fe.elab));
+            UNWRAP(parser_has_errors());
+
+            fe.cg = (struct CodeGen*)my_malloc(sizeof(struct CodeGen));
+            cg_init(fe.cg);
+
+            fe.be = (struct BackEnd*)my_malloc(sizeof(struct BackEnd));
+            be_init(fe.be, fe.parser, fe.elab, fe.cg);
+            fe.be->debug_taces = args.fDebugBE;
+
+            UNWRAP(be_compile(fe.be));
+            UNWRAP(parser_has_errors());
+            fe.fout = fopen(asm_file, "wbT");
+
+            if (!fe.fout)
+            {
+                perror(asm_file);
+                UNWRAP(1);
+            }
+
+            UNWRAP(cg_emit(fe.cg, c_file, fe.fout));
+            fclose(fe.fout);
+            fe.fout = NULL;
+            UNWRAP(parser_has_errors());
+            fe_destroy(&fe);
+            memset(&fe, 0, sizeof(fe));
+        }
+
+        if (asm_file && obj_file)
+        {
+            // #ifdef _WIN32
+            //     buf, sizeof(buf), "ml64 /Zd /Zi /Sa %s /link /OPT:REF /OPT:ICF /out:%s",
+            //     asm_file, exe_file);
+            // #else
+            // #endif
             array_clear(&cmd_buf);
-            array_appendf(&cmd_buf,
-                          "clang -target x86_64-apple-darwin20.3.0 %s -o %s",
-                          (char*)obj_file.data,
-                          (char*)exe_file.data);
+            array_appends(&cmd_buf, "clang -target x86_64-apple-darwin20.3.0 -g -c");
+            append_cli_arg(&cmd_buf, asm_file, strlen(asm_file));
+            array_appends(&cmd_buf, " -o");
+            append_cli_arg(&cmd_buf, obj_file, strlen(obj_file));
             array_push_byte(&cmd_buf, 0);
             printf("%s\n", (char*)cmd_buf.data);
-            UNWRAP(system((char*)cmd_buf.data));
-#endif
+            UNWRAP(my_system(cmd_buf.data));
+        }
+
+        if (obj_file)
+        {
+            append_cli_arg(&link_line, obj_file, strlen(obj_file));
         }
     }
+    if (args.fAssembleOnly || args.fCompile || args.fParseOnly || args.fPreprocOnly)
+    {
+        goto fail;
+    }
+
+    array_appends(&link_line, " -o");
+    if (args.output)
+    {
+        append_cli_arg(&link_line, args.output, strlen(args.output));
+    }
+    else
+    {
+        array_appends(&link_line, " a.out");
+    }
+    array_push_byte(&link_line, 0);
+    printf("%s\n", (char*)link_line.data);
+    UNWRAP(my_system(link_line.data));
 
 fail:
     if (parser_has_errors())
     {
         parser_print_errors(stderr);
     }
-    if (fe.fout) fclose(fe.fout);
     fe_destroy(&fe);
     array_destroy(&cmd_buf);
-    array_destroy(&exe_file);
-    array_destroy(&obj_file);
-    array_destroy(&asm_file);
+    array_destroy(&files_buf);
+    args_destroy(&args);
     return rc;
 }

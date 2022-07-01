@@ -23,6 +23,7 @@ struct CodeGen
     struct Array const_;
     struct Array data;
     struct Array code;
+    size_t next_file_num;
     struct StringMap file_numbers;
 
     size_t next_label;

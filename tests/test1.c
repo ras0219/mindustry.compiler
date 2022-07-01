@@ -3657,10 +3657,13 @@ int test_be_static_init(TestState* state)
                        &test,
                        "enum {v1 = 2};"
                        "static int data[] = {1,v1,3};\n"
-                       "static const char* const s_reg_names[] = {\"%rax\", \"%rbx\"};\n"));
+                       "static const char* const s_reg_names[] = {\"%rax\", \"%rbx\"};\n"
+                       "extern void bar() {}\n"
+                       "static void foo() {}\n"
+                       "static void* ptrs[] = { foo, bar };\n"));
 
     struct Expr** const exprs = (struct Expr**)test.base.parser->expr_seqs.data;
-    REQUIRE_EQ(3, test.base.parser->top->extent);
+    REQUIRE_EQ(6, test.base.parser->top->extent);
     REQUIRE_EXPR(StmtDecls, decls, exprs[test.base.parser->top->offset + 1])
     {
         REQUIRE_EQ(1, decls->extent);
@@ -3690,13 +3693,20 @@ int test_be_static_init(TestState* state)
 
     REQUIRE_LINES(test.cg->data.data)
     {
+        REQUIRE_LINE(".p2align 3");
         REQUIRE_LINE("_data:");
         REQUIRE_LINE(".byte 1, 0, 0, 0, 2, 0, 0, 0");
         REQUIRE_LINE(".byte 3, 0, 0, 0");
         REQUIRE_LINE("");
+        REQUIRE_LINE(".p2align 3");
         REQUIRE_LINE("_s_reg_names:");
         REQUIRE_LINE(".quad L_.S0 + 0");
         REQUIRE_LINE(".quad L_.S1 + 0");
+        REQUIRE_LINE("");
+        REQUIRE_LINE(".p2align 3");
+        REQUIRE_LINE("_ptrs:");
+        REQUIRE_LINE(".quad _foo + 0");
+        REQUIRE_LINE(".quad _bar + 0");
         REQUIRE_LINE("");
     }
 
