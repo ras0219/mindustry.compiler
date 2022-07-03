@@ -1385,13 +1385,17 @@ static void be_compile_global(struct BackEnd* be, Decl* decl)
         struct Decl* def = sym->def ? sym->def : decl;
         if ((decl->type->kind == AST_DECLFN && !def->init) || def->specs->is_extern)
         {
+            sym->addr.kind = TACA_NAME;
             cg_declare_extern(be->cg, name);
         }
-        else if (!decl->specs->is_static && !decl->specs->is_inline)
+        else
         {
-            cg_declare_public(be->cg, name);
+            sym->addr.kind = TACA_LNAME;
+            if (!decl->specs->is_static && !decl->specs->is_inline)
+            {
+                cg_declare_public(be->cg, name);
+            }
         }
-        sym->addr.kind = decl->specs->is_static ? TACA_LNAME : TACA_NAME;
         sym->addr.name = name;
     }
     if (decl->specs->is_extern || decl->type->kind == AST_DECLFN)

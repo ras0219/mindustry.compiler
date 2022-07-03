@@ -372,18 +372,19 @@ int parse_struct(struct TestState* state)
                        "  size_t sz;\n"
                        "  size_t cap;\n"
                        "  void* data;\n"
-                       "};\n"));
+                       "} const a;\n"));
 
     struct Expr** const exprs = parser->expr_seqs.data;
     REQUIRE_EQ(2, parser->top->extent);
     struct StmtDecls* decls = (struct StmtDecls*)exprs[parser->top->offset + 1];
     REQUIRE_EQ(STMT_DECLS, decls->kind);
-    REQUIRE_EQ(0, decls->extent);
+    REQUIRE_EQ(1, decls->extent);
     REQUIRE(decls->specs);
     struct DeclSpecs* def = decls->specs;
     REQUIRE_STR_EQ("Array", def->name);
     REQUIRE(def->is_struct);
     REQUIRE(def->suinit);
+    REQUIRE(def->is_const);
     struct StmtBlock* blk = def->suinit;
     REQUIRE_EQ(3, blk->extent);
     // "size_t sz;"
@@ -2604,8 +2605,13 @@ int test_be_call(TestState* state)
                        "struct A mm_call(struct A a);"
                        "struct A mi_call(int a);"
                        "int im_call(struct A a);"
-                       "int ii_call(int a);"
-                       "void main() { ii_call(10); im_call(mm_call(mi_call(5))); }"));
+                       "int ii_call(int a);\n"
+                       "extern void (*f)();"
+                       "void main() {\n"
+                       " ii_call(10);\n"
+                       " im_call(mm_call(mi_call(5)));\n"
+                       " f();\n"
+                       "}"));
     int index = 0;
 
     // ii_call(10);
@@ -2660,6 +2666,12 @@ int test_be_call(TestState* state)
         TACO_CALL,
         {TACA_NAME, .is_addr = 1, .name = "im_call"},
         {TACA_IMM, .sizing = s_sizing_int, .imm = 1},
+    });
+    // f();
+    REQUIRE_NEXT_TACE({
+        TACO_CALL,
+        {TACA_NAME, .sizing = 0, 8, .name = "f"},
+        {TACA_IMM, .sizing = s_sizing_int, .imm = 0},
     });
     REQUIRE_END_TACE();
 
@@ -2756,6 +2768,78 @@ int test_be_call3(TestState* state)
         TACO_CALL,
         {TACA_NAME, .is_addr = 1, .name = "f"},
         {TACA_IMM, .sizing = s_sizing_int, .imm = 2},
+    });
+    REQUIRE_END_TACE();
+
+    rc = 0;
+fail:
+    betest_destroy(&test);
+    return rc;
+}
+
+int test_be_got(TestState* state)
+{
+    int rc = 1;
+    BETest test;
+    SUBTEST(betest_run(state,
+                       &test,
+                       "void (*g)();\n"
+                       "extern void h();\n"
+                       "extern void (*i)();\n"
+                       "void f() {\n"
+                       " f();\n"
+                       " g();\n"
+                       " h();\n"
+                       " i();\n"
+                       "\n"
+                       " g = f;\n"
+                       " g = g;\n"
+                       " g = h;\n"
+                       " g = i;\n"
+                       "}\n"));
+    int index = 0;
+
+    // prologue;
+    REQUIRE_NEXT_TACE({
+        TACO_CALL,
+        {TACA_LNAME, .is_addr = 1, .name = "f"},
+        {TACA_IMM, .sizing = s_sizing_int, .imm = 0},
+    });
+    REQUIRE_NEXT_TACE({
+        TACO_CALL,
+        {TACA_LNAME, .sizing = 0, 8, .name = "g"},
+        {TACA_IMM, .sizing = s_sizing_int, .imm = 0},
+    });
+    REQUIRE_NEXT_TACE({
+        TACO_CALL,
+        {TACA_NAME, .is_addr = 1, .name = "h"},
+        {TACA_IMM, .sizing = s_sizing_int, .imm = 0},
+    });
+    REQUIRE_NEXT_TACE({
+        TACO_CALL,
+        {TACA_NAME, .sizing = 0, 8, .name = "i"},
+        {TACA_IMM, .sizing = s_sizing_int, .imm = 0},
+    });
+
+    REQUIRE_NEXT_TACE({
+        TACO_ASSIGN,
+        {TACA_LNAME, .is_addr = 1, .sizing = 0, 8, .name = "g"},
+        {TACA_LNAME, .is_addr = 1, .name = "f"},
+    });
+    REQUIRE_NEXT_TACE({
+        TACO_ASSIGN,
+        {TACA_LNAME, .is_addr = 1, .sizing = 0, 8, .name = "g"},
+        {TACA_LNAME, .sizing = 0, 8, .name = "g"},
+    });
+    REQUIRE_NEXT_TACE({
+        TACO_ASSIGN,
+        {TACA_LNAME, .is_addr = 1, .sizing = 0, 8, .name = "g"},
+        {TACA_NAME, .is_addr = 1, .name = "h"},
+    });
+    REQUIRE_NEXT_TACE({
+        TACO_ASSIGN,
+        {TACA_LNAME, .is_addr = 1, .sizing = 0, 8, .name = "g"},
+        {TACA_NAME, .sizing = 0, 8, .name = "i"},
     });
     REQUIRE_END_TACE();
 
@@ -2953,7 +3037,7 @@ int test_be_va_args(TestState* state)
     });
     REQUIRE_NEXT_TACE({
         TACO_CALL,
-        {TACA_NAME, .is_addr = 1, .name = "f"},
+        {TACA_LNAME, .is_addr = 1, .name = "f"},
         {TACA_IMM, .sizing = s_sizing_int, .imm = 7},
     });
     REQUIRE_END_TACE();
@@ -3618,6 +3702,36 @@ int test_cg_refs(TestState* state)
             {TACA_NAME, .is_addr = 1, .name = "a"},
             {TACA_NAME, .sizing = s_sizing_int, .name = "b"},
         },
+        {
+            TACO_ASSIGN,
+            {TACA_NAME, .is_addr = 1, .sizing = 0, 8, .name = "a"},
+            {TACA_IMM, .sizing = s_sizing_int, .imm = 10},
+        },
+        {
+            TACO_ASSIGN,
+            {TACA_NAME, .is_addr = 1, .sizing = 0, 8, .name = "a"},
+            {TACA_FRAME, .sizing = s_sizing_int, .frame_offset = 0},
+        },
+        {
+            TACO_CALL,
+            {TACA_NAME, .is_addr = 1, .name = "a"},
+            {TACA_IMM, .sizing = s_sizing_int, .imm = 1},
+        },
+        {
+            TACO_CALL,
+            {TACA_LNAME, .is_addr = 1, .name = "a"},
+            {TACA_IMM, .sizing = s_sizing_int, .imm = 1},
+        },
+        {
+            TACO_CALL,
+            {TACA_NAME, .sizing = 0, 8, .name = "a"},
+            {TACA_IMM, .sizing = s_sizing_int, .imm = 1},
+        },
+        {
+            TACO_CALL,
+            {TACA_LNAME, .sizing = 0, 8, .name = "a"},
+            {TACA_IMM, .sizing = s_sizing_int, .imm = 1},
+        },
     };
     rc = cg_gen_taces(test.cg, taces, sizeof(taces) / sizeof(taces[0]), 100);
     if (rc)
@@ -3637,6 +3751,22 @@ int test_cg_refs(TestState* state)
     REQUIRE_NEXT_TEXT("movq _b@GOTPCREL(%rip), %rdx");
     REQUIRE_NEXT_TEXT("movsl (%rdx), %rdx");
     REQUIRE_NEXT_TEXT("add %rdx, %rax");
+
+    REQUIRE_NEXT_TEXT("movq _a@GOTPCREL(%rip), %rdi");
+    REQUIRE_NEXT_TEXT("movq $10, (%rdi)");
+
+    REQUIRE_NEXT_TEXT("movq _a@GOTPCREL(%rip), %rdi");
+    REQUIRE_NEXT_TEXT("movsl 0(%rsp), %r11");
+    REQUIRE_NEXT_TEXT("mov %r11, (%rdi)");
+
+    REQUIRE_NEXT_TEXT("movb $0, %al");
+    REQUIRE_NEXT_TEXT("callq _a");
+    REQUIRE_NEXT_TEXT("movb $0, %al");
+    REQUIRE_NEXT_TEXT("callq _a");
+    REQUIRE_NEXT_TEXT("movb $0, %al");
+    REQUIRE_NEXT_TEXT("callq *_a@GOTPCREL(%rip)");
+    REQUIRE_NEXT_TEXT("movb $0, %al");
+    REQUIRE_NEXT_TEXT("callq *_a(%rip)");
 
     REQUIRE_NEXT_TEXT("addq $120, %rsp");
     REQUIRE_NEXT_TEXT("ret");
@@ -3957,6 +4087,7 @@ int main()
     RUN_TEST(test_be_call);
     RUN_TEST(test_be_call2);
     RUN_TEST(test_be_call3);
+    RUN_TEST(test_be_got);
     RUN_TEST(test_be_va_args);
     RUN_TEST(test_be_conversions);
     RUN_TEST(test_be_init);

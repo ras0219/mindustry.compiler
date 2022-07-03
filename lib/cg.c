@@ -310,6 +310,8 @@ static int cg_gen_inst_a(struct CodeGen* cg, const char* inst, struct TACAddress
 
 static int cg_gen_load(struct CodeGen* cg, struct TACAddress addr, int reg, struct ActivationRecord* frame)
 {
+    if (addr.kind == TACA_REG && !addr.is_addr && addr.reg == reg) return 0;
+
     if (addr.kind == TACA_IMM)
     {
         if (addr.sizing.is_signed)
@@ -621,6 +623,14 @@ static int is_suffix_size(uint32_t i) { return i == 8 || i == 4 || i == 2 || i =
 static int cg_assign(struct CodeGen* cg, struct TACAddress arg1, struct TACAddress arg2, struct ActivationRecord* frame)
 {
     int rc = 0;
+    if (arg1.kind == TACA_NAME && arg1.is_addr)
+    {
+        UNWRAP(cg_gen_load(cg, arg1, REG_RDI, frame));
+        arg1.kind = TACA_REG;
+        arg1.reg = REG_RDI;
+        arg1.is_addr = 0;
+    }
+
     if (arg1.kind == TACA_REG && arg1.is_addr)
     {
         UNWRAP(cg_gen_load(cg, arg2, arg1.reg, frame));
@@ -643,28 +653,30 @@ static int cg_assign(struct CodeGen* cg, struct TACAddress arg1, struct TACAddre
         const Sizing bytes = arg1.sizing;
         arg1.sizing.width = 8;
         char ch = sizing_suffix(bytes.width);
-        if (!ch || !arg1.is_addr)
-        {
-            UNWRAP(cg_gen_load(cg, arg1, REG_RDI, frame));
-        }
-
         if (ch)
         {
-            array_appendf(&cg->code, "    mov%c $%d, ", sizing_suffix(bytes.width), (int)arg2.imm);
             if (arg1.is_addr)
             {
+                array_appendf(&cg->code, "    mov%c $%d, ", sizing_suffix(bytes.width), (int)arg2.imm);
                 UNWRAP(cg_gen_taca(cg, arg1, frame));
                 array_appends(&cg->code, "\n");
             }
             else
             {
-                array_appends(&cg->code, "(%rdi)\n");
+                int reg = REG_RDI;
+                if (arg1.kind == TACA_REG)
+                    reg = arg1.reg;
+                else
+                    UNWRAP(cg_gen_load(cg, arg1, REG_RDI, frame));
+                array_appendf(
+                    &cg->code, "    mov%c $%d, (%s)\n", sizing_suffix(bytes.width), (int)arg2.imm, s_reg_names[reg]);
             }
         }
         else
         {
             // Storing immediates of non-power-of-two size is not implemented
             if (arg2.imm != 0) abort();
+            UNWRAP(cg_gen_load(cg, arg1, REG_RDI, frame));
             array_appendf(&cg->code, "    mov $%zu, %%rcx\n", bytes.width);
             array_appends(&cg->code,
                           "    xor %rax, %rax\n"

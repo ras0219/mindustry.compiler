@@ -673,87 +673,116 @@ static const struct Token* parse_attribute_plist(Parser* p, const struct Token* 
     return token_consume_sym(p, cur_tok, ')', " in __attribute__");
 }
 
+static const struct Token* parse_su_body(struct Parser* p, const struct Token* cur_tok, struct DeclSpecs* specs);
+static const struct Token* parse_enum_body(struct Parser* p, const struct Token* cur_tok, struct DeclSpecs* specs);
+
+static void symalloc_declspecs(Parser* p, DeclSpecs* s)
+{
+    if (s->name)
+    {
+        struct Binding* const cur_bind = scope_find(&p->type_scope, s->name);
+        if (cur_bind)
+        {
+            s->sym = cur_bind->sym;
+            s->prev_decl = s->sym->last_decl;
+        }
+        else
+        {
+            s->sym = pool_alloc_zeroes(&p->typesym_pool, sizeof(TypeSymbol));
+            s->sym->name = s->name;
+            scope_insert(&p->type_scope, s->sym, s->name);
+        }
+    }
+    else
+    {
+        s->sym = pool_alloc_zeroes(&p->typesym_pool, sizeof(TypeSymbol));
+    }
+    s->sym->last_decl = s;
+}
+
 static const struct Token* parse_declspecs(Parser* p, const struct Token* cur_tok, struct DeclSpecs** pspecs)
 {
-    struct DeclSpecs specs = {
-        .kind = AST_DECLSPEC,
-        .parent = p->parent,
-    };
+    struct DeclSpecs* s = *pspecs = pool_alloc_zeroes(&p->ast_pools[AST_DECLSPEC], sizeof(DeclSpecs));
+    s->kind = AST_DECLSPEC;
+    s->parent = p->parent;
 
-    if ((uintptr_t)cur_tok % 8 != 0) abort();
     do
     {
-        if ((uintptr_t)cur_tok % 8 != 0) abort();
-        if (cur_tok->type == LEX_ATTRIBUTE)
+        if ((s->is_struct || s->is_union) && token_is_sym(p, cur_tok, '{'))
         {
-            PARSER_DO(parse_attribute_plist(p, cur_tok + 1, &specs.attr));
-            if ((uintptr_t)cur_tok % 8 != 0) abort();
+            PARSER_DO(parse_su_body(p, cur_tok + 1, s));
+            PARSER_DO(token_consume_sym(p, cur_tok, '}', " in struct/union definition"));
+            continue;
+        }
+        else if (s->is_enum && token_is_sym(p, cur_tok, '{'))
+        {
+            PARSER_DO(parse_enum_body(p, cur_tok + 1, s));
+            PARSER_DO(token_consume_sym(p, cur_tok, '}', " in enum definition"));
+            continue;
+        }
+        else if (cur_tok->type == LEX_ATTRIBUTE)
+        {
+            PARSER_DO(parse_attribute_plist(p, cur_tok + 1, &s->attr));
             continue;
         }
         else if (cur_tok->type == LEX_DECLSPEC)
         {
-            PARSER_DO(parse_msdeclspec(p, cur_tok + 1, &specs.attr));
-            if ((uintptr_t)cur_tok % 8 != 0) abort();
+            PARSER_DO(parse_msdeclspec(p, cur_tok + 1, &s->attr));
             continue;
         }
         else if (cur_tok->type == LEX_IDENT)
         {
             // already found core type
-            if (specs.tok) break;
-            specs.tok = cur_tok;
-            specs.name = token_str(p, cur_tok);
-            struct Binding* const cur_bind = scope_find(&p->typedef_scope, specs.name);
+            if (s->tok) break;
+            s->tok = cur_tok;
+            s->name = token_str(p, cur_tok);
+            struct Binding* const cur_bind = scope_find(&p->typedef_scope, s->name);
             if (!cur_bind || !cur_bind->sym)
             {
-                PARSER_FAIL("error: expected type but found identifier: %s\n", specs.name);
+                PARSER_FAIL("error: expected type but found identifier: %s\n", s->name);
                 break;
             }
-            specs._typedef = cur_bind->sym;
+            s->_typedef = cur_bind->sym;
         }
         else if (cur_tok->type == LEX_STRUCT)
         {
-            specs.is_struct = 1;
-            specs.tok = cur_tok++;
-            if ((uintptr_t)cur_tok % 8 != 0) abort();
-            if (cur_tok->type != LEX_IDENT) continue;
-            specs.tok = cur_tok;
-            specs.name = token_str(p, cur_tok);
+            s->is_struct = 1;
+            goto glob_ident;
         }
         else if (cur_tok->type == LEX_ENUM)
         {
-            specs.is_enum = 1;
-            specs.tok = cur_tok++;
-            if ((uintptr_t)cur_tok % 8 != 0) abort();
-            if (cur_tok->type != LEX_IDENT) continue;
-            specs.tok = cur_tok;
-            specs.name = token_str(p, cur_tok);
+            s->is_enum = 1;
+            goto glob_ident;
         }
         else if (cur_tok->type == LEX_UNION)
         {
-            specs.is_union = 1;
-            specs.tok = cur_tok++;
-            if ((uintptr_t)cur_tok % 8 != 0) abort();
-            if (cur_tok->type != LEX_IDENT) continue;
-            specs.tok = cur_tok;
-            specs.name = token_str(p, cur_tok);
+            s->is_union = 1;
+        glob_ident:
+            s->tok = cur_tok++;
+            if (cur_tok->type == LEX_IDENT)
+            {
+                s->name = token_str(p, s->tok = cur_tok++);
+            }
+            symalloc_declspecs(p, s);
+            continue;
         }
         else if (tok_type_is_fundamental(cur_tok->type))
         {
-            if (specs.tok)
+            if (s->tok)
             {
                 PARSER_FAIL("error: repeated type declaration specifiers are not allowed (was '%s', got '%s')\n",
-                            token_str(p, specs.tok),
+                            token_str(p, s->tok),
                             token_str(p, cur_tok));
             }
-            specs.tok = cur_tok;
+            s->tok = cur_tok;
         }
         else if (cur_tok->type == LEX_SIGNED || cur_tok->type == LEX_UUSIGNED || cur_tok->type == LEX_UNSIGNED ||
                  cur_tok->type == LEX_LONG || cur_tok->type == LEX_SHORT)
         {
-            if (specs.tok)
+            if (s->tok)
             {
                 PARSER_FAIL("error: repeated type declaration specifiers are not allowed (was '%s', got '%s')\n",
-                            token_str(p, specs.tok),
+                            token_str(p, s->tok),
                             token_str(p, cur_tok));
             }
             int len = 0;
@@ -774,11 +803,11 @@ static const struct Token* parse_declspecs(Parser* p, const struct Token* cur_to
                 else
                     break;
             }
-            if (count_signed) specs.is_signed = 1;
-            if (count_unsigned) specs.is_unsigned = 1;
-            if (count_long == 1) specs.is_long = 1;
-            if (count_long == 2) specs.is_longlong = 1;
-            if (count_short) specs.is_short = 1;
+            if (count_signed) s->is_signed = 1;
+            if (count_unsigned) s->is_unsigned = 1;
+            if (count_long == 1) s->is_long = 1;
+            if (count_long == 2) s->is_longlong = 1;
+            if (count_short) s->is_short = 1;
 
             if (cur_tok[len].type == LEX_DOUBLE || cur_tok[len].type == LEX_CHAR || cur_tok[len].type == LEX_UUINT64 ||
                 cur_tok[len].type == LEX_INT)
@@ -787,53 +816,51 @@ static const struct Token* parse_declspecs(Parser* p, const struct Token* cur_to
             }
             if (len == 0) abort();
 
-            specs.tok = cur_tok + len - 1;
-            if ((uintptr_t)cur_tok % 8 != 0) abort();
+            s->tok = cur_tok + len - 1;
             cur_tok += len;
-            if ((uintptr_t)cur_tok % 8 != 0) abort();
             continue;
         }
         else if (cur_tok->type == LEX_CONST)
         {
-            if (specs.is_const) PARSER_FAIL("error: repeated 'const' declaration specifiers are not allowed\n");
-            specs.is_const = 1;
+            if (s->is_const) PARSER_FAIL("error: repeated 'const' declaration specifiers are not allowed\n");
+            s->is_const = 1;
         }
         else if (cur_tok->type == LEX_REGISTER)
         {
-            if (specs.is_register) PARSER_FAIL("error: repeated 'register' declaration specifiers are not allowed\n");
-            specs.is_register = 1;
+            if (s->is_register) PARSER_FAIL("error: repeated 'register' declaration specifiers are not allowed\n");
+            s->is_register = 1;
         }
         else if (cur_tok->type == LEX_EXTERN)
         {
-            if (specs.is_extern) PARSER_FAIL("error: repeated 'extern' declaration specifiers are not allowed\n");
-            specs.is_extern = 1;
+            if (s->is_extern) PARSER_FAIL("error: repeated 'extern' declaration specifiers are not allowed\n");
+            s->is_extern = 1;
         }
         else if (cur_tok->type == LEX_STATIC)
         {
-            if (specs.is_static) PARSER_FAIL("error: repeated 'static' declaration specifiers are not allowed\n");
-            specs.is_static = 1;
+            if (s->is_static) PARSER_FAIL("error: repeated 'static' declaration specifiers are not allowed\n");
+            s->is_static = 1;
         }
         else if (cur_tok->type == LEX_INLINE || cur_tok->type == LEX_UUINLINE)
         {
-            if (specs.is_inline) PARSER_FAIL("error: repeated 'inline' declaration specifiers are not allowed\n");
-            specs.is_inline = 1;
+            if (s->is_inline) PARSER_FAIL("error: repeated 'inline' declaration specifiers are not allowed\n");
+            s->is_inline = 1;
         }
         else if (cur_tok->type == LEX_STDCALL)
         {
-            specs.is_stdcall = 1;
+            s->is_stdcall = 1;
         }
         else if (cur_tok->type == LEX_CDECL)
         {
         }
         else if (cur_tok->type == LEX_TYPEDEF)
         {
-            if (specs.is_typedef) PARSER_FAIL("error: repeated 'typedef' declaration specifiers are not allowed\n");
-            specs.is_typedef = 1;
+            if (s->is_typedef) PARSER_FAIL("error: repeated 'typedef' declaration specifiers are not allowed\n");
+            s->is_typedef = 1;
         }
         else if (cur_tok->type == LEX_VOLATILE)
         {
-            if (specs.is_volatile) PARSER_FAIL("error: repeated 'volatile' declaration specifiers are not allowed\n");
-            specs.is_volatile = 1;
+            if (s->is_volatile) PARSER_FAIL("error: repeated 'volatile' declaration specifiers are not allowed\n");
+            s->is_volatile = 1;
         }
         else if (cur_tok->type == LEX_UUFORCEINLINE)
         {
@@ -841,43 +868,14 @@ static const struct Token* parse_declspecs(Parser* p, const struct Token* cur_to
         }
         else
         {
-            if (!specs.tok)
+            if (!s->tok)
             {
                 PARSER_FAIL("error: expected type\n");
             }
             break;
         }
-        if ((uintptr_t)cur_tok % 8 != 0) abort();
         ++cur_tok;
-        if ((uintptr_t)cur_tok % 8 != 0) abort();
     } while (1);
-
-    *pspecs = pool_push(&p->ast_pools[AST_DECLSPEC], &specs, sizeof(specs));
-
-    struct DeclSpecs* s = *pspecs;
-    if (s->is_enum || s->is_union || s->is_struct)
-    {
-        if (s->name)
-        {
-            struct Binding* const cur_bind = scope_find(&p->type_scope, s->name);
-            if (cur_bind)
-            {
-                s->sym = cur_bind->sym;
-                s->prev_decl = s->sym->last_decl;
-            }
-            else
-            {
-                s->sym = pool_alloc_zeroes(&p->typesym_pool, sizeof(TypeSymbol));
-                s->sym->name = s->name;
-                scope_insert(&p->type_scope, s->sym, s->name);
-            }
-        }
-        else
-        {
-            s->sym = pool_alloc_zeroes(&p->typesym_pool, sizeof(TypeSymbol));
-        }
-        s->sym->last_decl = *pspecs;
-    }
 
 fail:
     return cur_tok;
@@ -1506,37 +1504,19 @@ static const struct Token* parse_conditional(Parser* p, const struct Token* cur_
     return token_consume_sym(p, cur_tok, ')', " in conditional statement");
 }
 
-static const struct Token* parse_su_body(struct Parser* p, const struct Token* cur_tok, struct DeclSpecs* specs);
-
 static const struct Token* parse_stmt_decl(Parser* p, const struct Token* cur_tok, struct Ast** past)
 {
     struct Array arr_decls = {};
     struct DeclSpecs* specs;
-    uintptr_t x = (uintptr_t)cur_tok % 8;
-    if (x != 0) abort();
     PARSER_DO(parse_declspecs(p, cur_tok, &specs));
-    if ((uintptr_t)cur_tok % 8 != 0) abort();
     if (specs->is_struct || specs->is_union || specs->is_enum)
     {
-        if (token_is_sym(p, cur_tok, '{'))
-        {
-            if (specs->is_struct || specs->is_union)
-            {
-                PARSER_DO(parse_su_body(p, cur_tok + 1, specs));
-            }
-            else if (specs->is_enum)
-            {
-                PARSER_DO(parse_enum_body(p, cur_tok + 1, specs));
-            }
-            PARSER_DO(token_consume_sym(p, cur_tok, '}', " in struct/union/enum definition"));
-        }
         if (token_is_sym(p, cur_tok, ';'))
         {
             ++cur_tok;
             goto finish;
         }
     }
-    if ((uintptr_t)cur_tok % 8 != 0) abort();
     PARSER_DO(parse_decls(p, cur_tok, specs, &arr_decls));
 finish:
     *past = &push_stmt_decls(p, specs, &arr_decls)->ast;

@@ -28,8 +28,6 @@ include $(srcdir)/main.mk
 CC:=stage1/main
 CFLAGS:= -D FAIL_ON_FIRST \
     -S \
-    -I /Library/Developer/CommandLineTools/SDKs/MacOSX11.3.sdk/usr/include \
-    -I /Library/Developer/CommandLineTools/usr/lib/clang/13.0.0/include \
 
 outdir:=stage2
 intdir:=stage2
