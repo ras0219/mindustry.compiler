@@ -53,12 +53,14 @@ idiffs:=$(addsuffix .i.diff,$(stage3bases))
 asmdiffs:=$(addsuffix .asm.diff,$(stage3bases))
 
 $(idiffs) $(astdiffs) $(asmdiffs): stage3/%.diff: stage2/% stage3/%
-	diff -u $^ >$@ | true
+	diff -u $^ >$@
 
-.PHONY: ast.diffs i.diffs asm.diffs
+.PHONY: ast.diffs i.diffs asm.diffs check
 
 ast.diffs: $(astdiffs)
 
 i.diffs: $(idiffs)
 
 asm.diffs: $(asmdiffs)
+
+check: ast.diffs i.diffs asm.diffs

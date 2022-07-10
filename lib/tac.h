@@ -103,6 +103,11 @@ enum Register
     X_REGISTER(Y_COMMA)
 };
 
+enum
+{
+    REG_COUNT = X_REGISTER(Y_SUM),
+};
+
 #undef Y_COMMA
 #undef Y_SUM
 

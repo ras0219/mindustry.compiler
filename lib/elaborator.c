@@ -603,7 +603,7 @@ static void elaborate_expr_ExprBuiltin(struct Elaborator* elab,
             *rty = s_type_void;
             break;
         case LEX_UUVA_ARG:
-            elaborate_expr(elab, ctx, e->expr1, rty);
+            elaborate_expr_decay(elab, ctx, e->expr1, rty);
             elaborate_declspecs(elab, e->specs);
             elaborate_decl(elab, e->type);
             typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, rty, e->type);

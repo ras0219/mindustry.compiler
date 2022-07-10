@@ -2031,6 +2031,31 @@ fail:
     return rc;
 }
 
+int test_be_simple3(TestState* state)
+{
+    int rc = 1;
+    BETest test;
+    SUBTEST(betest_run_cg(state, &test, "void main() { }"));
+
+    size_t index = 0;
+    REQUIRE_NEXT_TACE({TACO_RETURN});
+    REQUIRE_END_TACE();
+
+    index = 0;
+    REQUIRE_NEXT_TEXT("_main:");
+    REQUIRE_NEXT_TEXT("subq $24, %rsp");
+    REQUIRE_NEXT_TEXT("addq $24, %rsp");
+    REQUIRE_NEXT_TEXT("ret");
+    REQUIRE_NEXT_TEXT("addq $24, %rsp");
+    REQUIRE_NEXT_TEXT("ret");
+    REQUIRE_END_TEXT();
+
+    rc = 0;
+fail:
+    betest_destroy(&test);
+    return rc;
+}
+
 int test_be_relations(TestState* state)
 {
     int rc = 1;
@@ -2552,35 +2577,35 @@ int test_be_cast(TestState* state)
     index = 0;
     REQUIRE_NEXT_TEXT("_main:");
     REQUIRE_NEXT_TEXT("subq $120, %rsp");
-    REQUIRE_NEXT_TEXT("movsb 0(%rsp), %rax");
-    REQUIRE_NEXT_TEXT("mov %rax, 104(%rsp)");
+    REQUIRE_NEXT_TEXT("movsb 0(%rsp), %r11");
+    REQUIRE_NEXT_TEXT("mov %r11, 104(%rsp)");
 
-    REQUIRE_NEXT_TEXT("movsb 0(%rsp), %rax");
-    REQUIRE_NEXT_TEXT("add $1, %rax");
-    REQUIRE_NEXT_TEXT("mov %rax, 112(%rsp)");
+    REQUIRE_NEXT_TEXT("movsb 0(%rsp), %r11");
+    REQUIRE_NEXT_TEXT("add $1, %r11");
+    REQUIRE_NEXT_TEXT("mov %r11, 112(%rsp)");
 
     REQUIRE_NEXT_TEXT("movsb 112(%rsp), %r11");
     REQUIRE_NEXT_TEXT("mov %r11b, 0(%rsp)");
 
-    REQUIRE_NEXT_TEXT("movsb 104(%rsp), %rax");
-    REQUIRE_NEXT_TEXT("mov %rax, 104(%rsp)");
+    REQUIRE_NEXT_TEXT("movsb 104(%rsp), %r11");
+    REQUIRE_NEXT_TEXT("mov %r11, 104(%rsp)");
 
     REQUIRE_NEXT_TEXT("movsl 104(%rsp), %r11");
     REQUIRE_NEXT_TEXT("mov %r11d, 4(%rsp)");
 
-    REQUIRE_NEXT_TEXT("movsb 0(%rsp), %rax");
-    REQUIRE_NEXT_TEXT("mov %rax, 104(%rsp)");
+    REQUIRE_NEXT_TEXT("movsb 0(%rsp), %r11");
+    REQUIRE_NEXT_TEXT("mov %r11, 104(%rsp)");
 
-    REQUIRE_NEXT_TEXT("movsl 104(%rsp), %rax");
-    REQUIRE_NEXT_TEXT("add $2, %rax");
-    REQUIRE_NEXT_TEXT("mov %rax, 104(%rsp)");
+    REQUIRE_NEXT_TEXT("movsl 104(%rsp), %r11");
+    REQUIRE_NEXT_TEXT("add $2, %r11");
+    REQUIRE_NEXT_TEXT("mov %r11, 104(%rsp)");
 
     REQUIRE_NEXT_TEXT("movsl 104(%rsp), %r11");
     REQUIRE_NEXT_TEXT("mov %r11d, 8(%rsp)");
 
-    REQUIRE_NEXT_TEXT("mov $0, %rax");
-    REQUIRE_NEXT_TEXT("subq $1, %rax");
-    REQUIRE_NEXT_TEXT("mov %rax, 104(%rsp)");
+    REQUIRE_NEXT_TEXT("mov $0, %r11");
+    REQUIRE_NEXT_TEXT("subq $1, %r11");
+    REQUIRE_NEXT_TEXT("mov %r11, 104(%rsp)");
 
     REQUIRE_NEXT_TEXT("movzb 104(%rsp), %r11");
     REQUIRE_NEXT_TEXT("mov %r11d, 12(%rsp)");
@@ -2865,7 +2890,7 @@ int test_be_va_args(TestState* state)
                        "int x = __builtin_va_arg(v, int);"
                        "__builtin_va_end(v);"
                        "f(0, 1, 2, 2, 2, 2, 2);"
-                       "}"));
+                       "}\n"));
     int index = 0;
 
     // prologue;
@@ -3054,6 +3079,7 @@ int test_be_va_args(TestState* state)
     REQUIRE_NEXT_TEXT("_f:");
     REQUIRE_NEXT_TEXT("subq $120, %rsp");
 
+    // prologue
     REQUIRE_NEXT_TEXT("mov %rdi, 8(%rsp)");
     REQUIRE_NEXT_TEXT("mov %rsi, 16(%rsp)");
     REQUIRE_NEXT_TEXT("mov %rdx, 24(%rsp)");
@@ -3061,6 +3087,7 @@ int test_be_va_args(TestState* state)
     REQUIRE_NEXT_TEXT("mov %r8, 40(%rsp)");
     REQUIRE_NEXT_TEXT("mov %r9, 48(%rsp)");
 
+    // va_start
     REQUIRE_NEXT_TEXT("movl $8, 56(%rsp)");
     REQUIRE_NEXT_TEXT("movl $48, 60(%rsp)");
     REQUIRE_NEXT_TEXT("leaq 128(%rsp), %r11");
@@ -3068,11 +3095,13 @@ int test_be_va_args(TestState* state)
     REQUIRE_NEXT_TEXT("leaq 8(%rsp), %r11");
     REQUIRE_NEXT_TEXT("mov %r11, 72(%rsp)");
 
+    // g(v,)
     REQUIRE_NEXT_TEXT("mov 8(%rsp), %rdi");
     REQUIRE_NEXT_TEXT("leaq 56(%rsp), %rsi");
     REQUIRE_NEXT_TEXT("movb $0, %al");
     REQUIRE_NEXT_TEXT("callq _g");
 
+    // va_arg
     REQUIRE_NEXT_TEXT("movsl 56(%rsp), %rax");
     REQUIRE_NEXT_TEXT("cmp $48, %eax");
     REQUIRE_NEXT_TEXT("setl %al");
@@ -3081,18 +3110,18 @@ int test_be_va_args(TestState* state)
     REQUIRE_NEXT_TEXT("mov 112(%rsp), %rax");
     REQUIRE_NEXT_TEXT("cmp $0, %rax");
     REQUIRE_NEXT_TEXT("jz  L$2");
-    REQUIRE_NEXT_TEXT("mov 72(%rsp), %rax");
-    REQUIRE_NEXT_TEXT("movsl 56(%rsp), %rdx");
-    REQUIRE_NEXT_TEXT("add %rdx, %rax");
-    REQUIRE_NEXT_TEXT("mov %rax, 112(%rsp)");
+    REQUIRE_NEXT_TEXT("mov 72(%rsp), %r11");
+    REQUIRE_NEXT_TEXT("movsl 56(%rsp), %r10");
+    REQUIRE_NEXT_TEXT("add %r10, %r11");
+    REQUIRE_NEXT_TEXT("mov %r11, 112(%rsp)");
 
     REQUIRE_NEXT_TEXT("mov 112(%rsp), %rsi");
     REQUIRE_NEXT_TEXT("leaq 84(%rsp), %rdi");
     REQUIRE_NEXT_TEXT("movsd");
 
-    REQUIRE_NEXT_TEXT("movsl 56(%rsp), %rax");
-    REQUIRE_NEXT_TEXT("add $8, %rax");
-    REQUIRE_NEXT_TEXT("mov %rax, 112(%rsp)");
+    REQUIRE_NEXT_TEXT("movsl 56(%rsp), %r11");
+    REQUIRE_NEXT_TEXT("add $8, %r11");
+    REQUIRE_NEXT_TEXT("mov %r11, 112(%rsp)");
     REQUIRE_NEXT_TEXT("movsl 112(%rsp), %r11");
     REQUIRE_NEXT_TEXT("mov %r11d, 56(%rsp)");
     REQUIRE_NEXT_TEXT("jmp L$1");
@@ -3101,9 +3130,9 @@ int test_be_va_args(TestState* state)
     REQUIRE_NEXT_TEXT("leaq 84(%rsp), %rdi");
     REQUIRE_NEXT_TEXT("movsd");
 
-    REQUIRE_NEXT_TEXT("mov 64(%rsp), %rax");
-    REQUIRE_NEXT_TEXT("add $8, %rax");
-    REQUIRE_NEXT_TEXT("mov %rax, 112(%rsp)");
+    REQUIRE_NEXT_TEXT("mov 64(%rsp), %r11");
+    REQUIRE_NEXT_TEXT("add $8, %r11");
+    REQUIRE_NEXT_TEXT("mov %r11, 112(%rsp)");
     REQUIRE_NEXT_TEXT("mov 112(%rsp), %r11");
     REQUIRE_NEXT_TEXT("mov %r11, 64(%rsp)");
     REQUIRE_NEXT_TEXT("L$1:");
@@ -3119,6 +3148,200 @@ int test_be_va_args(TestState* state)
     REQUIRE_NEXT_TEXT("mov $2, %r9");
     REQUIRE_NEXT_TEXT("movb $0, %al");
     REQUIRE_NEXT_TEXT("callq _f");
+
+    REQUIRE_NEXT_TEXT("addq $120, %rsp");
+    REQUIRE_NEXT_TEXT("ret");
+    REQUIRE_END_TEXT();
+
+    rc = 0;
+fail:
+    betest_destroy(&test);
+    return rc;
+}
+
+int test_be_va_args2(TestState* state)
+{
+    int rc = 1;
+    BETest test;
+    SUBTEST(betest_run(state,
+                       &test,
+                       "void f(__builtin_va_list v) {\n"
+                       "int x = __builtin_va_arg(v, int);"
+                       "}\n"));
+    int index = 0;
+
+    // prologue;
+    REQUIRE_NEXT_TACE({
+        TACO_ASSIGN,
+        {TACA_FRAME, .is_addr = 1, .sizing = s_sizing_ptr, .frame_offset = 0},
+        {TACA_REG, .sizing = s_sizing_ptr, .reg = REG_RDI},
+    });
+
+    // va_arg(, int)
+    REQUIRE_NEXT_TACE({
+        TACO_LOAD,
+        {TACA_FRAME, .sizing = s_sizing_int, .frame_offset = 16},
+        {TACA_FRAME, .sizing = s_sizing_ptr, .frame_offset = 0},
+    });
+    REQUIRE_NEXT_TACE({
+        TACO_LT,
+        {TACA_FRAME, .sizing = s_sizing_int, .frame_offset = 16},
+        {TACA_IMM, .sizing = s_sizing_int, .imm = 48},
+    });
+    REQUIRE_NEXT_TACE({
+        TACO_BRZ,
+        {TACA_REF, .sizing = s_sizing_ptr, .ref = index - 1},
+        {TACA_ALABEL, .alabel = 2},
+    });
+    REQUIRE_NEXT_TACE({
+        TACO_ADD,
+        {TACA_FRAME, .sizing = s_sizing_ptr, .frame_offset = 0},
+        {TACA_IMM, .sizing = s_sizing_int, .frame_offset = 16},
+    });
+    REQUIRE_NEXT_TACE({
+        TACO_LOAD,
+        {TACA_FRAME, .sizing = s_sizing_ptr, .frame_offset = 24},
+        {TACA_REF, .sizing = s_sizing_ptr, .ref = index - 1},
+    });
+    REQUIRE_NEXT_TACE({
+        TACO_ADD,
+        {TACA_FRAME, .sizing = s_sizing_ptr, .frame_offset = 24},
+        {TACA_FRAME, .sizing = s_sizing_int, .frame_offset = 16},
+    });
+    REQUIRE_NEXT_TACE({
+        TACO_LOAD,
+        {TACA_FRAME, .sizing = s_sizing_int, .frame_offset = 12},
+        {TACA_REF, .sizing = s_sizing_ptr, .ref = index - 1},
+    });
+    REQUIRE_NEXT_TACE({
+        TACO_ADD,
+        {TACA_FRAME, .sizing = s_sizing_int, .frame_offset = 16},
+        {TACA_IMM, .sizing = s_sizing_int, .imm = 8},
+    });
+    REQUIRE_NEXT_TACE({
+        TACO_ASSIGN,
+        {TACA_FRAME, .sizing = s_sizing_int, .frame_offset = 0},
+        {TACA_REF, .sizing = s_sizing_int, .ref = index - 1},
+    });
+    REQUIRE_NEXT_TACE({
+        TACO_JUMP,
+        {TACA_ALABEL, .alabel = 1},
+    });
+    REQUIRE_NEXT_TACE({
+        TACO_LABEL,
+        {TACA_ALABEL, .alabel = 2},
+    });
+    REQUIRE_NEXT_TACE({
+        TACO_ADD,
+        {TACA_FRAME, .sizing = s_sizing_ptr, .frame_offset = 0},
+        {TACA_IMM, .sizing = s_sizing_int, .imm = 8},
+    });
+    REQUIRE_NEXT_TACE({
+        TACO_LOAD,
+        {TACA_FRAME, .sizing = s_sizing_ptr, .frame_offset = 32},
+        {TACA_REF, .sizing = s_sizing_ptr, .ref = index - 1},
+    });
+    REQUIRE_NEXT_TACE({
+        TACO_LOAD,
+        {TACA_FRAME, .sizing = s_sizing_int, .frame_offset = 12},
+        {TACA_FRAME, .sizing = s_sizing_ptr, .frame_offset = 32},
+    });
+    REQUIRE_NEXT_TACE({
+        TACO_ADD,
+        {TACA_FRAME, .sizing = s_sizing_ptr, .frame_offset = 32},
+        {TACA_IMM, .sizing = s_sizing_int, .imm = 8},
+    });
+    REQUIRE_NEXT_TACE({
+        TACO_ASSIGN,
+        {TACA_REF, .sizing = s_sizing_ptr, .ref = index - 4},
+        {TACA_REF, .sizing = s_sizing_ptr, .ref = index - 1},
+    });
+    REQUIRE_NEXT_TACE({
+        TACO_LABEL,
+        {TACA_ALABEL, .alabel = 1},
+    });
+    REQUIRE_NEXT_TACE({
+        TACO_ASSIGN,
+        {TACA_FRAME, .is_addr = 1, .sizing = s_sizing_int, .frame_offset = 8},
+        {TACA_FRAME, .sizing = s_sizing_int, .frame_offset = 12},
+    });
+    REQUIRE_END_TACE();
+
+    rc = cg_gen_taces(test.cg, test.be->code.data, array_size(&test.be->code, sizeof(TACEntry)), 100);
+    if (rc)
+    {
+        parser_print_errors(stderr);
+    }
+    REQUIRE_EQ(0, rc);
+
+    index = 0;
+
+    REQUIRE_NEXT_TEXT("_f:");
+    REQUIRE_NEXT_TEXT("subq $120, %rsp");
+
+    // prologue
+    REQUIRE_NEXT_TEXT("mov %rdi, 0(%rsp)");
+
+    // va_arg
+    REQUIRE_NEXT_TEXT("mov 0(%rsp), %rsi");
+    REQUIRE_NEXT_TEXT("leaq 16(%rsp), %rdi");
+    REQUIRE_NEXT_TEXT("movsd");
+
+    REQUIRE_NEXT_TEXT("movsl 16(%rsp), %rax");
+    REQUIRE_NEXT_TEXT("cmp $48, %eax");
+    REQUIRE_NEXT_TEXT("setl %al");
+    REQUIRE_NEXT_TEXT("movzx %al, %rax");
+    REQUIRE_NEXT_TEXT("mov %rax, 104(%rsp)");
+    REQUIRE_NEXT_TEXT("mov 104(%rsp), %rax");
+    REQUIRE_NEXT_TEXT("cmp $0, %rax");
+    REQUIRE_NEXT_TEXT("jz  L$2");
+    REQUIRE_NEXT_TEXT("mov 0(%rsp), %r11");
+    REQUIRE_NEXT_TEXT("add $16, %r11");
+    REQUIRE_NEXT_TEXT("mov %r11, 104(%rsp)");
+
+    REQUIRE_NEXT_TEXT("mov 104(%rsp), %rsi");
+    REQUIRE_NEXT_TEXT("leaq 24(%rsp), %rdi");
+    REQUIRE_NEXT_TEXT("movsq");
+
+    REQUIRE_NEXT_TEXT("mov 24(%rsp), %r11");
+    REQUIRE_NEXT_TEXT("movsl 16(%rsp), %r10");
+    REQUIRE_NEXT_TEXT("add %r10, %r11");
+    REQUIRE_NEXT_TEXT("mov %r11, 104(%rsp)");
+    REQUIRE_NEXT_TEXT("mov 104(%rsp), %rsi");
+    REQUIRE_NEXT_TEXT("leaq 12(%rsp), %rdi");
+    REQUIRE_NEXT_TEXT("movsd");
+
+    REQUIRE_NEXT_TEXT("movsl 16(%rsp), %r11");
+    REQUIRE_NEXT_TEXT("add $8, %r11");
+    REQUIRE_NEXT_TEXT("mov %r11, 104(%rsp)");
+    REQUIRE_NEXT_TEXT("movsl 104(%rsp), %r11");
+    REQUIRE_NEXT_TEXT("mov 0(%rsp), %r10");
+    REQUIRE_NEXT_TEXT("mov %r11d, (%r10)");
+    REQUIRE_NEXT_TEXT("jmp L$1");
+    REQUIRE_NEXT_TEXT("L$2:");
+
+    REQUIRE_NEXT_TEXT("mov 0(%rsp), %r11");
+    REQUIRE_NEXT_TEXT("add $8, %r11");
+    REQUIRE_NEXT_TEXT("mov %r11, 104(%rsp)");
+
+    REQUIRE_NEXT_TEXT("mov 104(%rsp), %rsi");
+    REQUIRE_NEXT_TEXT("leaq 32(%rsp), %rdi");
+    REQUIRE_NEXT_TEXT("movsq");
+
+    REQUIRE_NEXT_TEXT("mov 32(%rsp), %rsi");
+    REQUIRE_NEXT_TEXT("leaq 12(%rsp), %rdi");
+    REQUIRE_NEXT_TEXT("movsd");
+
+    REQUIRE_NEXT_TEXT("mov 32(%rsp), %r11");
+    REQUIRE_NEXT_TEXT("add $8, %r11");
+    REQUIRE_NEXT_TEXT("mov %r11, 112(%rsp)");   
+    REQUIRE_NEXT_TEXT("mov 112(%rsp), %r11");
+    REQUIRE_NEXT_TEXT("mov 104(%rsp), %r10");
+    REQUIRE_NEXT_TEXT("mov %r11, (%r10)");
+    REQUIRE_NEXT_TEXT("L$1:");
+
+    REQUIRE_NEXT_TEXT("movsl 12(%rsp), %r11");
+    REQUIRE_NEXT_TEXT("mov %r11d, 8(%rsp)");
 
     REQUIRE_NEXT_TEXT("addq $120, %rsp");
     REQUIRE_NEXT_TEXT("ret");
@@ -3600,6 +3823,18 @@ int test_cg_assign(TestState* state)
             {TACA_FRAME, .is_addr = 1, .sizing = 0, 3, .frame_offset = 4},
             {TACA_FRAME, .sizing = 0, 8, .frame_offset = 0},
         },
+        // high reg use
+        {
+            TACO_ASSIGN,
+            {TACA_NAME, .sizing = 0, 3, .name = "out"},
+            {TACA_NAME, .sizing = 0, 3, .name = "in"},
+        },
+        // high reg use 2
+        {
+            TACO_ASSIGN,
+            {TACA_NAME, .is_addr = 1, .sizing = 0, 3, .name = "out"},
+            {TACA_NAME, .sizing = 0, 3, .name = "in"},
+        },
     };
     rc = cg_gen_taces(test.cg, taces, sizeof(taces) / sizeof(taces[0]), 100);
     if (rc)
@@ -3673,6 +3908,23 @@ int test_cg_assign(TestState* state)
     REQUIRE_NEXT_TEXT("shr $16, %rax");
     REQUIRE_NEXT_TEXT("mov %al, 2(%r10)");
 
+    // high reg use
+    REQUIRE_NEXT_TEXT("movq _out@GOTPCREL(%rip), %rax");
+    REQUIRE_NEXT_TEXT("movq _in@GOTPCREL(%rip), %r11");
+    REQUIRE_NEXT_TEXT("leaq (%r11), %rsi");
+    REQUIRE_NEXT_TEXT("mov (%rax), %rdi");
+    REQUIRE_NEXT_TEXT("mov $3, %rcx");
+    REQUIRE_NEXT_TEXT("cld");
+    REQUIRE_NEXT_TEXT("rep movsb");
+
+    // high reg use
+    REQUIRE_NEXT_TEXT("movq _in@GOTPCREL(%rip), %r11");
+    REQUIRE_NEXT_TEXT("leaq (%r11), %rsi");
+    REQUIRE_NEXT_TEXT("mov _out@GOTPCREL(%rip), %rdi");
+    REQUIRE_NEXT_TEXT("mov $3, %rcx");
+    REQUIRE_NEXT_TEXT("cld");
+    REQUIRE_NEXT_TEXT("rep movsb");
+
     REQUIRE_NEXT_TEXT("addq $120, %rsp");
     REQUIRE_NEXT_TEXT("ret");
     REQUIRE_END_TEXT();
@@ -3743,30 +3995,72 @@ int test_cg_refs(TestState* state)
     size_t index = 0;
     REQUIRE_NEXT_TEXT("subq $120, %rsp");
 
-    REQUIRE_NEXT_TEXT("leaq _a(%rip), %rax");
-    REQUIRE_NEXT_TEXT("movsl _b(%rip), %rdx");
-    REQUIRE_NEXT_TEXT("add %rdx, %rax");
+    REQUIRE_NEXT_TEXT("leaq _a(%rip), %r11");
+    REQUIRE_NEXT_TEXT("movsl _b(%rip), %r10");
+    REQUIRE_NEXT_TEXT("add %r10, %r11");
 
-    REQUIRE_NEXT_TEXT("movq _a@GOTPCREL(%rip), %rax");
-    REQUIRE_NEXT_TEXT("movq _b@GOTPCREL(%rip), %rdx");
-    REQUIRE_NEXT_TEXT("movsl (%rdx), %rdx");
-    REQUIRE_NEXT_TEXT("add %rdx, %rax");
+    REQUIRE_NEXT_TEXT("movq _b@GOTPCREL(%rip), %r11");
+    REQUIRE_NEXT_TEXT("mov _a@GOTPCREL(%rip), %r10");
+    REQUIRE_NEXT_TEXT("movsl (%r11), %rax");
+    REQUIRE_NEXT_TEXT("add %rax, %r10");
 
-    REQUIRE_NEXT_TEXT("movq _a@GOTPCREL(%rip), %rdi");
+    REQUIRE_NEXT_TEXT("mov _a@GOTPCREL(%rip), %rdi");
     REQUIRE_NEXT_TEXT("movq $10, (%rdi)");
 
-    REQUIRE_NEXT_TEXT("movq _a@GOTPCREL(%rip), %rdi");
     REQUIRE_NEXT_TEXT("movsl 0(%rsp), %r11");
-    REQUIRE_NEXT_TEXT("mov %r11, (%rdi)");
+    REQUIRE_NEXT_TEXT("mov _a@GOTPCREL(%rip), %r10");
+    REQUIRE_NEXT_TEXT("mov %r11, (%r10)");
 
     REQUIRE_NEXT_TEXT("movb $0, %al");
     REQUIRE_NEXT_TEXT("callq _a");
     REQUIRE_NEXT_TEXT("movb $0, %al");
     REQUIRE_NEXT_TEXT("callq _a");
+    REQUIRE_NEXT_TEXT("movq _a@GOTPCREL(%rip), %r11");
     REQUIRE_NEXT_TEXT("movb $0, %al");
-    REQUIRE_NEXT_TEXT("callq *_a@GOTPCREL(%rip)");
+    REQUIRE_NEXT_TEXT("callq *(%r11)");
     REQUIRE_NEXT_TEXT("movb $0, %al");
     REQUIRE_NEXT_TEXT("callq *_a(%rip)");
+
+    REQUIRE_NEXT_TEXT("addq $120, %rsp");
+    REQUIRE_NEXT_TEXT("ret");
+    REQUIRE_END_TEXT();
+
+    rc = 0;
+fail:
+    cg_destroy(test.cg);
+    my_free(test.cg);
+    return rc;
+}
+
+int test_cg_regalloc(TestState* state)
+{
+    int rc = 1;
+    CGTest test = {
+        .cg = my_malloc(sizeof(struct CodeGen)),
+    };
+    cg_init(test.cg);
+    TACEntry taces[] = {
+        {
+            TACO_BAND,
+            {TACA_NAME, .sizing = 1, 8, .name = "a"},
+            {TACA_REF, .sizing = s_sizing_int, .ref = 0},
+        },
+    };
+    rc = cg_gen_taces(test.cg, taces, sizeof(taces) / sizeof(taces[0]), 100);
+    if (rc)
+    {
+        parser_print_errors(stderr);
+    }
+    REQUIRE_EQ(0, rc);
+
+    size_t index = 0;
+    REQUIRE_NEXT_TEXT("subq $120, %rsp");
+
+    REQUIRE_NEXT_TEXT("movq _a@GOTPCREL(%rip), %rax");
+    REQUIRE_NEXT_TEXT("mov (%rax), %r11");
+    REQUIRE_NEXT_TEXT("movsl 104(%rsp), %rdx");
+    REQUIRE_NEXT_TEXT("andq %rdx, %r11");
+    REQUIRE_NEXT_TEXT("mov %r11, 104(%rsp)");
 
     REQUIRE_NEXT_TEXT("addq $120, %rsp");
     REQUIRE_NEXT_TEXT("ret");
@@ -3888,8 +4182,9 @@ int test_cg_call(TestState* state)
     REQUIRE_NEXT_TEXT("movb $0, %al");
     REQUIRE_NEXT_TEXT("callq _f");
 
+    REQUIRE_NEXT_TEXT("movq _f@GOTPCREL(%rip), %r11");
     REQUIRE_NEXT_TEXT("movb $0, %al");
-    REQUIRE_NEXT_TEXT("callq *_f@GOTPCREL(%rip)");
+    REQUIRE_NEXT_TEXT("callq *(%r11)");
 
     REQUIRE_NEXT_TEXT("movb $0, %al");
     REQUIRE_NEXT_TEXT("callq _f");
@@ -3942,14 +4237,14 @@ int test_cg_add(TestState* state)
     size_t index = 0;
     REQUIRE_NEXT_TEXT("subq $120, %rsp");
 
-    REQUIRE_NEXT_TEXT("leaq 0(%rsp), %rax");
-    REQUIRE_NEXT_TEXT("add $7, %rax");
+    REQUIRE_NEXT_TEXT("leaq 0(%rsp), %r11");
+    REQUIRE_NEXT_TEXT("add $7, %r11");
 
-    REQUIRE_NEXT_TEXT("movsl 0(%rsp), %rax");
-    REQUIRE_NEXT_TEXT("add $7, %rax");
+    REQUIRE_NEXT_TEXT("movsl 0(%rsp), %r11");
+    REQUIRE_NEXT_TEXT("add $7, %r11");
 
-    REQUIRE_NEXT_TEXT("movsb 0(%rsp), %rax");
-    REQUIRE_NEXT_TEXT("add $7, %rax");
+    REQUIRE_NEXT_TEXT("movsb 0(%rsp), %r11");
+    REQUIRE_NEXT_TEXT("add $7, %r11");
 
     REQUIRE_NEXT_TEXT("addq $120, %rsp");
     REQUIRE_NEXT_TEXT("ret");
@@ -4001,17 +4296,17 @@ int test_cg_bitmath(TestState* state)
     size_t index = 0;
     REQUIRE_NEXT_TEXT("subq $120, %rsp");
 
-    REQUIRE_NEXT_TEXT("leaq 0(%rsp), %rax");
-    REQUIRE_NEXT_TEXT("andq $7, %rax");
-    REQUIRE_NEXT_TEXT("mov %rax, 104(%rsp)");
+    REQUIRE_NEXT_TEXT("leaq 0(%rsp), %r11");
+    REQUIRE_NEXT_TEXT("andq $7, %r11");
+    REQUIRE_NEXT_TEXT("mov %r11, 104(%rsp)");
 
-    REQUIRE_NEXT_TEXT("movsl 104(%rsp), %rax");
-    REQUIRE_NEXT_TEXT("orq $7, %rax");
-    REQUIRE_NEXT_TEXT("mov %rax, 104(%rsp)");
+    REQUIRE_NEXT_TEXT("movsl 104(%rsp), %r11");
+    REQUIRE_NEXT_TEXT("orq $7, %r11");
+    REQUIRE_NEXT_TEXT("mov %r11, 104(%rsp)");
 
-    REQUIRE_NEXT_TEXT("movsl 104(%rsp), %rax");
-    REQUIRE_NEXT_TEXT("xorq $7, %rax");
-    REQUIRE_NEXT_TEXT("mov %rax, 104(%rsp)");
+    REQUIRE_NEXT_TEXT("movsl 104(%rsp), %r11");
+    REQUIRE_NEXT_TEXT("xorq $7, %r11");
+    REQUIRE_NEXT_TEXT("mov %r11, 104(%rsp)");
 
     REQUIRE_NEXT_TEXT("movsl 104(%rsp), %rax");
     REQUIRE_NEXT_TEXT("not %rax");
@@ -4078,6 +4373,7 @@ int main()
     RUN_TEST(parse_ptrconvert);
     RUN_TEST(test_be_simple);
     RUN_TEST(test_be_simple2);
+    RUN_TEST(test_be_simple3);
     RUN_TEST(test_be_relations);
     RUN_TEST(test_be_arithmetic);
     RUN_TEST(test_be_bitmath);
@@ -4089,6 +4385,7 @@ int main()
     RUN_TEST(test_be_call3);
     RUN_TEST(test_be_got);
     RUN_TEST(test_be_va_args);
+    RUN_TEST(test_be_va_args2);
     RUN_TEST(test_be_conversions);
     RUN_TEST(test_be_init);
     RUN_TEST(test_be_switch);
@@ -4100,6 +4397,7 @@ int main()
     RUN_TEST(test_cg_add);
     RUN_TEST(test_cg_bitmath);
     RUN_TEST(test_cg_refs);
+    RUN_TEST(test_cg_regalloc);
 
     const char* color = (state->testfails + state->assertionfails == 0) ? _state.colorsuc : _state.colorerr;
 

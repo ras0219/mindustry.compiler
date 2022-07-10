@@ -791,15 +791,14 @@ static int be_compile_ExprBuiltin(struct BackEnd* be, struct ExprBuiltin* e, str
         case LEX_UUVA_ARG:
         {
             TACAddress va;
-            UNWRAP(be_compile_lvalue(be, e->expr1, &va));
-            TACAddress overflow_area_p = be_increment(be, &va, 8);
-            const TACAddress overflow_area = be_deref(be, &overflow_area_p, s_sizing_pointer, &e->tok->rc);
-            overflow_area_p.sizing = s_sizing_pointer;
+            UNWRAP(be_compile_expr(be, e->expr1, &va));
             const size_t complete_lbl = ++be->next_label;
             *out = be_alloc_temp(be, e->sizing);
             if (e->sizing.width <= 8)
             {
                 // class INTEGER
+                TACAddress gp_offset_p = va;
+                gp_offset_p.sizing = s_sizing_int;
                 const TACAddress gp_offset = be_deref(be, &va, s_sizing_int, &e->tok->rc);
                 const TACEntry cmp_gp_offset = {
                     .rc = &e->tok->rc,
@@ -837,14 +836,16 @@ static int be_compile_ExprBuiltin(struct BackEnd* be, struct ExprBuiltin* e, str
                 TACEntry write_gp_offset = {
                     .rc = &e->tok->rc,
                     .op = TACO_ASSIGN,
-                    .arg1 = gp_offset,
+                    .arg1 = gp_offset_p,
                     .arg2 = be_push_tace(be, &calc_new_offset, s_sizing_int),
                 };
-                write_gp_offset.arg1.is_addr = 1;
                 be_push_tace(be, &write_gp_offset, s_sizing_zero);
                 be_push_jump(be, complete_lbl);
                 be_push_label(be, use_memory_lbl);
             }
+            TACAddress overflow_area_p = be_increment(be, &va, 8);
+            const TACAddress overflow_area = be_deref(be, &overflow_area_p, s_sizing_pointer, &e->tok->rc);
+            overflow_area_p.sizing = s_sizing_pointer;
             const TACEntry load_overflow = {
                 .op = TACO_LOAD,
                 .arg1 = *out,
@@ -1636,6 +1637,8 @@ void debug_taca(Array* arr, const TACAddress* addr)
     }
 }
 
+static const TACEntry s_return = {.op = TACO_RETURN};
+
 int be_compile_toplevel_decl(struct BackEnd* be, Decl* decl)
 {
     int rc = 0;
@@ -1721,6 +1724,10 @@ int be_compile_toplevel_decl(struct BackEnd* be, Decl* decl)
             }
 
             UNWRAP(be_compile_stmt(be, decl->init));
+            if (!be->code.sz)
+            {
+                be_push_tace(be, &s_return, s_sizing_zero);
+            }
         }
     }
 

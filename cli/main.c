@@ -379,6 +379,7 @@ static const char* predefs[] = {
     "__asm__(X)=",
     "__attribute__(X)=",
     "TARGET_CPU_X86_64",
+    "__has_include(X)=0",
 };
 
 int main(int argc, const char* const* argv)
