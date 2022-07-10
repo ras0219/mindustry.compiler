@@ -1704,6 +1704,27 @@ fail:
     return rc;
 }
 
+int parse_knr_def(struct TestState* state)
+{
+    int rc = 1;
+    StandardTest test;
+    SUBTEST(stdtest_run(state,
+                        &test,
+                        "int compress2 (dest, destLen, source, sourceLen, level)\n"
+                        "Bytef *dest;\n"
+                        "uLongf *destLen;\n"
+                        "const Bytef *source;\n"
+                        "uLong sourceLen;\n"
+                        "int level;\n"
+                        "{\n"
+                        "return level;\n"
+                        "}\n"));
+    rc = 0;
+fail:
+    stdtest_destroy(&test);
+    return rc;
+}
+
 int parse_params(struct TestState* state)
 {
     int rc = 1;
@@ -3334,7 +3355,7 @@ int test_be_va_args2(TestState* state)
 
     REQUIRE_NEXT_TEXT("mov 32(%rsp), %r11");
     REQUIRE_NEXT_TEXT("add $8, %r11");
-    REQUIRE_NEXT_TEXT("mov %r11, 112(%rsp)");   
+    REQUIRE_NEXT_TEXT("mov %r11, 112(%rsp)");
     REQUIRE_NEXT_TEXT("mov 112(%rsp), %r11");
     REQUIRE_NEXT_TEXT("mov 104(%rsp), %r10");
     REQUIRE_NEXT_TEXT("mov %r11, (%r10)");
@@ -4371,6 +4392,7 @@ int main()
     RUN_TEST(parse_typedefs);
     RUN_TEST(parse_aggregates);
     RUN_TEST(parse_ptrconvert);
+    //RUN_TEST(parse_knr_def);
     RUN_TEST(test_be_simple);
     RUN_TEST(test_be_simple2);
     RUN_TEST(test_be_simple3);

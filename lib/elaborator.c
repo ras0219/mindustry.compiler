@@ -610,7 +610,7 @@ static void elaborate_expr_ExprBuiltin(struct Elaborator* elab,
             break;
         case LEX_UUVA_END: *rty = s_type_void; break;
         case LEX_UUVA_COPY:
-            elaborate_expr(elab, ctx, e->expr1, rty);
+            elaborate_expr_decay(elab, ctx, e->expr1, rty);
             elaborate_expr_decay(elab, ctx, e->expr2, rty);
             *rty = s_type_void;
             break;

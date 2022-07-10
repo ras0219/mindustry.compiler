@@ -916,6 +916,15 @@ static const struct Token* parse_declarator_fnargs(Parser* p, const struct Token
     }
     else
     {
+        if (cur_tok->type == LEX_IDENT)
+        {
+            struct Binding* const cur_bind = scope_find(&p->typedef_scope, token_str(p, cur_tok));
+            if (!cur_bind || !cur_bind->sym)
+            {
+                // not a typename
+            }
+        }
+
         while (1)
         {
             if (cur_tok->type == TOKEN_SYM3('.', '.', '.'))

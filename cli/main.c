@@ -303,7 +303,7 @@ static int parse_arguments(int argc, const char* const* argv, struct Arguments* 
         array_push_byte(&out->inc, ';');
     }
     array_appends(&out->inc,
-                  "/Library/Developer/CommandLineTools/SDKs/MacOSX11.3.sdk/usr/include"
+                  "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include"
                   ";/Library/Developer/CommandLineTools/usr/lib/clang/13.0.0/include");
 #endif
 

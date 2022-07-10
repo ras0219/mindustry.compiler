@@ -871,10 +871,11 @@ static int be_compile_ExprBuiltin(struct BackEnd* be, struct ExprBuiltin* e, str
         }
         case LEX_UUVA_COPY:
             tace.op = TACO_ASSIGN;
-            UNWRAP(be_compile_lvalue(be, e->expr1, &tace.arg1));
-            tace.arg1.sizing = e->expr1->sizing;
+            UNWRAP(be_compile_expr(be, e->expr1, &tace.arg1));
+            static const Sizing s_sizing_va_list = {0, 24};
+            tace.arg1.sizing = s_sizing_va_list;
             UNWRAP(be_compile_expr(be, e->expr2, &tace.arg2));
-            tace.arg2 = be_deref(be, &tace.arg2, e->expr1->sizing, &e->tok->rc);
+            tace.arg2 = be_deref(be, &tace.arg2, s_sizing_va_list, &e->tok->rc);
             be_push_tace(be, &tace, s_sizing_zero);
             *out = s_taca_void;
             break;
