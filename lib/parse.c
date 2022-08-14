@@ -901,7 +901,8 @@ static struct StmtDecls* push_stmt_decl(struct Parser* p, struct DeclSpecs* spec
 /// \param fn uninitialized out param
 static const struct Token* parse_declarator_fnargs(Parser* p, const struct Token* cur_tok, struct DeclFn* fn)
 {
-    struct Array args_array = {};
+    struct Array prototype_names = {0};
+    struct Array args_array = {0};
     memset(fn, 0, sizeof(DeclFn));
     fn->kind = AST_DECLFN;
     fn->tok = cur_tok;
@@ -921,7 +922,40 @@ static const struct Token* parse_declarator_fnargs(Parser* p, const struct Token
             struct Binding* const cur_bind = scope_find(&p->typedef_scope, token_str(p, cur_tok));
             if (!cur_bind || !cur_bind->sym)
             {
-                // not a typename
+                // not a typename, K&R style prototype.
+                while (1)
+                {
+                    if (cur_tok->type != LEX_IDENT)
+                    {
+                        PARSER_FAIL("error: expected identifier in prototype list.\n");
+                    }
+                    arrptr_push(&prototype_names, cur_tok);
+                    ++cur_tok;
+                    if (cur_tok->type == TOKEN_SYM1(','))
+                    {
+                        ++cur_tok;
+                        continue;
+                    }
+                    PARSER_DO(token_consume_sym(p, cur_tok, ')', " in function prototype"));
+                    break;
+                }
+                const size_t n = prototype_names.sz / sizeof(void*);
+                for (size_t i = 0; i < n; ++i)
+                {
+                    struct DeclSpecs* arg_specs;
+
+                    PARSER_DO(parse_declspecs(p, cur_tok, &arg_specs));
+                    arg_specs->is_fn_arg = 1;
+                    struct Decl* arg_decl = parse_alloc_decl(p, arg_specs);
+                    PARSER_DO(parse_declarator(p, cur_tok, arg_decl));
+                    arrptr_push(&args_array, push_stmt_decl(p, arg_specs, arg_decl));
+
+                    if (arg_decl->tok->sp_offset != ((Token**)prototype_names.data)[i]->sp_offset)
+                        PARSER_FAIL("error: K&R argument definitions must be in prototype order.\n");
+
+                    PARSER_DO(token_consume_sym(p, cur_tok, ';', " in function prototype"));
+                }
+                goto fail;
             }
         }
 
@@ -961,6 +995,7 @@ static const struct Token* parse_declarator_fnargs(Parser* p, const struct Token
 
 fail:
     array_destroy(&args_array);
+    array_destroy(&prototype_names);
     return cur_tok;
 }
 

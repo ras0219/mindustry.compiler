@@ -1,3 +1,4 @@
+#include <dirent.h>
 #include <fcntl.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -13,9 +14,11 @@
 #include "parse.h"
 #include "preproc.h"
 #include "stdlibe.h"
+#include "stringmap.h"
 #include "tok.h"
 #include "token.h"
 #include "unwrap.h"
+#include <sys/stat.h>
 
 #ifdef _WIN32
 #include <io.h>
@@ -92,12 +95,15 @@ typedef struct Arguments
     const char* output;
     const char* env_file;
     struct Array inc;
+    struct Array fw_paths;
     unsigned fCompile : 1;
     unsigned fPreprocOnly : 1;
     unsigned fAssembleOnly : 1;
     unsigned fParseOnly : 1;
     unsigned fDebugBE : 1;
     struct Array macro_name;
+
+    struct BStringMap frameworks;
 } Arguments;
 
 static void args_destroy(Arguments* args)
@@ -107,6 +113,7 @@ static void args_destroy(Arguments* args)
     array_destroy(&args->input_offsets);
     array_destroy(&args->inc);
     array_destroy(&args->macro_name);
+    bsm_destroy(&args->frameworks);
 }
 
 static int my_system(const char* cmd)
@@ -128,15 +135,152 @@ static void append_cli_arg(Array* arr, const char* s, size_t sz)
     array_push(arr, s, sz);
 }
 
+typedef struct PathComponents
+{
+    int basename;
+    int ext;
+    int end;
+} PathComponents;
+
+static void parse_path(const char* path, PathComponents* comps)
+{
+    int x = 0;
+    int b = 0;
+    int c = 0;
+    for (char ch = path[x]; ch; ch = path[++x])
+    {
+        if (ch == '/')
+            b = x + 1, c = b;
+        else if (ch == '.')
+            c = x;
+    }
+
+    if (c == b) c = x;
+
+    comps->basename = b;
+    comps->ext = c;
+    comps->end = x;
+}
+
+static void appendf_path_list(Array* arr, const char* fmt, ...)
+{
+    va_list argp;
+    va_start(argp, fmt);
+    if (arr->sz)
+    {
+        array_push_byte(arr, ';');
+    }
+    array_appendv(arr, fmt, argp);
+    va_end(argp);
+}
+
+/// \returns zero on success, nonzero on failure.
+static int search_in_paths(
+    const char* list, size_t list_sz, const char* needle, size_t needle_sz, Array* out, struct stat* st)
+{
+    if (list_sz == 0) return 0;
+
+    const char* i = list;
+    for (const char* j = memchr(list, ';', list_sz); j; i = j + 1, j = memchr(j, ';', j - list))
+    {
+        array_clear(out);
+        array_appendf(out, "%.*s/%.*s", j - i, i, needle_sz, needle);
+        array_push_byte(out, '\0');
+        if (stat(out->data, st) == 0)
+        {
+            array_pop(out, 1);
+            return 0;
+        }
+    }
+    array_clear(out);
+    array_appendf(out, "%.*s/%.*s", list + list_sz - i, i, needle_sz, needle);
+    array_push_byte(out, '\0');
+    if (stat(out->data, st) == 0)
+    {
+        array_pop(out, 1);
+        return 0;
+    }
+    return 1;
+}
+
+static void process_framework_in(Arguments* args, const char* fw, size_t fw_sz, const char* in, size_t in_sz)
+{
+    size_t* fwsz = bsm_get(&args->frameworks, fw, fw_sz);
+    if (fwsz) return;
+    bsm_insert(&args->frameworks, fw, fw_sz, 0);
+
+    DIR* dirp = NULL;
+    struct Array buf = {0};
+    array_appendf(&buf, "%.*s/%.*s.framework%c", in_sz, in, fw_sz, fw, 0);
+    struct stat s;
+    if (stat(buf.data, &s))
+    {
+        printf("stat(%s)\n", (char*)buf.data);
+        perror("error: ");
+        exit(1);
+    }
+    array_pop(&buf, 1);
+
+    // Check for subframeworks
+    static const char frameworks[] = "/Frameworks";
+    array_push(&buf, frameworks, sizeof(frameworks));
+    dirp = opendir(buf.data);
+    if (dirp)
+    {
+        // subframeworks exist
+        struct dirent* dp;
+        while ((dp = readdir(dirp)) != NULL)
+        {
+            if (dp->d_name[0] == '.') continue;
+            PathComponents comps;
+            parse_path(dp->d_name, &comps);
+            process_framework_in(args, dp->d_name, comps.ext, buf.data, buf.sz);
+        }
+        closedir(dirp);
+    }
+
+    array_destroy(&buf);
+}
+
+static void process_framework(Arguments* args, const char* fw, size_t sz)
+{
+    size_t* fwsz = bsm_get(&args->frameworks, fw, sz);
+    if (fwsz) return;
+
+    static const char in[] =
+        "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks;/System/Library/Frameworks";
+
+    struct Array fwname = {0};
+    array_push(&fwname, fw, sz);
+    static const char ext[] = ".framework";
+    array_push(&fwname, ext, sizeof(ext) - 1);
+
+    struct Array out = {0};
+    struct stat st;
+    if (search_in_paths(in, sizeof(in) - 1, fwname.data, fwname.sz, &out, &st))
+    {
+        fprintf(stderr, "error: could not find framework %.*s\n", (int)sz, fw);
+        exit(1);
+    }
+
+    // out ends with /name.framework. We want the parent dir.
+    array_pop(&out, fwname.sz + 1);
+
+    process_framework_in(args, fw, sz, out.data, out.sz);
+
+    append_cli_arg(&args->link_flags, "-framework", 10);
+    append_cli_arg(&args->link_flags, fw, sz);
+
+    array_destroy(&fwname);
+    array_destroy(&out);
+}
+
 static int matches_link_switch(const char* arg)
 {
     if (arg[0] == '-' && arg[1] == 'W' && arg[2] == 'l') return 1;
     return strcmp(arg, "-dynamiclib") == 0;
 }
-static int matches_link_setting(const char* arg)
-{
-    return strcmp(arg, "-install_name") == 0 || strcmp(arg, "-framework") == 0;
-}
+static int matches_link_setting(const char* arg) { return strcmp(arg, "-install_name") == 0; }
 
 static int parse_arguments(int argc, const char* const* argv, struct Arguments* out)
 {
@@ -168,6 +312,16 @@ static int parse_arguments(int argc, const char* const* argv, struct Arguments* 
             {
                 out->fDebugBE = 1;
             }
+            else if (strcmp(argv[i] + 1, "framework") == 0)
+            {
+                ++i;
+                if (i == argc)
+                {
+                    fprintf(stderr, "error: expected framework name after %s\n", argv[i - 1]);
+                    goto usage;
+                }
+                process_framework(out, argv[i], strlen(argv[i]));
+            }
             else if (strcmp(argv[i] + 1, "o") == 0)
             {
                 ++i;
@@ -191,19 +345,11 @@ static int parse_arguments(int argc, const char* const* argv, struct Arguments* 
                     fprintf(stderr, "error: expected path after %s\n", argv[i - 1]);
                     goto usage;
                 }
-                if (out->inc.sz)
-                {
-                    array_push_byte(&out->inc, ';');
-                }
-                array_appends(&out->inc, argv[i]);
+                appendf_path_list(&out->inc, "%s", argv[i]);
             }
             else if (argv[i][1] == 'I')
             {
-                if (out->inc.sz)
-                {
-                    array_push_byte(&out->inc, ';');
-                }
-                array_appends(&out->inc, argv[i] + 2);
+                appendf_path_list(&out->inc, "%s", argv[i] + 2);
             }
             else if (strcmp(argv[i] + 1, "N") == 0)
             {
@@ -277,11 +423,7 @@ static int parse_arguments(int argc, const char* const* argv, struct Arguments* 
         size_t read = fread(buf, 1, 1024, f);
         if (read)
         {
-            if (out->inc.sz)
-            {
-                array_push_byte(&out->inc, ';');
-            }
-            array_push(&out->inc, buf, read);
+            appendf_path_list(&out->inc, "%.*s", read, buf);
         }
         if (ferror(f)) return 1;
         fclose(f);
@@ -290,21 +432,13 @@ static int parse_arguments(int argc, const char* const* argv, struct Arguments* 
     char* inc = getenv("INCLUDE");
     if (inc)
     {
-        if (out->inc.sz)
-        {
-            array_push_byte(&out->inc, ';');
-        }
-        array_appends(&out->inc, inc);
+        appendf_path_list(&out->inc, "%s", inc);
     }
 
 #ifdef __APPLE__
-    if (out->inc.sz)
-    {
-        array_push_byte(&out->inc, ';');
-    }
-    array_appends(&out->inc,
-                  "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include"
-                  ";/Library/Developer/CommandLineTools/usr/lib/clang/13.0.0/include");
+    appendf_path_list(&out->inc, "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include");
+    appendf_path_list(&out->inc, "/Library/Developer/CommandLineTools/usr/lib/clang/13.0.0/include");
+    appendf_path_list(&out->inc, "/Library/Developer/CommandLineTools/usr/lib/clang/12.0.0/include");
 #endif
 
     array_push_byte(&out->inc, 0);
@@ -319,33 +453,6 @@ static int parse_arguments(int argc, const char* const* argv, struct Arguments* 
 
 usage:
     return usage(argv[0]);
-}
-
-typedef struct PathComponents
-{
-    int basename;
-    int ext;
-    int end;
-} PathComponents;
-
-static void parse_path(const char* path, PathComponents* comps)
-{
-    int x = 0;
-    int b = 0;
-    int c = 0;
-    for (char ch = path[x]; ch; ch = path[++x])
-    {
-        if (ch == '/')
-            b = x + 1, c = b;
-        else if (ch == '.')
-            c = x;
-    }
-
-    if (c == b) c = x;
-
-    comps->basename = b;
-    comps->ext = c;
-    comps->end = x;
 }
 
 static int path_ext_is(const char* input, const PathComponents* comps, const char* ext)
@@ -380,6 +487,8 @@ static const char* predefs[] = {
     "__attribute__(X)=",
     "TARGET_CPU_X86_64",
     "__has_include(X)=0",
+    "__has_include_next(X)=0",
+    "__builtin_expect(X,Y)=(X)",
 };
 
 int main(int argc, const char* const* argv)

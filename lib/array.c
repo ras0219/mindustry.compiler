@@ -61,12 +61,16 @@ void array_appendf(struct Array* arr, const char* fmt, ...)
 {
     va_list argp;
     va_start(argp, fmt);
+    array_appendv(arr, fmt, argp);
+    va_end(argp);
+}
+void array_appendv(struct Array* arr, const char* fmt, va_list argp)
+{
     va_list args2;
     va_copy(args2, argp);
     const int size_req = vsnprintf(NULL, 0, fmt, argp);
     vsnprintf(array_alloc(arr, size_req + 1), size_req + 1, fmt, args2);
     // pop null byte
     --arr->sz;
-
-    va_end(argp);
+    va_end(args2);
 }

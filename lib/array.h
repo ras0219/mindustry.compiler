@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdarg.h>
 #include <stddef.h>
 
 #include "compilermacros.h"
@@ -35,12 +36,13 @@ void array_destroy(struct Array* arr);
 
 // Does not append null byte
 void array_appendf(struct Array* arr, const char* fmt, ...);
+void array_appendv(struct Array* arr, const char* fmt, va_list argp);
 
 /// Does not append null byte
 /// @return bytes appended
 size_t array_appends(struct Array* arr, const char* s);
 
-__forceinline void** arrptr_push(struct Array* arr, void* data) { return array_push(arr, &data, sizeof(data)); }
+__forceinline void** arrptr_push(struct Array* arr, const void* data) { return array_push(arr, &data, sizeof(data)); }
 __forceinline void* arrptr_pop(struct Array* arr)
 {
     arr->sz -= sizeof(void*);

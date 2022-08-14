@@ -963,21 +963,30 @@ static int pp_include_file(struct Preprocessor* pp, struct Lexer* l)
             if (f) break;
             i_start += n + 1;
         }
-    }
-    if (!f)
-    {
-        memcpy(filename, pp->dir_rc.file, parent_sz);
-        memcpy(filename + parent_sz, pp->to_include, pp->to_include_sz + 1);
-
-        if (errno == ENOENT)
+        if (!f)
         {
-            UNWRAP(parser_ferror(&pp->dir_rc, "error: could not open %s: No such file or directory\n", filename));
-        }
+            memcpy(filename, pp->dir_rc.file, parent_sz);
+            memcpy(filename + parent_sz, pp->to_include, pp->to_include_sz + 1);
 
-        char buf[128];
-        snprintf(buf, 128, "%s: failed to open", pp->to_include);
-        perror(buf);
-        UNWRAP(1);
+            if (errno == ENOENT)
+            {
+                for (size_t i_start = 0; i_start < inc_size;)
+                {
+                    const char* i_end = (const char*)memchr(inc + i_start, ';', inc_size - i_start);
+                    const size_t n = (i_end ? i_end - inc : inc_size) - i_start;
+                    parser_fmsg(warn, &pp->dir_rc, "info: searched %.*s\n", n, inc + i_start);
+                    i_start += n + 1;
+                }
+
+                parser_ferror(&pp->dir_rc, "error: could not open %s: no such file or directory\n", filename);
+                UNWRAP(1);
+            }
+
+            char buf[128];
+            snprintf(buf, 128, "%s: failed to open", pp->to_include);
+            perror(buf);
+            UNWRAP(1);
+        }
     }
 
     size_t cur_if_sz = pp->if_true_depth;
