@@ -8,6 +8,7 @@ void* autoheap_alloc(struct AutoHeap* heap, size_t alloc_size)
     arrptr_push(&heap->arr, p);
     return p;
 }
+void autoheap_pop(struct AutoHeap* heap) { my_free(arrptr_pop(&heap->arr)); }
 void autoheap_destroy(struct AutoHeap* heap)
 {
     void** const data = (void**)heap->arr.data;

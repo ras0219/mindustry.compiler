@@ -15,6 +15,7 @@
 #include "preproc.h"
 #include "stdlibe.h"
 #include "stringmap.h"
+#include "strlist.h"
 #include "tok.h"
 #include "token.h"
 #include "unwrap.h"
@@ -89,21 +90,22 @@ int usage(const char* self)
 
 typedef struct Arguments
 {
-    struct Array inputs;
-    struct Array input_offsets;
-    struct Array link_flags;
+    Array inputs;
+    Array input_offsets;
+    Array link_flags;
     const char* output;
     const char* env_file;
-    struct Array inc;
-    struct Array fw_paths;
+    StrList inc;
+    Array fw_paths;
     unsigned fCompile : 1;
     unsigned fPreprocOnly : 1;
     unsigned fAssembleOnly : 1;
     unsigned fParseOnly : 1;
     unsigned fDebugBE : 1;
-    struct Array macro_name;
+    Array macro_name;
 
-    struct BStringMap frameworks;
+    BStringMap frameworks;
+    AutoHeap framework_paths;
 } Arguments;
 
 static void args_destroy(Arguments* args)
@@ -111,7 +113,7 @@ static void args_destroy(Arguments* args)
     array_destroy(&args->inputs);
     array_destroy(&args->link_flags);
     array_destroy(&args->input_offsets);
-    array_destroy(&args->inc);
+    strlist_destroy(&args->inc);
     array_destroy(&args->macro_name);
     bsm_destroy(&args->frameworks);
 }
@@ -160,18 +162,6 @@ static void parse_path(const char* path, PathComponents* comps)
     comps->basename = b;
     comps->ext = c;
     comps->end = x;
-}
-
-static void appendf_path_list(Array* arr, const char* fmt, ...)
-{
-    va_list argp;
-    va_start(argp, fmt);
-    if (arr->sz)
-    {
-        array_push_byte(arr, ';');
-    }
-    array_appendv(arr, fmt, argp);
-    va_end(argp);
 }
 
 /// \returns zero on success, nonzero on failure.
@@ -345,11 +335,11 @@ static int parse_arguments(int argc, const char* const* argv, struct Arguments* 
                     fprintf(stderr, "error: expected path after %s\n", argv[i - 1]);
                     goto usage;
                 }
-                appendf_path_list(&out->inc, "%s", argv[i]);
+                strlist_appendz(&out->inc, argv[i]);
             }
             else if (argv[i][1] == 'I')
             {
-                appendf_path_list(&out->inc, "%s", argv[i] + 2);
+                strlist_appendz(&out->inc, argv[i] + 2);
             }
             else if (strcmp(argv[i] + 1, "N") == 0)
             {
@@ -423,7 +413,7 @@ static int parse_arguments(int argc, const char* const* argv, struct Arguments* 
         size_t read = fread(buf, 1, 1024, f);
         if (read)
         {
-            appendf_path_list(&out->inc, "%.*s", read, buf);
+            strlist_append(&out->inc, buf, read);
         }
         if (ferror(f)) return 1;
         fclose(f);
@@ -432,16 +422,19 @@ static int parse_arguments(int argc, const char* const* argv, struct Arguments* 
     char* inc = getenv("INCLUDE");
     if (inc)
     {
-        appendf_path_list(&out->inc, "%s", inc);
+        char *a = inc, *b;
+        for (; b = strchr(a, ';'); a = b + 1)
+        {
+            strlist_append(&out->inc, a, b - a);
+        }
+        strlist_appendz(&out->inc, a);
     }
 
 #ifdef __APPLE__
-    appendf_path_list(&out->inc, "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include");
-    appendf_path_list(&out->inc, "/Library/Developer/CommandLineTools/usr/lib/clang/13.0.0/include");
-    appendf_path_list(&out->inc, "/Library/Developer/CommandLineTools/usr/lib/clang/12.0.0/include");
+    strlist_appendz(&out->inc, "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include");
+    strlist_appendz(&out->inc, "/Library/Developer/CommandLineTools/usr/lib/clang/13.0.0/include");
+    strlist_appendz(&out->inc, "/Library/Developer/CommandLineTools/usr/lib/clang/12.0.0/include");
 #endif
-
-    array_push_byte(&out->inc, 0);
 
     if (out->input_offsets.sz == 0)
     {
@@ -573,7 +566,7 @@ int main(int argc, const char* const* argv)
 
         if (c_file)
         {
-            fe.pp = preproc_alloc(args.inc.data);
+            fe.pp = preproc_alloc(args.inc.data, args.inc.sz, &args.frameworks);
 
             const char* macro_names = args.macro_name.data;
             for (size_t i = 0; i < args.macro_name.sz;)

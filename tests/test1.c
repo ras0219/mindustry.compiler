@@ -77,7 +77,7 @@ fail:
 int test_preproc(struct TestState* state, struct Preprocessor** pp, const char* text)
 {
     parser_clear_errors();
-    *pp = preproc_alloc("");
+    *pp = preproc_alloc("", 0);
     REQUIREZ(preproc_text(*pp, text));
     REQUIREZ(parser_has_errors());
     return 0;
@@ -114,7 +114,7 @@ int test_parse(struct TestState* state, struct Parser** parser, struct Preproces
 {
     parser_clear_errors();
     *parser = NULL;
-    *pp = preproc_alloc("");
+    *pp = preproc_alloc("", 0);
     REQUIREZ(preproc_text(*pp, text));
     *parser = my_malloc(sizeof(struct Parser));
     parser_init(*parser);
@@ -143,7 +143,7 @@ fail:
 int test_parse_fail(struct TestState* state, const char* text)
 {
     parser_clear_errors();
-    struct Preprocessor* const pp = preproc_alloc("");
+    struct Preprocessor* const pp = preproc_alloc("", 0);
     Parser* parser = NULL;
     REQUIREZ(preproc_text(pp, text));
     parser = my_malloc(sizeof(struct Parser));
@@ -162,7 +162,7 @@ fail:
 int test_elaborate_fail(struct TestState* state, const char* text)
 {
     parser_clear_errors();
-    struct Preprocessor* const pp = preproc_alloc("");
+    struct Preprocessor* const pp = preproc_alloc("", 0);
     Parser* parser = NULL;
     Elaborator* elab = NULL;
     REQUIREZ(preproc_text(pp, text));
@@ -4392,7 +4392,7 @@ int main()
     RUN_TEST(parse_typedefs);
     RUN_TEST(parse_aggregates);
     RUN_TEST(parse_ptrconvert);
-    //RUN_TEST(parse_knr_def);
+    // RUN_TEST(parse_knr_def);
     RUN_TEST(test_be_simple);
     RUN_TEST(test_be_simple2);
     RUN_TEST(test_be_simple3);

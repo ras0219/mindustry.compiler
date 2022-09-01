@@ -12,11 +12,11 @@ void strlist_append(StrList* sl, const char* s, size_t n)
 
 void strlist_appendz(StrList* sl, const char* z) { strlist_append(sl, z, strlen(z)); }
 
-int strlist_foreach(StrList* sl, strlist_foreach_cb cb, void* userp)
+/// \param cb int(*)(void* userp, char* s, size_t sz)
+int strlistv_foreach(char* const data, size_t const sz, strlist_foreach_cb_t cb, void* userp)
 {
-    char* const data = sl->data;
     size_t i = 0;
-    while (i != sl->sz)
+    while (i != sz)
     {
         int r;
         size_t n;
@@ -26,6 +26,11 @@ int strlist_foreach(StrList* sl, strlist_foreach_cb cb, void* userp)
         i += sizeof(size_t) + 1 + n;
     }
     return 0;
+}
+
+int strlist_foreach(StrList* sl, strlist_foreach_cb_t cb, void* userp)
+{
+    return strlistv_foreach(sl->data, sl->sz, cb, userp);
 }
 
 void strlist_destroy(StrList* sl) { array_destroy(sl); }

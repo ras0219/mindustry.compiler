@@ -5,12 +5,19 @@
 
 #include "fwd.h"
 
-struct Preprocessor* preproc_alloc(const char* include_paths);
-void preproc_free(struct Preprocessor* pp);
-int preproc_file(struct Preprocessor* pp, FILE* f, const char* filename);
-int preproc_text(struct Preprocessor* pp, const char* text);
-int preproc_define(struct Preprocessor* pp, const char* macro);
-const struct Token* preproc_tokens(const struct Preprocessor* pp);
-const char* preproc_stringpool(const struct Preprocessor* pp);
-const char* pp_token_str(const struct Preprocessor* pp, const struct Token* tk);
-void preproc_dump(const struct Preprocessor* pp);
+typedef struct Preprocessor Preprocessor;
+
+Preprocessor* preproc_alloc();
+void preproc_free(Preprocessor* pp);
+
+void preproc_include_paths(Preprocessor* pp, const StrList* incs);
+void preproc_framework_paths(Preprocessor* pp, const StrList* incs);
+void preproc_frameworks(Preprocessor* pp, const StringSet* frameworks);
+
+int preproc_file(Preprocessor* pp, FILE* f, const char* filename);
+int preproc_text(Preprocessor* pp, const char* text);
+int preproc_define(Preprocessor* pp, const char* macro);
+const struct Token* preproc_tokens(const Preprocessor* pp);
+const char* preproc_stringpool(const Preprocessor* pp);
+const char* pp_token_str(const Preprocessor* pp, const struct Token* tk);
+void preproc_dump(const Preprocessor* pp);

@@ -3,18 +3,23 @@
 #include <limits.h>
 #include <string.h>
 
-#include "mp.h"
 #ifndef _WIN32
+#include <dirent.h>
+#include <unistd.h>
+
 #include <sys/errno.h>
+#include <sys/types.h>
 #endif
 
 #include "array.h"
 #include "errors.h"
 #include "lexstate.h"
+#include "mp.h"
 #include "rowcol.h"
 #include "stdlibe.h"
 #include "stringmap.h"
 #include "stringpool.h"
+#include "strlist.h"
 #include "tok.h"
 #include "token.h"
 #include "unwrap.h"
@@ -88,13 +93,15 @@ typedef struct Preprocessor
     char to_include[128];
     size_t to_include_sz;
 
-    const char* include_paths;
+    char* inc_data;
+    size_t inc_sz;
 
     // Array<char*>
     struct Array files_open;
     // Array<struct ParsedFile>
     struct Array filenames;
     size_t cur_file;
+    const char* cur_framework_path;
 
     struct StringMap defines_map;
     struct StringStk def_arg_names;
@@ -114,6 +121,9 @@ typedef struct Preprocessor
     unsigned int debug_print_tokens : 1;
     unsigned int debug_print_ifs : 1;
     unsigned int debug_print_defines : 1;
+
+    const StringSet* frameworks;
+    const StrList* fw_paths;
 } Preprocessor;
 
 void preproc_free(struct Preprocessor* pp)
@@ -936,69 +946,197 @@ static int pp_handle_directive(struct Preprocessor* pp, Lexer* l)
     abort();
 }
 static int preproc_file_impl(struct Preprocessor* pp, FILE* f, const char* filename);
+
+static void maybe_append_pathsep(Array* buf)
+{
+    if (buf->sz && ((char*)buf->data)[buf->sz - 1] != '/') array_push_byte(buf, '/');
+}
+
+static void path_combine(Array* buf, const char* e1, size_t s1)
+{
+    maybe_append_pathsep(buf);
+    array_push(buf, e1, s1);
+}
+
+// Null-terminates
+static void assign_path_join(Array* buf, const char* e1, size_t s1, const char* e2, size_t s2)
+{
+    array_clear(buf);
+    array_push(buf, e1, s1);
+    maybe_append_pathsep(buf);
+    array_push(buf, e2, s2);
+    array_push_byte(buf, '\0');
+}
+
+struct PPIncludeFileInnerForeach
+{
+    const struct
+    {
+        Array* buf;
+        const char* inc;
+        size_t inc_sz;
+        StrList* tried;
+    };
+    FILE* f;
+};
+
+static int pp_include_file_inner_cb(void* userp, char* s, size_t sz)
+{
+    struct PPIncludeFileInnerForeach* data = userp;
+    assign_path_join(data->buf, s, sz, data->inc, data->inc_sz);
+    if (data->f = fopen(data->buf->data, "r")) return 1;
+    strlist_append(data->tried, data->buf->data, data->buf->sz - 1);
+    if (errno != ENOENT) return 1;
+    return 0;
+}
+static int pp_info_searched_cb(void* rc, char* s, size_t sz)
+{
+    parser_fmsg(warn, rc, "info: searched %.*s\n", sz, s);
+    return 0;
+}
+static int pp_include_file_inner(struct Preprocessor* pp, Array* buf, FILE** file, StrList* tried)
+{
+    struct PPIncludeFileInnerForeach data = {
+        .buf = buf,
+        .inc = pp->to_include,
+        .inc_sz = pp->to_include_sz,
+        .tried = tried,
+    };
+    assign_path_join(buf, pp->dir_rc.file, path_parent_span(pp->dir_rc.file), data.inc, data.inc_sz);
+    if (*file = fopen(buf->data, "r")) return 0;
+    strlist_append(tried, buf->data, buf->sz - 1);
+    strlistv_foreach(pp->inc_data, pp->inc_sz, pp_include_file_inner_cb, &data);
+    return !(*file = data.f);
+}
+
+/// \param out Out. Non-null-terminated.
+static int readlink_array(const char* path, Array* out)
+{
+    array_reserve(out, 128);
+    for (int i = 0; i < 8; ++i)
+    {
+        size_t sz = readlink(path, out->data, out->sz);
+        if (sz != -1)
+        {
+            out->sz = sz;
+            return 0;
+        }
+        if (errno != ENAMETOOLONG) return 1;
+        array_reserve(out, out->cap * 2);
+    }
+    return 1;
+}
+
+/// \param buf Out. Null-terminated. Path to include file opened.
+/// \param fw Out. Null-terminated. Path to current framework without trailing slash.
+static int pp_include_framework_inner(struct Preprocessor* pp, Array* buf, Array* fw, FILE** file, StrList* tried)
+{
+    const struct
+    {
+        const char* inc;
+        size_t inc_sz;
+    } data = {pp->to_include, pp->to_include_sz};
+
+    const char* fw_name_end = memchr(data.inc, '/', data.inc_sz);
+    if (!fw_name_end) return 1;
+
+    DIR* dir;
+
+    size_t fw_name_len = fw_name_end - data.inc;
+    if (pp->cur_framework_path)
+    {
+        array_clear(buf);
+        array_appends(buf, pp->cur_framework_path);
+        path_combine(buf, "Frameworks/", sizeof("Frameworks/") - 1);
+        array_push(buf, data.inc, fw_name_len);
+        array_push(buf, ".framework", sizeof(".framework") - 1);
+        array_push_byte(buf, '\0');
+        if (dir = opendir(buf->data)) goto found_fw;
+    }
+    size_t idx = strset_get(pp->frameworks, data.inc, fw_name_len);
+    if (idx != SIZE_MAX)
+    {
+        array_clear(buf);
+        array_appendf(buf,
+                      "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/"
+                      "%.*s.framework",
+                      fw_name_len,
+                      data.inc);
+        array_push_byte(buf, '\0');
+        if (dir = opendir(buf->data)) goto found_fw;
+    }
+    return 1;
+
+found_fw:
+    closedir(dir);
+    if (0 == readlink_array(buf->data, fw))
+    {
+        array_push_byte(fw, '\0');
+        array_assign(buf, fw->data, fw->sz);
+    }
+    else
+    {
+        array_assign(fw, buf->data, buf->sz);
+    }
+    array_pop(buf, 1);
+    array_appends(buf, "/Headers/");
+    array_push(buf, fw_name_end + 1, data.inc_sz - fw_name_len - 1);
+    array_push_byte(buf, '\0');
+    if (*file = fopen(buf->data, "r")) return 0;
+    strlist_append(tried, buf->data, buf->sz - 1);
+    return 1;
+}
+
 static int pp_include_file(struct Preprocessor* pp, struct Lexer* l)
 {
     int rc = 0;
-    FILE* f = NULL;
-    const size_t parent_sz = path_parent_span(pp->dir_rc.file);
-    if (parent_sz + pp->to_include_sz >= 256) abort();
-    char filename[256];
-    memcpy(filename, pp->dir_rc.file, parent_sz);
-    memcpy(filename + parent_sz, pp->to_include, pp->to_include_sz + 1);
+    StrList tried = {0};
+    FILE* file = NULL;
+    Array buf = {0};
+    Array new_fw = {0};
+    const char* const prev_fw = pp->cur_framework_path;
 
-    f = fopen(filename, "r");
-    if (!f)
+    if (rc = pp_include_file_inner(pp, &buf, &file, &tried))
     {
-        const char* inc = pp->include_paths;
-        const size_t inc_size = strlen(inc);
-
-        for (size_t i_start = 0; i_start < inc_size;)
+        if (rc = pp_include_framework_inner(pp, &buf, &new_fw, &file, &tried))
         {
-            const char* i_end = (const char*)memchr(inc + i_start, ';', inc_size - i_start);
-            const size_t n = (i_end ? i_end - inc : inc_size) - i_start;
-            if (n >= sizeof(filename)) abort();
-            memcpy(filename, inc + i_start, n);
-            snprintf(filename + n, sizeof(filename) - n, "/%s", pp->to_include);
-            f = fopen(filename, "r");
-            if (f) break;
-            i_start += n + 1;
-        }
-        if (!f)
-        {
-            memcpy(filename, pp->dir_rc.file, parent_sz);
-            memcpy(filename + parent_sz, pp->to_include, pp->to_include_sz + 1);
-
-            if (errno == ENOENT)
-            {
-                for (size_t i_start = 0; i_start < inc_size;)
-                {
-                    const char* i_end = (const char*)memchr(inc + i_start, ';', inc_size - i_start);
-                    const size_t n = (i_end ? i_end - inc : inc_size) - i_start;
-                    parser_fmsg(warn, &pp->dir_rc, "info: searched %.*s\n", n, inc + i_start);
-                    i_start += n + 1;
-                }
-
-                parser_ferror(&pp->dir_rc, "error: could not open %s: no such file or directory\n", filename);
-                UNWRAP(1);
-            }
-
-            char buf[128];
-            snprintf(buf, 128, "%s: failed to open", pp->to_include);
-            perror(buf);
+            const int err = errno;
+            strlist_foreach(&tried, pp_info_searched_cb, &pp->dir_rc);
+            const char* errmsg = strerror(err);
+            if (!errmsg) abort();
+            parser_ferror(&pp->dir_rc,
+                          "error: could not find include %.*s: %s\n",
+                          (int)pp->to_include_sz,
+                          pp->to_include,
+                          errmsg);
             UNWRAP(1);
         }
+        else
+        {
+            pp->cur_framework_path = new_fw.data;
+        }
+    }
+    else
+    {
+        pp->cur_framework_path = NULL;
     }
 
     size_t cur_if_sz = pp->if_true_depth;
-    UNWRAP(preproc_file_impl(pp, f, filename));
+    UNWRAP(preproc_file_impl(pp, file, buf.data));
     // pop EOF from included file
     array_pop(&pp->toks, sizeof(struct Token));
     if (pp->if_true_depth != cur_if_sz || pp->if_false_depth != 0)
     {
-        UNWRAP(parser_ferror(&pp->dir_rc, "error: mismatched ifdef levels after including %s\n", filename));
+        parser_ferror(&pp->dir_rc, "error: mismatched ifdef levels after including %s\n", buf.data);
+        UNWRAP(1);
     }
+
 fail:
-    if (f) fclose(f);
+    pp->cur_framework_path = prev_fw;
+    if (file) fclose(file);
+    array_destroy(&tried);
+    array_destroy(&new_fw);
+    array_destroy(&buf);
     return rc;
 }
 
@@ -1538,11 +1676,21 @@ fail:
     return rc;
 }
 
-struct Preprocessor* preproc_alloc(const char* include_paths)
+void preproc_include_paths(Preprocessor* pp, const StrList* incs)
+{
+    pp->inc_data = incs->data;
+    pp->inc_sz = incs->sz;
+}
+void preproc_framework_paths(Preprocessor* pp, const StrList* incs) { pp->fw_paths = incs; }
+void preproc_frameworks(Preprocessor* pp, const StringSet* frameworks) { pp->frameworks = frameworks; }
+
+struct Preprocessor* preproc_alloc(char* inc_data, size_t inc_sz, const StringSet* frameworks)
 {
     struct Preprocessor* pp = my_malloc(sizeof(struct Preprocessor));
     memset(pp, 0, sizeof(struct Preprocessor));
-    pp->include_paths = include_paths;
+    pp->inc_data = inc_data;
+    pp->inc_sz = inc_sz;
+    pp->frameworks = frameworks;
     sp_init(&pp->stringpool);
     struct Token* tok_one = array_push_zeroes(&pp->defs_tokens, sizeof(struct Token));
     tok_one->type = LEX_NUMBER;
