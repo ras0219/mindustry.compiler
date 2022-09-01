@@ -36,6 +36,10 @@ __forceinline void array_assign(struct Array* arr, const void* src, size_t n)
 
 /// postcondition: arr->cap >= cap
 void array_reserve(struct Array* arr, size_t cap);
+/// postcondition: arr->sz == size
+void array_resize(struct Array* arr, size_t size);
+/// postcondition: arr->sz == size
+void array_assign_zeroes(struct Array* arr, size_t size);
 void array_pop(struct Array* arr, size_t sz);
 void array_destroy(struct Array* arr);
 

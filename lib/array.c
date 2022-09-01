@@ -47,6 +47,16 @@ void array_reserve(struct Array* arr, size_t cap)
         arr->data = my_realloc(arr->data, arr->cap);
     }
 }
+void array_resize(struct Array* arr, size_t size)
+{
+    array_reserve(arr, size);
+    arr->sz = size;
+}
+void array_assign_zeroes(struct Array* arr, size_t size)
+{
+    array_resize(arr, size);
+    memset(arr->data, 0, size);
+}
 void array_pop(struct Array* arr, size_t sz) { arr->sz -= sz; }
 void array_destroy(struct Array* arr) { free(arr->data); }
 
