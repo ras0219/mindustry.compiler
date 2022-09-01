@@ -92,7 +92,7 @@ fail:
 int test_preproc_pass(struct TestState* state, const char* text)
 {
     int rc = 1;
-    struct Preprocessor* pp = preproc_alloc("", 0);
+    struct Preprocessor* pp = preproc_alloc();
     SUBTEST(test_preproc(state, pp, text));
     rc = 0;
 fail:
@@ -104,7 +104,7 @@ int test_parse(struct TestState* state, struct Parser** parser, struct Preproces
 {
     parser_clear_errors();
     *parser = NULL;
-    *pp = preproc_alloc("", 0);
+    *pp = preproc_alloc();
     REQUIREZ(preproc_text(*pp, text));
     *parser = my_malloc(sizeof(struct Parser));
     parser_init(*parser);
@@ -133,7 +133,7 @@ fail:
 int test_parse_fail(struct TestState* state, const char* text)
 {
     parser_clear_errors();
-    struct Preprocessor* const pp = preproc_alloc("", 0);
+    struct Preprocessor* const pp = preproc_alloc();
     Parser* parser = NULL;
     REQUIREZ(preproc_text(pp, text));
     parser = my_malloc(sizeof(struct Parser));
@@ -152,7 +152,7 @@ fail:
 int test_elaborate_fail(struct TestState* state, const char* text)
 {
     parser_clear_errors();
-    struct Preprocessor* const pp = preproc_alloc("", 0);
+    struct Preprocessor* const pp = preproc_alloc();
     Parser* parser = NULL;
     Elaborator* elab = NULL;
     REQUIREZ(preproc_text(pp, text));

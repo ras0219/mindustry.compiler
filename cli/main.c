@@ -104,7 +104,7 @@ typedef struct Arguments
     unsigned fDebugBE : 1;
     Array macro_name;
 
-    BStringMap frameworks;
+    StringSet frameworks;
     AutoHeap framework_paths;
 } Arguments;
 
@@ -115,7 +115,7 @@ static void args_destroy(Arguments* args)
     array_destroy(&args->input_offsets);
     strlist_destroy(&args->inc);
     array_destroy(&args->macro_name);
-    bsm_destroy(&args->frameworks);
+    strset_destroy(&args->frameworks);
 }
 
 static int my_system(const char* cmd)
@@ -164,105 +164,12 @@ static void parse_path(const char* path, PathComponents* comps)
     comps->end = x;
 }
 
-/// \returns zero on success, nonzero on failure.
-static int search_in_paths(
-    const char* list, size_t list_sz, const char* needle, size_t needle_sz, Array* out, struct stat* st)
-{
-    if (list_sz == 0) return 0;
-
-    const char* i = list;
-    for (const char* j = memchr(list, ';', list_sz); j; i = j + 1, j = memchr(j, ';', j - list))
-    {
-        array_clear(out);
-        array_appendf(out, "%.*s/%.*s", j - i, i, needle_sz, needle);
-        array_push_byte(out, '\0');
-        if (stat(out->data, st) == 0)
-        {
-            array_pop(out, 1);
-            return 0;
-        }
-    }
-    array_clear(out);
-    array_appendf(out, "%.*s/%.*s", list + list_sz - i, i, needle_sz, needle);
-    array_push_byte(out, '\0');
-    if (stat(out->data, st) == 0)
-    {
-        array_pop(out, 1);
-        return 0;
-    }
-    return 1;
-}
-
-static void process_framework_in(Arguments* args, const char* fw, size_t fw_sz, const char* in, size_t in_sz)
-{
-    size_t* fwsz = bsm_get(&args->frameworks, fw, fw_sz);
-    if (fwsz) return;
-    bsm_insert(&args->frameworks, fw, fw_sz, 0);
-
-    DIR* dirp = NULL;
-    struct Array buf = {0};
-    array_appendf(&buf, "%.*s/%.*s.framework%c", in_sz, in, fw_sz, fw, 0);
-    struct stat s;
-    if (stat(buf.data, &s))
-    {
-        printf("stat(%s)\n", (char*)buf.data);
-        perror("error: ");
-        exit(1);
-    }
-    array_pop(&buf, 1);
-
-    // Check for subframeworks
-    static const char frameworks[] = "/Frameworks";
-    array_push(&buf, frameworks, sizeof(frameworks));
-    dirp = opendir(buf.data);
-    if (dirp)
-    {
-        // subframeworks exist
-        struct dirent* dp;
-        while ((dp = readdir(dirp)) != NULL)
-        {
-            if (dp->d_name[0] == '.') continue;
-            PathComponents comps;
-            parse_path(dp->d_name, &comps);
-            process_framework_in(args, dp->d_name, comps.ext, buf.data, buf.sz);
-        }
-        closedir(dirp);
-    }
-
-    array_destroy(&buf);
-}
-
 static void process_framework(Arguments* args, const char* fw, size_t sz)
 {
-    size_t* fwsz = bsm_get(&args->frameworks, fw, sz);
-    if (fwsz) return;
-
-    static const char in[] =
-        "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks;/System/Library/Frameworks";
-
-    struct Array fwname = {0};
-    array_push(&fwname, fw, sz);
-    static const char ext[] = ".framework";
-    array_push(&fwname, ext, sizeof(ext) - 1);
-
-    struct Array out = {0};
-    struct stat st;
-    if (search_in_paths(in, sizeof(in) - 1, fwname.data, fwname.sz, &out, &st))
-    {
-        fprintf(stderr, "error: could not find framework %.*s\n", (int)sz, fw);
-        exit(1);
-    }
-
-    // out ends with /name.framework. We want the parent dir.
-    array_pop(&out, fwname.sz + 1);
-
-    process_framework_in(args, fw, sz, out.data, out.sz);
+    strset_insert(&args->frameworks, fw, sz);
 
     append_cli_arg(&args->link_flags, "-framework", 10);
     append_cli_arg(&args->link_flags, fw, sz);
-
-    array_destroy(&fwname);
-    array_destroy(&out);
 }
 
 static int matches_link_switch(const char* arg)
@@ -471,13 +378,14 @@ static const char* predefs[] = {
     "__FILE__=\"/path/to/__FILE__\"",
     "__LINE__=0",
     "__ras0219_cc__",
-    "__GNUC__=3",
+    "__GNUC__=4",
     "__GNUC_MINOR__=0",
     "_FORTIFY_SOURCE=0",
     "double=long",
     "float=int",
     "__asm__(X)=",
     "__attribute__(X)=",
+    "__building_module(X)=0",
     "TARGET_CPU_X86_64",
     "__has_include(X)=0",
     "__has_include_next(X)=0",
@@ -566,7 +474,9 @@ int main(int argc, const char* const* argv)
 
         if (c_file)
         {
-            fe.pp = preproc_alloc(args.inc.data, args.inc.sz, &args.frameworks);
+            fe.pp = preproc_alloc();
+            preproc_include_paths(fe.pp, &args.inc);
+            preproc_frameworks(fe.pp, &args.frameworks);
 
             const char* macro_names = args.macro_name.data;
             for (size_t i = 0; i < args.macro_name.sz;)

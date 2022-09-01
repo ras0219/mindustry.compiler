@@ -7,7 +7,7 @@
 
 typedef struct Preprocessor Preprocessor;
 
-Preprocessor* preproc_alloc();
+Preprocessor* preproc_alloc(void);
 void preproc_free(Preprocessor* pp);
 
 void preproc_include_paths(Preprocessor* pp, const StrList* incs);

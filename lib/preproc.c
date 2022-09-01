@@ -939,8 +939,12 @@ static int pp_handle_directive(struct Preprocessor* pp, Lexer* l)
                 HANDLE_DIRECTIVE("warning", PP_IGNORE);
                 HANDLE_DIRECTIVE("push_macro", PP_IGNORE);
                 HANDLE_DIRECTIVE("pop_macro", PP_IGNORE);
+                HANDLE_DIRECTIVE("clang", PP_IGNORE);
+                HANDLE_DIRECTIVE("options", PP_IGNORE);
             }
-            return parser_ferror(&l->tok_rc, "error: unknown pragma directive: %s\n", l->tok);
+            parser_fmsg(warn, &l->tok_rc, "warning: unknown pragma directive: %s\n", l->tok);
+            pp->preproc = PP_IGNORE;
+            return 0;
         case PP_PRAGMA_ONCE: return parser_ferror(&l->tok_rc, "error: expected end of directive: %s\n", l->tok);
     }
     abort();
@@ -991,7 +995,7 @@ static int pp_include_file_inner_cb(void* userp, char* s, size_t sz)
 }
 static int pp_info_searched_cb(void* rc, char* s, size_t sz)
 {
-    parser_fmsg(warn, rc, "info: searched %.*s\n", sz, s);
+    parser_fmsg(warn, rc, "info: checked %.*s\n", sz, s);
     return 0;
 }
 static int pp_include_file_inner(struct Preprocessor* pp, Array* buf, FILE** file, StrList* tried)
@@ -1010,22 +1014,7 @@ static int pp_include_file_inner(struct Preprocessor* pp, Array* buf, FILE** fil
 }
 
 /// \param out Out. Non-null-terminated.
-static int readlink_array(const char* path, Array* out)
-{
-    array_reserve(out, 128);
-    for (int i = 0; i < 8; ++i)
-    {
-        size_t sz = readlink(path, out->data, out->sz);
-        if (sz != -1)
-        {
-            out->sz = sz;
-            return 0;
-        }
-        if (errno != ENAMETOOLONG) return 1;
-        array_reserve(out, out->cap * 2);
-    }
-    return 1;
-}
+static int readlink_array(const char* path, Array* out) { return 1; }
 
 /// \param buf Out. Null-terminated. Path to include file opened.
 /// \param fw Out. Null-terminated. Path to current framework without trailing slash.
@@ -1052,9 +1041,13 @@ static int pp_include_framework_inner(struct Preprocessor* pp, Array* buf, Array
         array_push(buf, ".framework", sizeof(".framework") - 1);
         array_push_byte(buf, '\0');
         if (dir = opendir(buf->data)) goto found_fw;
+        buf->sz = path_parent_span(pp->cur_framework_path);
+        array_push(buf, data.inc, fw_name_len);
+        array_push(buf, ".framework", sizeof(".framework") - 1);
+        array_push_byte(buf, '\0');
+        if (dir = opendir(buf->data)) goto found_fw;
     }
-    size_t idx = strset_get(pp->frameworks, data.inc, fw_name_len);
-    if (idx != SIZE_MAX)
+    if (pp->cur_framework_path || strset_get(pp->frameworks, data.inc, fw_name_len) != SIZE_MAX)
     {
         array_clear(buf);
         array_appendf(buf,
@@ -1704,13 +1697,13 @@ void preproc_include_paths(Preprocessor* pp, const StrList* incs)
 void preproc_framework_paths(Preprocessor* pp, const StrList* incs) { pp->fw_paths = incs; }
 void preproc_frameworks(Preprocessor* pp, const StringSet* frameworks) { pp->frameworks = frameworks; }
 
-struct Preprocessor* preproc_alloc(char* inc_data, size_t inc_sz, const StringSet* frameworks)
+struct Preprocessor* preproc_alloc(void)
 {
     struct Preprocessor* pp = my_malloc(sizeof(struct Preprocessor));
     memset(pp, 0, sizeof(struct Preprocessor));
-    pp->inc_data = inc_data;
-    pp->inc_sz = inc_sz;
-    pp->frameworks = frameworks;
+    pp->inc_data = NULL;
+    pp->inc_sz = 0;
+    pp->frameworks = NULL;
     sp_init(&pp->stringpool);
     struct Token* tok_one = array_push_zeroes(&pp->defs_tokens, sizeof(struct Token));
     tok_one->type = LEX_NUMBER;
