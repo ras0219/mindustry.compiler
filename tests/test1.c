@@ -74,11 +74,10 @@ fail:
 #define REQUIRE_TYPESTR_EQ(expected, actual)                                                                           \
     REQUIRE_TYPESTR_EQ_IMPL(__FILE__, __LINE__, expected, #expected, actual, #actual)
 
-int test_preproc(struct TestState* state, struct Preprocessor** pp, const char* text)
+int test_preproc(struct TestState* state, struct Preprocessor* pp, const char* text)
 {
     parser_clear_errors();
-    *pp = preproc_alloc("", 0);
-    REQUIREZ(preproc_text(*pp, text));
+    REQUIREZ(preproc_text(pp, text));
     REQUIREZ(parser_has_errors());
     return 0;
 
@@ -87,26 +86,17 @@ fail:
     {
         parser_print_errors(stderr);
     }
-    if (*pp)
-    {
-        preproc_free(*pp);
-        *pp = NULL;
-    }
     return 1;
 }
 
 int test_preproc_pass(struct TestState* state, const char* text)
 {
     int rc = 1;
-    struct Preprocessor* pp;
-    SUBTEST(test_preproc(state, &pp, text));
+    struct Preprocessor* pp = preproc_alloc("", 0);
+    SUBTEST(test_preproc(state, pp, text));
     rc = 0;
 fail:
-    if (pp)
-    {
-        preproc_free(pp);
-        pp = NULL;
-    }
+    preproc_free(pp);
     return rc;
 }
 
@@ -419,6 +409,25 @@ int preproc_ternary(struct TestState* state)
 
     rc = 0;
 fail:
+    return rc;
+}
+
+int preproc_comma_paste(struct TestState* state)
+{
+    int rc = 1;
+    struct Parser* p;
+    struct Preprocessor* pp;
+    SUBTEST(test_parse(state,
+                       &p,
+                       &pp,
+                       "#define X(...) int z, ## __VA_ARGS__;\n"
+                       "struct { X() };\n"
+                       "struct { X(a,b) };\n"));
+
+    rc = 0;
+fail:
+    if (p) parser_destroy(p), my_free(p);
+    if (pp) preproc_free(pp);
     return rc;
 }
 
@@ -4361,6 +4370,7 @@ int main()
     RUN_TEST(parse_unk_array);
     RUN_TEST(parse_initializer_struct);
     RUN_TEST(preproc_ternary);
+    RUN_TEST(preproc_comma_paste);
     RUN_TEST(parse_strings);
     RUN_TEST(parse_cmake_size_test);
     RUN_TEST(parse_fdset);

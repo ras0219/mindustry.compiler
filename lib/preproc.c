@@ -1366,21 +1366,42 @@ static int pp_complete_fn_macro(struct Preprocessor* pp)
                 array_shrink(&pp->toks, res_start, sizeof(struct Token));
             }
         }
+        else if (data[i].basic_type == LEX_MACRO_VA_ARGS)
+        {
+            size_t* const macro_arg_data = (size_t*)pp->macro_arg_offsets.data + exp.macro_arg_offsets_start;
+            int va_empty = num_args == def->arity ||
+                           (num_args == 1 && def->arity == 0 && macro_arg_data[0] + 1 == macro_arg_data[1]);
+
+            if (i > 0 && data[i - 1].type == TOKEN_SYM2('#', '#'))
+            {
+                if (tmp.sz > 0 && ((Token*)array_back(&tmp, sizeof(Token)))->type == TOKEN_SYM1(','))
+                {
+                    if (va_empty)
+                    {
+                        array_pop(&tmp, sizeof(Token));
+                    }
+                }
+                else
+                {
+                    UNWRAP(parser_tok_error(data + i - 1, "error: cannot paste __VA_ARGS__ onto a non-comma token\n"));
+                }
+            }
+            // eval args.
+            if (!va_empty)
+            {
+                size_t res_start = array_size(&pp->toks, sizeof(struct Token));
+                for (size_t i = def->arity; i < num_args; ++i)
+                {
+                    UNWRAP(pp_eval_tok_seq(pp, macro_arg_data[i] - (i > def->arity), macro_arg_data[i + 1] - 1));
+                }
+                array_push(
+                    &tmp, (struct Token*)pp->toks.data + res_start, pp->toks.sz - res_start * sizeof(struct Token));
+                array_shrink(&pp->toks, res_start, sizeof(struct Token));
+            }
+        }
         else if (i > 0 && data[i - 1].type == TOKEN_SYM2('#', '#'))
         {
             UNWRAP(pp_concat_token(pp, array_back(&tmp, sizeof(struct Token)), data + i));
-        }
-        else if (data[i].basic_type == LEX_MACRO_VA_ARGS)
-        {
-            // eval args.
-            size_t res_start = array_size(&pp->toks, sizeof(struct Token));
-            for (size_t i = def->arity; i < num_args; ++i)
-            {
-                size_t* const macro_arg_data = (size_t*)pp->macro_arg_offsets.data + exp.macro_arg_offsets_start;
-                UNWRAP(pp_eval_tok_seq(pp, macro_arg_data[i] - (i > def->arity), macro_arg_data[i + 1] - 1));
-            }
-            array_push(&tmp, (struct Token*)pp->toks.data + res_start, pp->toks.sz - res_start * sizeof(struct Token));
-            array_shrink(&pp->toks, res_start, sizeof(struct Token));
         }
         else if (data[i].type == TOKEN_SYM1('#') || data[i].type == TOKEN_SYM2('#', '#'))
         {
@@ -1390,7 +1411,6 @@ static int pp_complete_fn_macro(struct Preprocessor* pp)
             // ignore pragmas
             pragma_paren_nesting = 1;
             if (i + 1 != extent) ++i;
-            fprintf(stderr, "skipping pragma\n");
             continue;
         }
         else
@@ -1992,7 +2012,13 @@ void preproc_dump(const struct Preprocessor* pp)
             fputc('\'', stdout);
         }
         else
+        {
             printf("%.*s", data->tok_len, s);
+            if (data->tok_len == 0)
+            {
+                printf("/*%s*/", lexstate_to_string(data->basic_type));
+            }
+        }
     }
     printf("\n");
 }
