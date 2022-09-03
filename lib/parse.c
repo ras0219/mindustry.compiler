@@ -314,6 +314,18 @@ static int tok_type_is_fundamental(unsigned int type)
     }
     return 0;
 }
+static int tok_type_is_nonfundamental(unsigned int type)
+{
+    switch (type)
+    {
+        case LEX_LONG: return 1;
+        case LEX_UNSIGNED: return 1;
+        case LEX_UUSIGNED: return 1;
+        case LEX_SHORT: return 1;
+        case LEX_SIGNED: return 1;
+        default: return 0;
+    }
+}
 
 static int parse_is_token_a_type(Parser* p, const struct Token* tok)
 {
@@ -741,7 +753,6 @@ static const struct Token* parse_declspecs(Parser* p, const struct Token* cur_to
             if (!cur_bind || !cur_bind->sym)
             {
                 PARSER_FAIL("error: expected type but found identifier: %s\n", s->name);
-                break;
             }
             s->_typedef = cur_bind->sym;
         }
@@ -769,7 +780,7 @@ static const struct Token* parse_declspecs(Parser* p, const struct Token* cur_to
         }
         else if (tok_type_is_fundamental(cur_tok->type))
         {
-            if (s->tok)
+            if (s->tok && !tok_type_is_nonfundamental(s->tok->type))
             {
                 PARSER_FAIL("error: repeated type declaration specifiers are not allowed (was '%s', got '%s')\n",
                             token_str(p, s->tok),
@@ -777,49 +788,37 @@ static const struct Token* parse_declspecs(Parser* p, const struct Token* cur_to
             }
             s->tok = cur_tok;
         }
-        else if (cur_tok->type == LEX_SIGNED || cur_tok->type == LEX_UUSIGNED || cur_tok->type == LEX_UNSIGNED ||
-                 cur_tok->type == LEX_LONG || cur_tok->type == LEX_SHORT)
+        else if (cur_tok->type == LEX_UNSIGNED)
         {
-            if (s->tok)
-            {
-                PARSER_FAIL("error: repeated type declaration specifiers are not allowed (was '%s', got '%s')\n",
-                            token_str(p, s->tok),
-                            token_str(p, cur_tok));
-            }
-            int len = 0;
-            int count_signed = 0;
-            int count_unsigned = 0;
-            int count_long = 0;
-            int count_short = 0;
-            for (;; ++len)
-            {
-                if (cur_tok[len].type == LEX_SIGNED || cur_tok[len].type == LEX_UUSIGNED)
-                    ++count_signed;
-                else if (cur_tok[len].type == LEX_UNSIGNED)
-                    ++count_unsigned;
-                else if (cur_tok[len].type == LEX_LONG)
-                    ++count_long;
-                else if (cur_tok[len].type == LEX_SHORT)
-                    ++count_short;
-                else
-                    break;
-            }
-            if (count_signed) s->is_signed = 1;
-            if (count_unsigned) s->is_unsigned = 1;
-            if (count_long == 1) s->is_long = 1;
-            if (count_long == 2) s->is_longlong = 1;
-            if (count_short) s->is_short = 1;
-
-            if (cur_tok[len].type == LEX_DOUBLE || cur_tok[len].type == LEX_CHAR || cur_tok[len].type == LEX_UUINT64 ||
-                cur_tok[len].type == LEX_INT)
-            {
-                ++len;
-            }
-            if (len == 0) abort();
-
-            s->tok = cur_tok + len - 1;
-            cur_tok += len;
-            continue;
+            if (!s->tok) s->tok = cur_tok;
+            if (s->is_unsigned || s->is_signed)
+                PARSER_FAIL("error: cannot combine unsigned with previous signedness specifier\n");
+            s->is_unsigned = 1;
+        }
+        else if (cur_tok->type == LEX_SIGNED || cur_tok->type == LEX_UUSIGNED)
+        {
+            if (!s->tok) s->tok = cur_tok;
+            if (s->is_unsigned || s->is_signed)
+                PARSER_FAIL("error: cannot combine unsigned with previous signedness specifier\n");
+            s->is_signed = 1;
+        }
+        else if (cur_tok->type == LEX_LONG)
+        {
+            if (!s->tok) s->tok = cur_tok;
+            if (s->is_longlong)
+                PARSER_FAIL("error: long long long is invalid\n");
+            else if (s->is_long)
+                s->is_longlong = 1;
+            else
+                s->is_long = 1;
+        }
+        else if (cur_tok->type == LEX_SHORT)
+        {
+            if (!s->tok) s->tok = cur_tok;
+            if (s->is_short)
+                PARSER_FAIL("error: short short is invalid\n");
+            else
+                s->is_short = 1;
         }
         else if (cur_tok->type == LEX_CONST)
         {
@@ -869,14 +868,21 @@ static const struct Token* parse_declspecs(Parser* p, const struct Token* cur_to
         }
         else
         {
-            if (!s->tok)
-            {
-                PARSER_FAIL("error: expected type\n");
-            }
             break;
         }
         ++cur_tok;
     } while (1);
+
+    if (!s->tok)
+    {
+        PARSER_FAIL("error: expected type\n");
+    }
+    if (s->is_long && s->is_short) PARSER_FAIL("error: long short is invalid\n");
+    if (s->tok->type == LEX_CHAR)
+    {
+        if (s->is_long) PARSER_FAIL("error: long char is invalid\n");
+        if (s->is_short) PARSER_FAIL("error: short char is invalid\n");
+    }
 
 fail:
     return cur_tok;

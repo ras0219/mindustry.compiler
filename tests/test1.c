@@ -504,6 +504,25 @@ fail:
     return rc;
 }
 
+int parse_primitive_types(struct TestState* state)
+{
+    int rc = 1;
+    StandardTest test;
+    SUBTEST(stdtest_run(state,
+                        &test,
+                        "const char x;\n"
+                        "char const x2;\n"
+                        "const char * const y;\n"
+                        "char const unsigned * const z;\n"
+                        "char extern unsigned w;\n"
+                        "unsigned const char * const q;\n"));
+
+    rc = 0;
+
+fail:
+    return rc;
+}
+
 int parse_typedef_enum(struct TestState* state)
 {
     int rc = 1;
@@ -4392,6 +4411,7 @@ int main()
     RUN_TEST(parse_strings);
     RUN_TEST(parse_cmake_size_test);
     RUN_TEST(parse_fdset);
+    RUN_TEST(parse_primitive_types);
     RUN_TEST(parse_typedef_enum);
     RUN_TEST(parse_main);
     RUN_TEST(parse_body);
