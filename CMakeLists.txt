@@ -10,6 +10,7 @@ project(mindustry.compiler C)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 add_compile_options(-Werror -std=c11 -Wall -Wno-parentheses -Wno-missing-braces -Wno-comment)
+
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
     add_compile_options(-Wno-format-truncation)
 endif()
@@ -63,6 +64,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Webassembly")
 
     file(GLOB web_files "targets/web/*" "examples/*")
     option(GENERATE_DOCS "" ON)
+
     if(GENERATE_DOCS)
         list(APPEND web_files "docs/extensions.md")
     endif()
@@ -76,9 +78,9 @@ else()
     add_executable(main cli/main.c)
     target_link_libraries(main PRIVATE mindcc-lib)
 
-    file(GLOB_RECURSE TEST_SOURCES tests/*)
+    file(GLOB TEST_SOURCES tests/*)
     add_executable(runall-test ${TEST_SOURCES})
     target_link_libraries(runall-test PRIVATE mindcc-lib)
 
-    add_custom_target(test COMMAND runall-test)
+    add_custom_target(test COMMAND runall-test "${PROJECT_SOURCE_DIR}" VERBATIM)
 endif()

@@ -901,6 +901,7 @@ struct TypeTable* tt_alloc()
 }
 void tt_free(struct TypeTable* tt)
 {
+    if (tt == NULL) return;
     array_destroy(&tt->fn_args);
     array_destroy(&tt->fn_args_ends);
     array_destroy(&tt->typesyms);

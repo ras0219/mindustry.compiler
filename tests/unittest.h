@@ -2,6 +2,9 @@
 
 #include "array.h"
 
+extern const char* g_datadir;
+extern size_t g_datadir_sz;
+
 struct TestFrame
 {
     const char* file;
@@ -39,16 +42,19 @@ typedef struct TestState
 
 void unittest_print_stack(const struct TestState* state);
 
+#define REQUIRE_FAIL_MSG_IMPL(file, line, fmt, ...)                                                                    \
+    fprintf(stderr, "%s%s:%d: error: " fmt "%s\n", state->colorerr, file, line, __VA_ARGS__, state->colorreset);
+
 #define REQUIRE_FAIL_IMPL(file, line, fmt, ...)                                                                        \
     do                                                                                                                 \
     {                                                                                                                  \
         unittest_print_stack(state);                                                                                   \
-        fprintf(stderr, "%s%s:%d: error: " fmt "\n%s", state->colorerr, file, line, __VA_ARGS__, state->colorreset);   \
+        REQUIRE_FAIL_MSG_IMPL(file, line, fmt, ##__VA_ARGS__);                                                         \
         state->assertionfails++;                                                                                       \
         goto fail;                                                                                                     \
     } while (0)
 
-#define REQUIRE_FAIL(fmt, ...) REQUIRE_FAIL_IMPL(__FILE__, __LINE__, fmt, __VA_ARGS__)
+#define REQUIRE_FAIL(fmt, ...) REQUIRE_FAIL_IMPL(__FILE__, __LINE__, fmt, ##__VA_ARGS__)
 
 #define REQUIRE_IMPL(expr, expr_str)                                                                                   \
     do                                                                                                                 \

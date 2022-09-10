@@ -15,6 +15,7 @@
 #include "errors.h"
 #include "lexstate.h"
 #include "mp.h"
+#include "path.h"
 #include "rowcol.h"
 #include "stdlibe.h"
 #include "stringmap.h"
@@ -950,27 +951,6 @@ static int pp_handle_directive(struct Preprocessor* pp, Lexer* l)
     abort();
 }
 static int preproc_file_impl(struct Preprocessor* pp, FILE* f, const char* filename);
-
-static void maybe_append_pathsep(Array* buf)
-{
-    if (buf->sz && ((char*)buf->data)[buf->sz - 1] != '/') array_push_byte(buf, '/');
-}
-
-static void path_combine(Array* buf, const char* e1, size_t s1)
-{
-    maybe_append_pathsep(buf);
-    array_push(buf, e1, s1);
-}
-
-// Null-terminates
-static void assign_path_join(Array* buf, const char* e1, size_t s1, const char* e2, size_t s2)
-{
-    array_clear(buf);
-    array_push(buf, e1, s1);
-    maybe_append_pathsep(buf);
-    array_push(buf, e2, s2);
-    array_push_byte(buf, '\0');
-}
 
 struct PPIncludeFileInnerForeach
 {

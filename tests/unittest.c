@@ -4,6 +4,9 @@
 
 #include "array.h"
 
+const char* g_datadir = NULL;
+size_t g_datadir_sz = 0;
+
 void unittest_print_stack(const struct TestState* state)
 {
     struct TestFrame* frames = (struct TestFrame*)state->stack.data;

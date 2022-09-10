@@ -4,9 +4,11 @@
 #include "ast.h"
 #include "be.h"
 #include "cg.h"
+#include "dirent.h"
 #include "elaborator.h"
 #include "errors.h"
 #include "parse.h"
+#include "path.h"
 #include "preproc.h"
 #include "stdlibe.h"
 #include "symbol.h"
@@ -1732,43 +1734,72 @@ fail:
     return rc;
 }
 
-int parse_knr_def(struct TestState* state)
+static int test_file(struct TestState* state, const char* path)
 {
     int rc = 1;
-    StandardTest test;
-    SUBTEST(stdtest_run(state,
-                        &test,
-                        "int compress2 (dest, destLen, source, sourceLen, level)\n"
-                        "char *dest;\n"
-                        "long *destLen;\n"
-                        "const char *source;\n"
-                        "long sourceLen;\n"
-                        "int level;\n"
-                        "{\n"
-                        "return level;\n"
-                        "}\n"));
+    Preprocessor* pp = NULL;
+    Parser parser = {0};
+    Elaborator elab = {0};
+    FILE* f = fopen(path, "r");
+    if (!f) REQUIRE_FAIL("failed to open test file %s", path);
+
+    parser_clear_errors();
+    pp = preproc_alloc();
+    if (preproc_file(pp, f, path))
+    {
+        REQUIRE_FAIL_IMPL(path, 1, "%s", "failed to preprocess");
+    }
+    REQUIREZ(parser_parse(&parser, preproc_tokens(pp), preproc_stringpool(pp)));
+    parser_debug_check(&parser);
+    REQUIREZ(parser_has_errors());
+
+    elaborator_init(&elab, &parser);
+    if (elaborate(&elab))
+    {
+        REQUIRE_FAIL_IMPL(path, 1, "%s", "failed to elaborate");
+    }
     rc = 0;
 fail:
-    stdtest_destroy(&test);
+    if (parser_has_errors()) parser_print_msgs(stderr), parser_clear_errors();
+    parser_destroy(&parser);
+    if (pp) preproc_free(pp);
+    if (f) fclose(f);
     return rc;
 }
 
-int parse_knr_def2(struct TestState* state)
+void test_passing(struct TestState* state)
 {
-    int rc = 1;
-    StandardTest test;
-    SUBTEST(stdtest_run(state,
-                        &test,
-                        "long compress2 (a, b)\n"
-                        "char *b;\n"
-                        "long a;\n"
-                        "{\n"
-                        "return a;\n"
-                        "}\n"));
-    rc = 0;
-fail:
-    stdtest_destroy(&test);
-    return rc;
+    Array filebuf = {0};
+    Array arr = {0};
+    assign_path_join(&arr, g_datadir, g_datadir_sz, "tests/pass", sizeof("tests/pass") - 1);
+    DIR* dir = opendir(arr.data);
+    FILE* f = NULL;
+    if (!dir)
+    {
+        fprintf(stderr, "error: opendir(): ");
+        perror(arr.data);
+        exit(1);
+    }
+    const size_t base_sz = arr.sz - 1;
+    struct dirent* ent;
+    while (ent = readdir(dir))
+    {
+        if (ent->d_name[0] == '.' && (ent->d_name[1] == '\0' || (ent->d_name[1] == '.' && ent->d_name[2] == '\0')))
+        {
+            continue;
+        }
+
+        array_shrink(&arr, base_sz, 1);
+        path_combine(&arr, ent->d_name, ent->d_namlen);
+        array_push_byte(&arr, '\0');
+
+        test_file(state, arr.data);
+    }
+
+    closedir(dir);
+    if (f) fclose(f);
+    array_destroy(&arr);
+    array_destroy(&filebuf);
 }
 
 int parse_params(struct TestState* state)
@@ -4389,7 +4420,7 @@ fail:
     return rc;
 }
 
-int main()
+int main(int argc, char** argv)
 {
     struct TestState _state = {.colorsuc = "", .colorerr = "", .colorreset = ""};
     struct TestState* state = &_state;
@@ -4402,6 +4433,19 @@ int main()
         _state.colorsuc = "\033[32;1m";
         _state.colorerr = "\033[31;1m";
         _state.colorreset = "\033[m";
+    }
+
+    if (argc == 0)
+        abort();
+    else if (argc == 1)
+    {
+        fprintf(stderr, "No data dir specified.\n The first parameter to %s must be the data dir.\n", argv[0]);
+        exit(1);
+    }
+    else
+    {
+        g_datadir = argv[1];
+        g_datadir_sz = strlen(argv[1]);
     }
 
     RUN_TEST(parse_unk_array);
@@ -4440,8 +4484,6 @@ int main()
     RUN_TEST(parse_typedefs);
     RUN_TEST(parse_aggregates);
     RUN_TEST(parse_ptrconvert);
-    RUN_TEST(parse_knr_def);
-    RUN_TEST(parse_knr_def2);
     RUN_TEST(test_be_simple);
     RUN_TEST(test_be_simple2);
     RUN_TEST(test_be_simple3);
@@ -4469,6 +4511,8 @@ int main()
     RUN_TEST(test_cg_bitmath);
     RUN_TEST(test_cg_refs);
     RUN_TEST(test_cg_regalloc);
+
+    test_passing(state);
 
     const char* color = (state->testfails + state->assertionfails == 0) ? _state.colorsuc : _state.colorerr;
 
