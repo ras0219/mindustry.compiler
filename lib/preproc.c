@@ -372,11 +372,11 @@ static int lit_to_mp(const char* s, Constant128* out, const struct RowCol* rc)
 
     if (suffix & LIT_SUFFIX_MASK_UNSIGNED)
     {
-        *out = mp_u64(u);
+        *out = mp_from_u64(u);
     }
     else
     {
-        *out = mp_i64(u);
+        *out = mp_from_i64(u);
     }
     return 0;
 }

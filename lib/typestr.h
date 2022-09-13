@@ -189,6 +189,7 @@ __forceinline static unsigned int typestr_mask(const struct TypeStr* ts)
 }
 
 void typestr_apply_integral_type(TypeStr* dst, const TypeStr* src);
+void typestr_assign_constant_bool(TypeStr* t, int n);
 void typestr_assign_constant_value(TypeStr* t, Constant128 n);
 
 static const struct TypeStr s_type_unknown = {0};

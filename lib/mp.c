@@ -44,12 +44,12 @@ Constant128 mp_cast(Constant128 a, unsigned flags)
     return a;
 }
 
-Constant128 mp_u64(uint64_t u)
+Constant128 mp_from_u64(uint64_t u)
 {
     Constant128 n = {.lower = u};
     return n;
 }
-Constant128 mp_i64(int64_t u)
+Constant128 mp_from_i64(int64_t u)
 {
     Constant128 n = {.upper = u < 0, .lower = u};
     return n;
@@ -57,9 +57,11 @@ Constant128 mp_i64(int64_t u)
 
 void mpa_add(Constant128* a, Constant128 b)
 {
-    uint64_t orig = a->lower;
     a->lower += b.lower;
-    a->upper += b.upper + (a->lower < orig);
+    if (b.upper || a->upper)
+    {
+        a->upper = a->lower >> 63;
+    }
 }
 
 Constant128 mp_mul(Constant128 a, Constant128 b)
@@ -70,12 +72,12 @@ Constant128 mp_mul(Constant128 a, Constant128 b)
 
 Constant128 mp_fma(Constant128 a, Constant128 b, int c)
 {
-    mpa_add(&a, mp_mul(b, mp_i64(c)));
+    mpa_add(&a, mp_mul(b, mp_from_i64(c)));
     return a;
 }
 Constant128 mp_fsm(Constant128 a, Constant128 b, int c)
 {
-    mpa_add(&a, mp_neg(mp_mul(b, mp_i64(c))));
+    mpa_add(&a, mp_neg(mp_mul(b, mp_from_i64(c))));
     return a;
 }
 Constant128 mp_sub(Constant128 a, Constant128 b)
@@ -104,7 +106,7 @@ Constant128 mp_div(Constant128 a, Constant128 b, const struct Token* tok)
     if (neg) mp_neg_i(&a);
     return a;
 }
-Constant128 mp_idiv(Constant128 a, int b, const struct Token* tok) { return mp_div(a, mp_i64(b), tok); }
+Constant128 mp_idiv(Constant128 a, int b, const struct Token* tok) { return mp_div(a, mp_from_i64(b), tok); }
 Constant128 mp_mod(Constant128 a, Constant128 b, const struct Token* tok)
 {
     if (b.lower == 0)

@@ -499,16 +499,13 @@ static void elaborate_expr_ExprBinOp(struct Elaborator* elab,
         {
             switch (op)
             {
-                case TOKEN_SYM2('=', '='):
-                    typestr_assign_constant_value(rty, cnst_eq(rty->c, rhs_ty.c) ? s_one_constant : s_zero_constant);
-                    break;
+                case TOKEN_SYM2('=', '='): typestr_assign_constant_bool(rty, cnst_eq(rty->c, rhs_ty.c)); break;
+                case TOKEN_SYM2('!', '='): typestr_assign_constant_bool(rty, !cnst_eq(rty->c, rhs_ty.c)); break;
                 case TOKEN_SYM2('&', '&'):
-                    typestr_assign_constant_value(
-                        rty, (cnst_truthy(rty->c) && cnst_truthy(rhs_ty.c)) ? s_one_constant : s_zero_constant);
+                    typestr_assign_constant_bool(rty, cnst_truthy(rty->c) && cnst_truthy(rhs_ty.c));
                     break;
                 case TOKEN_SYM2('|', '|'):
-                    typestr_assign_constant_value(
-                        rty, (cnst_truthy(rty->c) || cnst_truthy(rhs_ty.c)) ? s_one_constant : s_zero_constant);
+                    typestr_assign_constant_bool(rty, cnst_truthy(rty->c) || cnst_truthy(rhs_ty.c));
                     break;
                 case TOKEN_SYM1('&'): typestr_assign_constant_value(rty, mp_band(rty->c.value, rhs_ty.c.value)); break;
                 case TOKEN_SYM1('|'): typestr_assign_constant_value(rty, mp_bor(rty->c.value, rhs_ty.c.value)); break;
@@ -530,28 +527,24 @@ static void elaborate_expr_ExprBinOp(struct Elaborator* elab,
                     typestr_assign_constant_value(rty, mp_fma(rty->c.value, rhs_ty.c.value, e->info));
                     break;
                 case TOKEN_SYM1('-'):
-                    if ((TYPE_FLAGS_POINTER & lhs_mask & rhs_mask) && rty->c.sym && rhs_ty.c.sym)
+                    if (e->info < 0)
                     {
                         if (rty->c.sym != rhs_ty.c.sym)
                         {
-                            parser_tok_error(
-                                e->tok,
-                                "error: subtracting two pointers from different aggregates is undefined behavior.\n");
+                            parser_tok_error(e->tok,
+                                             "error: subtracting two pointers from different aggregates is "
+                                             "undefined behavior.\n");
                             return;
                         }
                         rty->c.sym = NULL;
                         typestr_assign_constant_value(rty,
                                                       mp_idiv(mp_sub(rty->c.value, rhs_ty.c.value), -e->info, e->tok));
                     }
-                    else if (!(TYPE_FLAGS_POINTER & lhs_mask & rhs_mask) && !rty->c.sym && !rhs_ty.c.sym)
-                    {
-                        typestr_assign_constant_value(rty, mp_fsm(rty->c.value, rhs_ty.c.value, e->info));
-                    }
+                    else if (e->info == 0)
+                        abort();
                     else
                     {
-                        typestr_error2(
-                            &e->tok->rc, elab->types, "error: invalid constants '%.*s' and '%.*s'\n", rty, &rhs_ty);
-                        return;
+                        rty->c.value = mp_fsm(rty->c.value, rhs_ty.c.value, e->info);
                     }
                     break;
                 default: rty->c = s_not_constant; break;
@@ -586,7 +579,7 @@ static void elaborate_expr_ExprBuiltin(struct Elaborator* elab,
             }
             e->sizeof_size = typestr_get_size(elab->types, rty, &e->tok->rc);
             *rty = s_type_int;
-            typestr_assign_constant_value(rty, mp_u64(e->sizeof_size));
+            typestr_assign_constant_value(rty, mp_from_u64(e->sizeof_size));
             break;
         case LEX_UUVA_START:
             elaborate_expr(elab, ctx, e->expr2, rty);
@@ -671,9 +664,6 @@ static void elaborate_expr_ExprUnOp(struct Elaborator* elab,
                                &orig_lhs);
                 *rty = s_type_int;
             }
-            if (rty->c.is_const && !rty->c.sym && !rty->c.is_lvalue)
-            {
-            }
             break;
         case TOKEN_SYM1('*'):
             if (typestr_is_pointer(rty))
@@ -740,8 +730,8 @@ static void elaborate_expr_ExprUnOp(struct Elaborator* elab,
             {
                 case TOKEN_SYM1('~'): rty->c.value = mp_bnot(rty->c.value); break;
                 case TOKEN_SYM1('!'): rty->c.value = mp_lnot(rty->c.value); break;
-                case TOKEN_SYM1('+'):
-                case TOKEN_SYM1('-'): break;
+                case TOKEN_SYM1('+'): break;
+                case TOKEN_SYM1('-'): rty->c.value = mp_neg(rty->c.value); break;
                 default: rty->c = s_not_constant; break;
             }
         }
@@ -1189,7 +1179,7 @@ static void typestr_from_numlit(TypeStr* t, unsigned char byte, uint64_t numeric
     t->buf.buf[1] = byte;
     memset(&t->c, 0, sizeof(t->c));
     t->c.is_const = 1;
-    typestr_assign_constant_value(t, mp_u64(numeric));
+    typestr_assign_constant_value(t, mp_from_u64(numeric));
 }
 
 static void typestr_from_strlit(TypeStr* t, ExprLit* lit)
@@ -1622,11 +1612,15 @@ static void elaborate_decltype(Elaborator* elab, AstType* ast)
             {
                 TypeStr ts = {0};
                 elaborate_expr(elab, NULL, arr->arity, &ts);
-                arr->integer_arity = i32constant_or_err(&ts, arr->arity->tok);
-                if (arr->integer_arity == 0)
+                int arity = i32constant_or_err(&ts, arr->arity->tok);
+                if (arity <= 0)
                 {
-                    parser_tok_error(arr->arity->tok, "error: array must have positive extent\n");
+                    parser_tok_error(arr->arity->tok, "error: array must have positive extent (was %d)\n", arity);
                     arr->integer_arity = 1;
+                }
+                else
+                {
+                    arr->integer_arity = arity;
                 }
             }
             break;
@@ -1922,7 +1916,7 @@ static int elaborate_declspecs(struct Elaborator* elab, struct DeclSpecs* specs)
                     ++enum_value;
                 }
                 edecl->sym->enum_value = enum_value;
-                typestr_assign_constant_value(&edecl->sym->type, mp_i64(enum_value));
+                typestr_assign_constant_value(&edecl->sym->type, mp_from_i64(enum_value));
             }
         }
         else if (specs->suinit)

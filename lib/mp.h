@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdint.h>
+
 #include "compilermacros.h"
 
 struct Token;
@@ -13,9 +15,14 @@ typedef struct Constant128
 extern const Constant128 s_one_constant;
 extern const Constant128 s_zero_constant;
 
+__forceinline static int32_t mp_i32(Constant128 a) { return (int32_t)a.lower; }
+__forceinline static uint32_t mp_u32(Constant128 a) { return (uint32_t)a.lower; }
+__forceinline static int64_t mp_i64(Constant128 a) { return (int64_t)a.lower; }
+__forceinline static uint64_t mp_u64(Constant128 a) { return (uint64_t)a.lower; }
+
 Constant128 mp_cast(Constant128 a, unsigned flags);
-Constant128 mp_u64(unsigned long long u);
-Constant128 mp_i64(long long u);
+Constant128 mp_from_u64(unsigned long long u);
+Constant128 mp_from_i64(long long u);
 
 /// a + b*c
 Constant128 mp_fma(Constant128 a, Constant128 b, int c);

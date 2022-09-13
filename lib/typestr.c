@@ -887,6 +887,11 @@ void typestr_assign_constant_value(TypeStr* t, Constant128 n)
     t->c.value = mp_cast(n, mask);
 }
 
+void typestr_assign_constant_bool(TypeStr* t, int n)
+{
+    typestr_assign_constant_value(t, n ? s_one_constant : s_zero_constant);
+}
+
 const TypeStr* typestr_get_arg(const struct TypeTable* tt, const FnTypeInfo* info, unsigned index)
 {
     if (index >= info->extent) abort();
