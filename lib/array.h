@@ -51,6 +51,11 @@ void array_appendv(struct Array* arr, const char* fmt, va_list argp);
 /// @return bytes appended
 size_t array_appends(struct Array* arr, const char* s);
 
+__forceinline void** arrptr_back(const struct Array* arr)
+{
+    return (void**)((char*)arr->data + arr->sz - sizeof(void*));
+}
+__forceinline size_t arrptr_size(const struct Array* arr) { return arr->sz / sizeof(void*); }
 __forceinline void** arrptr_push(struct Array* arr, const void* data) { return array_push(arr, &data, sizeof(data)); }
 __forceinline void* arrptr_pop(struct Array* arr)
 {

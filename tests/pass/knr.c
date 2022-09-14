@@ -14,3 +14,9 @@ long a;
 {
     return a;
 }
+
+long compress4(a, b)
+int a, b;
+{
+    return b + a;
+}

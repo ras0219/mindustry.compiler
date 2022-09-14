@@ -1751,7 +1751,10 @@ static int test_file(struct TestState* state, const char* path)
     }
     REQUIREZ(parser_parse(&parser, preproc_tokens(pp), preproc_stringpool(pp)));
     parser_debug_check(&parser);
-    REQUIREZ(parser_has_errors());
+    if (parser_has_errors())
+    {
+        REQUIRE_FAIL_IMPL(path, 1, "%s", "failed to parse");
+    }
 
     elaborator_init(&elab, &parser);
     if (elaborate(&elab))

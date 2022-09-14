@@ -890,9 +890,23 @@ fail:
 
 static const struct Token* parse_stmt(Parser* p, const struct Token* cur_tok, struct Ast** p_expr);
 static const struct Token* parse_stmt_block(Parser* p, const struct Token* cur_tok, struct StmtBlock** p_expr);
+static const struct Token* parse_decls(Parser* p,
+                                       const struct Token* cur_tok,
+                                       struct DeclSpecs* specs,
+                                       struct Array* pdecls);
 
 static const struct Token* parse_declarator(Parser* p, const struct Token* cur_tok, struct Decl* decl);
-
+static struct StmtDecls* push_stmt_decls(struct Parser* p, struct DeclSpecs* specs, struct Array* arr)
+{
+    struct StmtDecls ret = {
+        .kind = STMT_DECLS,
+        .specs = specs,
+        .offset = array_size(&p->expr_seqs, sizeof(void*)),
+        .extent = array_size(arr, sizeof(void*)),
+    };
+    parse_push_expr_seq_arr(p, arr);
+    return pool_push(&p->ast_pools[STMT_DECLS], &ret, sizeof(ret));
+}
 static struct StmtDecls* push_stmt_decl(struct Parser* p, struct DeclSpecs* specs, struct Decl* decl)
 {
     struct StmtDecls ret = {
@@ -905,62 +919,82 @@ static struct StmtDecls* push_stmt_decl(struct Parser* p, struct DeclSpecs* spec
     return pool_push(&p->ast_pools[STMT_DECLS], &ret, sizeof(ret));
 }
 
-static const struct Token* parse_declarator_fnargs_knr(Parser* p,
-                                                       const struct Token* cur_tok,
-                                                       struct DeclFn* fn,
-                                                       Array* out_args_array)
+static const struct Token* parse_param_list_knr(Parser* p, const struct Token* cur_tok, struct DeclFn* fn)
 {
-    Array prototypes = {0};
+    fn->is_param_list = 1;
+    fn->offset = arrptr_size(&p->token_seqs);
     while (1)
     {
         if (cur_tok->type != LEX_IDENT)
         {
-            PARSER_FAIL("error: expected identifier in prototype list.\n");
+            PARSER_FAIL("error: expected identifier in parameter list.\n");
         }
-        arrsz_push(&prototypes, cur_tok->sp_offset);
+        arrptr_push(&p->token_seqs, cur_tok);
         ++cur_tok;
         if (cur_tok->type == TOKEN_SYM1(','))
         {
             ++cur_tok;
             continue;
         }
-        PARSER_DO(token_consume_sym(p, cur_tok, ')', " in function prototype"));
+        PARSER_DO(token_consume_sym(p, cur_tok, ')', " in function declaration"));
         break;
     }
-    const size_t n = prototypes.sz / sizeof(size_t);
-    const size_t* const protos = prototypes.data;
-    array_assign_zeroes(out_args_array, n * sizeof(void*));
-    StmtDecls** const data = out_args_array->data;
-    for (size_t i = 0; i < n; ++i)
+    fn->extent = arrptr_size(&p->token_seqs) - fn->offset;
+
+fail:
+    return cur_tok;
+}
+
+static const struct Token* parse_param_list(Parser* p, const struct Token* cur_tok, struct DeclFn* fn)
+{
+    struct Array args_array = {0};
+    while (1)
     {
+        if (cur_tok->type == TOKEN_SYM3('.', '.', '.'))
+        {
+            fn->is_varargs = 1;
+            PARSER_DO(token_consume_sym(p, cur_tok + 1, ')', " after ... in function declaration"));
+            break;
+        }
+
         struct DeclSpecs* arg_specs;
 
         PARSER_DO(parse_declspecs(p, cur_tok, &arg_specs));
         arg_specs->is_fn_arg = 1;
         struct Decl* arg_decl = parse_alloc_decl(p, arg_specs);
         PARSER_DO(parse_declarator(p, cur_tok, arg_decl));
-        const size_t sp = arg_decl->tok->sp_offset;
-        size_t j;
-        for (j = 0; j < n; ++j)
+        arrptr_push(&args_array, push_stmt_decl(p, arg_specs, arg_decl));
+
+        if (cur_tok->type == TOKEN_SYM1(','))
         {
-            if (protos[j] == sp) goto found;
+            ++cur_tok;
+            continue;
         }
-        PARSER_FAIL("error: K&R argument definition does not match one of listed arguments.\n");
-    found:
-        if (data[j] != NULL) PARSER_FAIL("error: K&R argument redefinition.\n");
-        data[j] = push_stmt_decl(p, arg_specs, arg_decl);
-        PARSER_DO(token_consume_sym(p, cur_tok, ';', " in function prototype"));
+        else if (cur_tok->type == TOKEN_SYM1(')'))
+        {
+            ++cur_tok;
+            break;
+        }
+        PARSER_FAIL("error: expected ',' and further parameter declarations or ')'\n");
     }
+    fn->offset = array_size(&p->expr_seqs, sizeof(struct Expr*));
+    fn->extent = array_size(&args_array, sizeof(StmtDecls*));
+    parse_push_expr_seq_arr(p, &args_array);
 
 fail:
-    array_destroy(&prototypes);
+    array_destroy(&args_array);
     return cur_tok;
+}
+
+static int is_typedef(Parser* p, const Token* tok)
+{
+    struct Binding* const cur_bind = scope_find(&p->typedef_scope, token_str(p, tok));
+    return cur_bind != NULL;
 }
 
 /// \param fn uninitialized out param
 static const struct Token* parse_declarator_fnargs(Parser* p, const struct Token* cur_tok, struct DeclFn* fn)
 {
-    struct Array args_array = {0};
     memset(fn, 0, sizeof(DeclFn));
     fn->kind = AST_DECLFN;
     fn->tok = cur_tok;
@@ -975,54 +1009,18 @@ static const struct Token* parse_declarator_fnargs(Parser* p, const struct Token
     }
     else
     {
-        if (cur_tok->type == LEX_IDENT)
+        if (cur_tok->type == LEX_IDENT && !is_typedef(p, cur_tok))
         {
-            struct Binding* const cur_bind = scope_find(&p->typedef_scope, token_str(p, cur_tok));
-            if (!cur_bind || !cur_bind->sym)
-            {
-                // not a typename, K&R style prototype.
-                PARSER_DO(parse_declarator_fnargs_knr(p, cur_tok, fn, &args_array));
-                goto parsed_arg_array;
-            }
+            // not a typename, K&R style prototype.
+            PARSER_DO(parse_param_list_knr(p, cur_tok, fn));
         }
-
-        while (1)
+        else
         {
-            if (cur_tok->type == TOKEN_SYM3('.', '.', '.'))
-            {
-                fn->is_varargs = 1;
-                PARSER_DO(token_consume_sym(p, cur_tok + 1, ')', " after ... in function declaration"));
-                break;
-            }
-
-            struct DeclSpecs* arg_specs;
-
-            PARSER_DO(parse_declspecs(p, cur_tok, &arg_specs));
-            arg_specs->is_fn_arg = 1;
-            struct Decl* arg_decl = parse_alloc_decl(p, arg_specs);
-            PARSER_DO(parse_declarator(p, cur_tok, arg_decl));
-            arrptr_push(&args_array, push_stmt_decl(p, arg_specs, arg_decl));
-
-            if (cur_tok->type == TOKEN_SYM1(','))
-            {
-                ++cur_tok;
-                continue;
-            }
-            else if (cur_tok->type == TOKEN_SYM1(')'))
-            {
-                ++cur_tok;
-                break;
-            }
-            PARSER_FAIL("error: expected ',' and further parameter declarations or ')'\n");
+            PARSER_DO(parse_param_list(p, cur_tok, fn));
         }
-    parsed_arg_array:
-        fn->offset = array_size(&p->expr_seqs, sizeof(struct Expr*));
-        fn->extent = array_size(&args_array, sizeof(StmtDecls*));
-        parse_push_expr_seq_arr(p, &args_array);
     }
 
 fail:
-    array_destroy(&args_array);
     return cur_tok;
 }
 
@@ -1210,18 +1208,6 @@ static const struct Token* parse_integral_constant_expr(struct Parser* p, const 
     ++cur_tok;
 fail:
     return cur_tok;
-}
-
-static struct StmtDecls* push_stmt_decls(struct Parser* p, struct DeclSpecs* specs, struct Array* arr)
-{
-    struct StmtDecls ret = {
-        .kind = STMT_DECLS,
-        .specs = specs,
-        .offset = array_size(&p->expr_seqs, sizeof(void*)),
-        .extent = array_size(arr, sizeof(void*)),
-    };
-    parse_push_expr_seq_arr(p, arr);
-    return pool_push(&p->ast_pools[STMT_DECLS], &ret, sizeof(ret));
 }
 
 static void make_new_sym(Parser* p, Decl* decl)
@@ -1460,11 +1446,40 @@ static const struct Token* parse_fnbody(Parser* p, const struct Token* cur_tok, 
     if (pdecl->type->kind != AST_DECLFN)
         PARSER_FAIL_TOK(cur_tok, "error: only function types can be defined with a code block\n");
     DeclFn* fn = (DeclFn*)pdecl->type;
-    void** decls = p->expr_seqs.data;
-    for (size_t i = 0; i < fn->extent; ++i)
+    void* const* const decls = p->expr_seqs.data;
+    if (fn->is_param_list)
     {
-        StmtDecls* argdecl = decls[fn->offset + i];
-        PARSER_CHECK_NOT(insert_definition(p, decls[argdecl->offset]));
+        if (!pdecl->decl_list.extent)
+        {
+            PARSER_FAIL_TOK(cur_tok,
+                            "error: an identifier list requires all identifiers to be typed in the definition.\n");
+        }
+        // Check uniqueness
+        const Token* const* const toks = (Token**)p->token_seqs.data + fn->offset;
+        for (size_t i = 0; i < fn->extent; ++i)
+        {
+            for (size_t j = i + 1; j < fn->extent; ++j)
+            {
+                if (toks[i]->sp_offset == toks[j]->sp_offset)
+                {
+                    PARSER_FAIL_TOK(toks[j], "error: duplicate parameter in parameter list\n");
+                }
+            }
+        }
+
+        for (size_t i = 0; i < fn->extent; ++i)
+        {
+            StmtDecls* argdecl = decls[fn->offset + i];
+            PARSER_CHECK_NOT(insert_definition(p, decls[argdecl->offset]));
+        }
+    }
+    else
+    {
+        for (size_t i = 0; i < fn->extent; ++i)
+        {
+            StmtDecls* argdecl = decls[fn->offset + i];
+            PARSER_CHECK_NOT(insert_definition(p, decls[argdecl->offset]));
+        }
     }
     p->parent = pdecl;
     struct StmtBlock* init;
@@ -1479,6 +1494,32 @@ fail:
     return cur_tok;
 }
 
+static const struct Token* parse_decl_list(Parser* p, const struct Token* cur_tok, Decl* decl)
+{
+    Array decls = {0};
+    Array stmts = {0};
+
+    // function definition declaration list
+    do
+    {
+        array_clear(&decls);
+        DeclSpecs* specs;
+        PARSER_DO(parse_declspecs(p, cur_tok, &specs));
+        PARSER_DO(parse_decls(p, cur_tok, specs, &decls));
+        arrptr_push(&stmts, push_stmt_decls(p, specs, &decls));
+    } while (cur_tok->type != TOKEN_SYM1('{'));
+
+    decl->decl_list.offset = array_size(&p->expr_seqs, sizeof(struct Expr*));
+    decl->decl_list.extent = array_size(&stmts, sizeof(StmtDecls*));
+    parse_push_expr_seq_arr(p, &stmts);
+
+fail:
+    array_destroy(&decls);
+    array_destroy(&stmts);
+    return cur_tok;
+}
+
+/// \param pdecls - Array<Decl*>
 static const struct Token* parse_decls(Parser* p,
                                        const struct Token* cur_tok,
                                        struct DeclSpecs* specs,
@@ -1490,14 +1531,24 @@ static const struct Token* parse_decls(Parser* p,
         const struct Token* const declarator_tok = cur_tok;
         PARSER_DO(parse_declarator(p, cur_tok, pdecl));
         arrptr_push(pdecls, pdecl);
-        if (cur_tok->type == TOKEN_SYM1('{'))
+        if (pdecl->type->kind == AST_DECLFN)
         {
-            if (!pdecl->tok) PARSER_FAIL_TOK(cur_tok, "error: anonymous function declaration not allowed\n");
-            if (scope_in_subscope(&p->su_scope))
-                PARSER_FAIL_TOK(cur_tok, "error: member function definitions are not allowed\n");
-            PARSER_CHECK_NOT(insert_definition(p, pdecl));
-            PARSER_DO(parse_fnbody(p, cur_tok, pdecl));
-            break;
+            DeclFn* fn = (DeclFn*)pdecl->type;
+            if (fn->is_param_list && cur_tok->basic_type == LEX_IDENT)
+            {
+                PARSER_DO(parse_decl_list(p, cur_tok, pdecl));
+                goto fndef;
+            }
+            if (cur_tok->type == TOKEN_SYM1('{'))
+            {
+            fndef:
+                if (!pdecl->tok) PARSER_FAIL_TOK(cur_tok, "error: anonymous function declaration not allowed\n");
+                if (scope_in_subscope(&p->su_scope))
+                    PARSER_FAIL_TOK(cur_tok, "error: member function definitions are not allowed\n");
+                PARSER_CHECK_NOT(insert_definition(p, pdecl));
+                PARSER_DO(parse_fnbody(p, cur_tok, pdecl));
+                break;
+            }
         }
 
         if (specs->is_typedef && !pdecl->tok) abort();
@@ -1577,7 +1628,7 @@ static const struct Token* parse_conditional(Parser* p, const struct Token* cur_
 
 static const struct Token* parse_stmt_decl(Parser* p, const struct Token* cur_tok, struct Ast** past)
 {
-    struct Array arr_decls = {};
+    struct Array arr_decls = {0};
     struct DeclSpecs* specs;
     PARSER_DO(parse_declspecs(p, cur_tok, &specs));
     if (specs->is_struct || specs->is_union || specs->is_enum)

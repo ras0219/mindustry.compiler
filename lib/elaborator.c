@@ -1629,7 +1629,10 @@ static void elaborate_decltype(Elaborator* elab, AstType* ast)
         {
             struct DeclFn* fn = (void*)ast;
             elaborate_decltype(elab, fn->type);
-            elaborate_stmts(elab, NULL, fn->offset, fn->extent);
+            if (!fn->is_param_list)
+            {
+                elaborate_stmts(elab, NULL, fn->offset, fn->extent);
+            }
             break;
         }
         case AST_DECLPTR:

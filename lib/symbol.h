@@ -89,7 +89,10 @@ typedef struct DeclFn
     INHERIT_ASTTYPE;
     struct AstType* type;
 
-    unsigned is_varargs : 1;
+    unsigned char is_varargs : 1;
+    // parameter list
+    unsigned char is_param_list : 1;
+
     size_t offset;
     size_t extent;
 } DeclFn;
@@ -118,6 +121,13 @@ typedef struct Decl
     Attribute attr;
     DeclSpecs* specs;
     Ast* init;
+
+    // View<StmtDecls*>
+    struct
+    {
+        size_t offset;
+        size_t extent;
+    } decl_list;
 
     struct Decl* prev_decl;
     struct Symbol* sym;
