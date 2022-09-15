@@ -62,7 +62,7 @@ int unittest_require_typestr_eq_impl(struct TestState* state,
     rc = 0;
 fail:
     array_destroy(&buf);
-    return 0;
+    return rc;
 }
 
 #define REQUIRE_TYPESTR_EQ_IMPL(file, line, expected, expected_str, actual, actual_str)                                \
@@ -251,10 +251,10 @@ static int betest_run_cg(struct TestState* state, BETest* test, const char* text
     test->be = NULL;
     test->cg = NULL;
     if (stdtest_run(state, &test->base, text)) return 1;
-    test->be = my_malloc(sizeof(struct BackEnd));
     test->cg = my_malloc(sizeof(struct CodeGen));
-    be_init(test->be, test->base.parser, test->base.elab, test->cg);
     cg_init(test->cg);
+    test->be = my_malloc(sizeof(struct BackEnd));
+    be_init(test->be, test->base.parser, test->base.elab, test->cg);
 
     REQUIRE_EQ(0, be_compile(test->be));
     return 0;
@@ -1793,7 +1793,11 @@ void test_passing(struct TestState* state)
         }
 
         array_shrink(&arr, base_sz, 1);
+#ifdef __APPLE__
         path_combine(&arr, ent->d_name, ent->d_namlen);
+#else
+        path_combine(&arr, ent->d_name, strlen(ent->d_name));
+#endif
         array_push_byte(&arr, '\0');
 
         test_file(state, arr.data);

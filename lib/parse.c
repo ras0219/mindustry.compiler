@@ -1,5 +1,6 @@
 #include "parse.h"
 
+#include <inttypes.h>
 #include <limits.h>
 #include <stdio.h>
 #include <string.h>
@@ -1455,7 +1456,7 @@ static const struct Token* parse_fnbody(Parser* p, const struct Token* cur_tok, 
                             "error: an identifier list requires all identifiers to be typed in the definition.\n");
         }
         // Check uniqueness
-        const Token* const* const toks = (Token**)p->token_seqs.data + fn->offset;
+        const Token* const* const toks = (const Token* const*)p->token_seqs.data + fn->offset;
         for (size_t i = 0; i < fn->extent; ++i)
         {
             for (size_t j = i + 1; j < fn->extent; ++j)
@@ -2231,7 +2232,7 @@ static void parser_dump_ast(struct Parser* p, FILE* f, Ast* ast, int depth)
             if (blk->tok) fprintf(f, " tok='%s'", token_str(p, blk->tok));
             if (blk->numeric)
             {
-                fprintf(f, " numeric=%llu", blk->numeric);
+                fprintf(f, " numeric=%" PRIx64, blk->numeric);
             }
             fprintf(f, ")");
             break;

@@ -1,4 +1,3 @@
-#include <dirent.h>
 #include <fcntl.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -19,12 +18,16 @@
 #include "tok.h"
 #include "token.h"
 #include "unwrap.h"
-#include <sys/stat.h>
 
 #ifdef _WIN32
 #include <io.h>
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
+#else
+#include <dirent.h>
+
+#include <sys/stat.h>
+#include <sys/wait.h>
 #endif
 
 void fe_destroy(struct FrontEnd* fe)

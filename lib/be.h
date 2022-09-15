@@ -14,12 +14,11 @@ typedef struct BackEnd
     struct AutoHeap sym_renames;
 
     struct Array code;
-
+    struct Array switch_cases;
     struct Scope scope;
 
     struct Symbol* cur_sym;
     struct DeclFn* cur_fn;
-    struct Array switch_cases;
     size_t continue_label;
     size_t break_label;
     size_t default_label;

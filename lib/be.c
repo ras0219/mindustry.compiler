@@ -1787,4 +1787,6 @@ void be_destroy(struct BackEnd* be)
 {
     autoheap_destroy(&be->sym_renames);
     scope_destroy(&be->scope);
+    array_destroy(&be->code);
+    array_destroy(&be->switch_cases);
 }

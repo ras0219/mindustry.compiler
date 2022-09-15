@@ -17,6 +17,8 @@ endif()
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     add_compile_options(-fsanitize=undefined -fsanitize=address)
+    add_link_options(-static-libasan -static-libubsan)
+    link_libraries(-lasan -lubsan)
 endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Webassembly")

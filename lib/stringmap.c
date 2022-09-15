@@ -1,5 +1,6 @@
 #include "stringmap.h"
 
+#include <stdint.h>
 #include <string.h>
 
 #include "stdlibe.h"

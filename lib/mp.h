@@ -21,8 +21,8 @@ __forceinline static int64_t mp_i64(Constant128 a) { return (int64_t)a.lower; }
 __forceinline static uint64_t mp_u64(Constant128 a) { return (uint64_t)a.lower; }
 
 Constant128 mp_cast(Constant128 a, unsigned flags);
-Constant128 mp_from_u64(unsigned long long u);
-Constant128 mp_from_i64(long long u);
+Constant128 mp_from_u64(uint64_t u);
+Constant128 mp_from_i64(int64_t u);
 
 /// a + b*c
 Constant128 mp_fma(Constant128 a, Constant128 b, int c);
