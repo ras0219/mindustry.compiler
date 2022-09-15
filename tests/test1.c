@@ -118,17 +118,6 @@ int test_parse(struct TestState* state, struct Parser** parser, struct Preproces
 
 fail:
     if (parser_has_errors()) parser_print_msgs(stderr), parser_clear_errors();
-    if (*parser)
-    {
-        parser_destroy(*parser);
-        my_free(*parser);
-        *parser = NULL;
-    }
-    if (*pp)
-    {
-        preproc_free(*pp);
-        *pp = NULL;
-    }
     return 1;
 }
 
@@ -181,19 +170,22 @@ typedef struct StandardTest
     struct Parser* parser;
     struct Preprocessor* pp;
     struct Elaborator* elab;
-} StandardTest;
-
-typedef struct BETest
-{
-    StandardTest base;
     struct BackEnd* be;
     struct CodeGen* cg;
-} BETest;
+} StandardTest;
 
-static int stdtest_run(struct TestState* state, struct StandardTest* test, const char* text)
+static int stdtest_parse(struct TestState* state, StandardTest* test, const char* text)
 {
-    test->elab = NULL;
     SUBTEST(test_parse(state, &test->parser, &test->pp, text));
+    return 0;
+fail:
+    return 1;
+}
+
+static int stdtest_run(struct TestState* state, StandardTest* test, const char* text)
+{
+    int rc = 1;
+    if (stdtest_parse(state, test, text)) goto fail;
     test->elab = my_malloc(sizeof(Elaborator));
     elaborator_init(test->elab, test->parser);
     if (elaborate(test->elab))
@@ -202,12 +194,12 @@ static int stdtest_run(struct TestState* state, struct StandardTest* test, const
         REQUIRE_FAIL("%s", "elaborate failed, see above messages");
     }
 
-    return 0;
+    rc = 0;
 fail:
-    return 1;
+    return rc;
 }
 
-static void stdtest_destroy(struct StandardTest* test)
+static void stdtest_destroy(StandardTest* test)
 {
     if (parser_has_errors()) parser_print_msgs(stderr);
     if (test->elab)
@@ -217,23 +209,23 @@ static void stdtest_destroy(struct StandardTest* test)
     }
     if (test->parser) parser_destroy(test->parser), my_free(test->parser);
     if (test->pp) preproc_free(test->pp);
+    if (test->be) be_destroy(test->be), my_free(test->be);
+    if (test->cg) cg_destroy(test->cg), my_free(test->cg);
 }
 
-static int betest_run(struct TestState* state, BETest* test, const char* text)
+static int betest_run(struct TestState* state, StandardTest* test, const char* text)
 {
-    test->be = NULL;
-    test->cg = NULL;
-    if (stdtest_run(state, &test->base, text)) return 1;
+    if (stdtest_run(state, test, text)) goto fail;
     test->be = my_malloc(sizeof(struct BackEnd));
     test->cg = my_malloc(sizeof(struct CodeGen));
-    be_init(test->be, test->base.parser, test->base.elab, test->cg);
+    be_init(test->be, test->parser, test->elab, test->cg);
     cg_init(test->cg);
 
-    struct Expr** exprs = test->base.parser->expr_seqs.data;
-    REQUIRE(0 < test->base.parser->top->extent);
-    for (size_t i = 0; i < test->base.parser->top->extent; ++i)
+    struct Expr** exprs = test->parser->expr_seqs.data;
+    REQUIRE(0 < test->parser->top->extent);
+    for (size_t i = 0; i < test->parser->top->extent; ++i)
     {
-        StmtDecls* decls = (StmtDecls*)exprs[test->base.parser->top->offset + i];
+        StmtDecls* decls = (StmtDecls*)exprs[test->parser->top->offset + i];
         if (decls->specs->is_typedef) continue;
         for (size_t j = 0; j < decls->extent; ++j)
         {
@@ -246,15 +238,13 @@ fail:
     return 1;
 }
 
-static int betest_run_cg(struct TestState* state, BETest* test, const char* text)
+static int betest_run_cg(struct TestState* state, StandardTest* test, const char* text)
 {
-    test->be = NULL;
-    test->cg = NULL;
-    if (stdtest_run(state, &test->base, text)) return 1;
+    if (stdtest_run(state, test, text)) return 1;
     test->cg = my_malloc(sizeof(struct CodeGen));
     cg_init(test->cg);
     test->be = my_malloc(sizeof(struct BackEnd));
-    be_init(test->be, test->base.parser, test->base.elab, test->cg);
+    be_init(test->be, test->parser, test->elab, test->cg);
 
     REQUIRE_EQ(0, be_compile(test->be));
     return 0;
@@ -262,19 +252,12 @@ fail:
     return 1;
 }
 
-static void betest_destroy(struct BETest* test)
-{
-    stdtest_destroy(&test->base);
-    if (test->be) be_destroy(test->be), my_free(test->be);
-    if (test->cg) cg_destroy(test->cg), my_free(test->cg);
-}
-
 int parse_main(struct TestState* state)
 {
     int rc = 1;
-    struct Parser* parser;
-    struct Preprocessor* pp;
-    SUBTEST(test_parse(state, &parser, &pp, "int main() {}"));
+    StandardTest test = {0};
+    SUBTEST(stdtest_parse(state, &test, "int main() {}"));
+    Parser* parser = test.parser;
 
     REQUIRE_EQ(1, parser->top->extent);
     struct Expr** const exprs = parser->expr_seqs.data;
@@ -306,8 +289,7 @@ int parse_main(struct TestState* state)
 
     rc = 0;
 fail:
-    if (parser) parser_destroy(parser), my_free(parser);
-    if (pp) preproc_free(pp);
+    stdtest_destroy(&test);
     return rc;
 }
 
@@ -398,22 +380,6 @@ fail:
     return rc;
 }
 
-int preproc_ternary(struct TestState* state)
-{
-    int rc = 1;
-    SUBTEST(test_preproc_pass(state,
-                              "#if 1 ? 0 : 1\n#error 'should not execute'\n#endif\n"
-                              "#if 0 ? 1 : 0\n#error 'should not execute'\n#endif\n"
-                              "#if 1 ? 1 ? 0 : 1 : 1\n#error 'should not execute'\n#endif\n"
-                              "#if 1 ? 0 ? 1 : 0 : 1\n#error 'should not execute'\n#endif\n"
-                              "#if (3 == 3 && 0 >= 5 || 3 > 3)\n#error 'invalid'\n#endif\n"
-                              ""));
-
-    rc = 0;
-fail:
-    return rc;
-}
-
 int preproc_comma_paste(struct TestState* state)
 {
     int rc = 1;
@@ -436,13 +402,11 @@ fail:
 int parse_strings(struct TestState* state)
 {
     int rc = 1;
-    StandardTest test;
+    StandardTest test = {0};
     SUBTEST(stdtest_run(state,
                         &test,
                         "#define f(x) #x\n"
                         "char str[] = f(==) \"hello\\n\";\n"));
-
-    rc = 0;
 
     // from https://en.cppreference.com/w/c/language/initialization
     struct Expr** const exprs = (struct Expr**)test.parser->expr_seqs.data;
@@ -457,7 +421,9 @@ int parse_strings(struct TestState* state)
         }
     }
 
+    rc = 0;
 fail:
+    stdtest_destroy(&test);
     return rc;
 }
 
@@ -1065,18 +1031,17 @@ fail:
     return rc;
 }
 
-int parse_unk_array(struct TestState* state)
+int parse_unk_array(struct TestState* state, StandardTest* test)
 {
     int rc = 1;
-    struct StandardTest test;
     SUBTEST(stdtest_run(state,
-                        &test,
+                        test,
                         "char txt6[] = \"hello\";\n"
                         "struct Point { int x, y; } points5[] = {[3] = 1,2,3};\n"
                         "char txt7[] = {\"hello\"};\n"
                         "static const char mode[][5] = { \"EPRT\", \"PORT\" };\n"
                         "struct Foo { int a; int last[]; };\n"));
-    Parser* const parser = test.parser;
+    Parser* const parser = test->parser;
 
     // from https://en.cppreference.com/w/c/language/initialization
     struct Expr** const exprs = (struct Expr**)parser->expr_seqs.data;
@@ -1105,7 +1070,6 @@ int parse_unk_array(struct TestState* state)
 
     rc = 0;
 fail:
-    stdtest_destroy(&test);
     return rc;
 }
 
@@ -1989,10 +1953,10 @@ int require_tace(TestState* state, struct TACEntry* expected, struct TACEntry* a
 #define REQUIRE_NEXT_TACE(...)                                                                                         \
     do                                                                                                                 \
     {                                                                                                                  \
-        if (index < array_size(&test.be->code, sizeof(struct TACEntry)))                                               \
+        if (index < array_size(&test->be->code, sizeof(struct TACEntry)))                                              \
         {                                                                                                              \
             struct TACEntry expected = __VA_ARGS__;                                                                    \
-            UNWRAP(require_tace(state, &expected, (TACEntry*)test.be->code.data + index++, __FILE__, __LINE__));       \
+            UNWRAP(require_tace(state, &expected, (TACEntry*)test->be->code.data + index++, __FILE__, __LINE__));      \
         }                                                                                                              \
         else                                                                                                           \
         {                                                                                                              \
@@ -2000,7 +1964,7 @@ int require_tace(TestState* state, struct TACEntry* expected, struct TACEntry* a
         }                                                                                                              \
     } while (0)
 
-#define REQUIRE_END_TACE() REQUIRE_ZU_EQ(index, array_size(&test.be->code, sizeof(struct TACEntry)))
+#define REQUIRE_END_TACE() REQUIRE_ZU_EQ(index, array_size(&test->be->code, sizeof(struct TACEntry)))
 
 static size_t end_of_line(size_t offset, const char* const data, const size_t data_len)
 {
@@ -2030,16 +1994,16 @@ static size_t start_of_line_text(size_t offset, const char* const data, const si
 #define REQUIRE_NEXT_TEXT(...)                                                                                         \
     do                                                                                                                 \
     {                                                                                                                  \
-        index = start_of_line_text(index, test.cg->code.data, test.cg->code.sz);                                       \
-        if (index < test.cg->code.sz)                                                                                  \
+        index = start_of_line_text(index, test->cg->code.data, test->cg->code.sz);                                     \
+        if (index < test->cg->code.sz)                                                                                 \
         {                                                                                                              \
             const char* expected = __VA_ARGS__;                                                                        \
             size_t expected_len = strlen(expected);                                                                    \
-            const char* actual = (const char*)test.cg->code.data + index;                                              \
-            size_t actual_len = end_of_line(index, test.cg->code.data, test.cg->code.sz) - index;                      \
+            const char* actual = (const char*)test->cg->code.data + index;                                             \
+            size_t actual_len = end_of_line(index, test->cg->code.data, test->cg->code.sz) - index;                    \
             REQUIRE_MEM_EQ(expected, expected_len, actual, actual_len);                                                \
             index += actual_len;                                                                                       \
-            if (index != test.cg->code.sz) ++index;                                                                    \
+            if (index != test->cg->code.sz) ++index;                                                                   \
         }                                                                                                              \
         else                                                                                                           \
         {                                                                                                              \
@@ -2050,11 +2014,11 @@ static size_t start_of_line_text(size_t offset, const char* const data, const si
 #define REQUIRE_END_TEXT()                                                                                             \
     do                                                                                                                 \
     {                                                                                                                  \
-        index = start_of_line_text(index, test.cg->code.data, test.cg->code.sz);                                       \
-        if (index < test.cg->code.sz)                                                                                  \
+        index = start_of_line_text(index, test->cg->code.data, test->cg->code.sz);                                     \
+        if (index < test->cg->code.sz)                                                                                 \
         {                                                                                                              \
-            const char* actual = (const char*)test.cg->code.data + index;                                              \
-            size_t actual_len = end_of_line(index, test.cg->code.data, test.cg->code.sz) - index;                      \
+            const char* actual = (const char*)test->cg->code.data + index;                                             \
+            size_t actual_len = end_of_line(index, test->cg->code.data, test->cg->code.sz) - index;                    \
             REQUIRE_FAIL("expected end of text but found \"%.*s\"", (int)actual_len, actual);                          \
         }                                                                                                              \
     } while (0)
@@ -2672,7 +2636,7 @@ int test_be_cast(TestState* state)
     });
     REQUIRE_END_TACE();
 
-    rc = cg_gen_taces(test.cg, test.be->code.data, array_size(&test.be->code, sizeof(TACEntry)), 100);
+    rc = cg_gen_taces(test->cg, test.be->code.data, array_size(&test.be->code, sizeof(TACEntry)), 100);
     if (rc)
     {
         parser_print_errors(stderr);
@@ -3172,7 +3136,7 @@ int test_be_va_args(TestState* state)
     });
     REQUIRE_END_TACE();
 
-    rc = cg_gen_taces(test.cg, test.be->code.data, array_size(&test.be->code, sizeof(TACEntry)), 100);
+    rc = cg_gen_taces(test->cg, test.be->code.data, array_size(&test.be->code, sizeof(TACEntry)), 100);
     if (rc)
     {
         parser_print_errors(stderr);
@@ -3372,7 +3336,7 @@ int test_be_va_args2(TestState* state)
     });
     REQUIRE_END_TACE();
 
-    rc = cg_gen_taces(test.cg, test.be->code.data, array_size(&test.be->code, sizeof(TACEntry)), 100);
+    rc = cg_gen_taces(test->cg, test.be->code.data, array_size(&test.be->code, sizeof(TACEntry)), 100);
     if (rc)
     {
         parser_print_errors(stderr);
@@ -3812,18 +3776,13 @@ fail:
     return rc;
 }
 
-typedef struct CGTest
-{
-    struct CodeGen* cg;
-} CGTest;
-
 int test_cg_assign(TestState* state)
 {
     int rc = 1;
     CGTest test = {
         .cg = my_malloc(sizeof(struct CodeGen)),
     };
-    cg_init(test.cg);
+    cg_init(test->cg);
     TACEntry taces[] = {
         // stores from reg
         {
@@ -3941,7 +3900,7 @@ int test_cg_assign(TestState* state)
             {TACA_NAME, .sizing = 0, 3, .name = "in"},
         },
     };
-    rc = cg_gen_taces(test.cg, taces, sizeof(taces) / sizeof(taces[0]), 100);
+    rc = cg_gen_taces(test->cg, taces, sizeof(taces) / sizeof(taces[0]), 100);
     if (rc)
     {
         parser_print_errors(stderr);
@@ -4036,8 +3995,8 @@ int test_cg_assign(TestState* state)
 
     rc = 0;
 fail:
-    cg_destroy(test.cg);
-    my_free(test.cg);
+    cg_destroy(test->cg);
+    my_free(test->cg);
     return rc;
 }
 
@@ -4047,7 +4006,7 @@ int test_cg_refs(TestState* state)
     CGTest test = {
         .cg = my_malloc(sizeof(struct CodeGen)),
     };
-    cg_init(test.cg);
+    cg_init(test->cg);
     TACEntry taces[] = {
         {
             TACO_ADD,
@@ -4090,7 +4049,7 @@ int test_cg_refs(TestState* state)
             {TACA_IMM, .sizing = s_sizing_int, .imm = 1},
         },
     };
-    rc = cg_gen_taces(test.cg, taces, sizeof(taces) / sizeof(taces[0]), 100);
+    rc = cg_gen_taces(test->cg, taces, sizeof(taces) / sizeof(taces[0]), 100);
     if (rc)
     {
         parser_print_errors(stderr);
@@ -4132,8 +4091,8 @@ int test_cg_refs(TestState* state)
 
     rc = 0;
 fail:
-    cg_destroy(test.cg);
-    my_free(test.cg);
+    cg_destroy(test->cg);
+    my_free(test->cg);
     return rc;
 }
 
@@ -4143,7 +4102,7 @@ int test_cg_regalloc(TestState* state)
     CGTest test = {
         .cg = my_malloc(sizeof(struct CodeGen)),
     };
-    cg_init(test.cg);
+    cg_init(test->cg);
     TACEntry taces[] = {
         {
             TACO_BAND,
@@ -4151,7 +4110,7 @@ int test_cg_regalloc(TestState* state)
             {TACA_REF, .sizing = s_sizing_int, .ref = 0},
         },
     };
-    rc = cg_gen_taces(test.cg, taces, sizeof(taces) / sizeof(taces[0]), 100);
+    rc = cg_gen_taces(test->cg, taces, sizeof(taces) / sizeof(taces[0]), 100);
     if (rc)
     {
         parser_print_errors(stderr);
@@ -4173,17 +4132,16 @@ int test_cg_regalloc(TestState* state)
 
     rc = 0;
 fail:
-    cg_destroy(test.cg);
-    my_free(test.cg);
+    cg_destroy(test->cg);
+    my_free(test->cg);
     return rc;
 }
 
-int test_be_static_init(TestState* state)
+int test_be_static_init(TestState* stat, StandardTest* test)
 {
     int rc = 1;
-    BETest test;
     SUBTEST(betest_run(state,
-                       &test,
+                       test,
                        "enum {v1 = 2};"
                        "static int data[] = {1,v1,3};\n"
                        "static const char* const s_reg_names[] = {\"%rax\", \"%rbx\"};\n"
@@ -4191,9 +4149,9 @@ int test_be_static_init(TestState* state)
                        "static void foo() {}\n"
                        "static void* ptrs[] = { foo, bar };\n"));
 
-    struct Expr** const exprs = (struct Expr**)test.base.parser->expr_seqs.data;
-    REQUIRE_EQ(6, test.base.parser->top->extent);
-    REQUIRE_EXPR(StmtDecls, decls, exprs[test.base.parser->top->offset + 1])
+    struct Expr** const exprs = (struct Expr**)test->parser->expr_seqs.data;
+    REQUIRE_EQ(6, test->parser->top->extent);
+    REQUIRE_EXPR(StmtDecls, decls, exprs[test->parser->top->offset + 1])
     {
         REQUIRE_EQ(1, decls->extent);
         REQUIRE_EXPR(Decl, w, exprs[decls->offset])
@@ -4218,9 +4176,9 @@ int test_be_static_init(TestState* state)
         }
     }
 
-    array_push_byte(&test.cg->data, '\0');
+    array_push_byte(&test->cg->data, '\0');
 
-    REQUIRE_LINES(test.cg->data.data)
+    REQUIRE_LINES(test->cg->data.data)
     {
         REQUIRE_LINE(".p2align 3");
         REQUIRE_LINE("_data:");
@@ -4251,7 +4209,7 @@ int test_cg_call(TestState* state)
     CGTest test = {
         .cg = my_malloc(sizeof(struct CodeGen)),
     };
-    cg_init(test.cg);
+    cg_init(test->cg);
     TACEntry taces[] = {
         {
             TACO_CALL,
@@ -4274,7 +4232,7 @@ int test_cg_call(TestState* state)
             {TACA_IMM, .sizing = s_sizing_int, .imm = 7},
         },
     };
-    rc = cg_gen_taces(test.cg, taces, sizeof(taces) / sizeof(taces[0]), 100);
+    rc = cg_gen_taces(test->cg, taces, sizeof(taces) / sizeof(taces[0]), 100);
     if (rc)
     {
         parser_print_errors(stderr);
@@ -4303,8 +4261,8 @@ int test_cg_call(TestState* state)
 
     rc = 0;
 fail:
-    cg_destroy(test.cg);
-    my_free(test.cg);
+    cg_destroy(test->cg);
+    my_free(test->cg);
     return rc;
 }
 
@@ -4314,7 +4272,7 @@ int test_cg_add(TestState* state)
     CGTest test = {
         .cg = my_malloc(sizeof(struct CodeGen)),
     };
-    cg_init(test.cg);
+    cg_init(test->cg);
     TACEntry taces[] = {
         {
             TACO_ADD,
@@ -4332,7 +4290,7 @@ int test_cg_add(TestState* state)
             {TACA_IMM, .sizing = s_sizing_int, .imm = 7},
         },
     };
-    rc = cg_gen_taces(test.cg, taces, sizeof(taces) / sizeof(taces[0]), 100);
+    rc = cg_gen_taces(test->cg, taces, sizeof(taces) / sizeof(taces[0]), 100);
     if (rc)
     {
         parser_print_errors(stderr);
@@ -4357,8 +4315,8 @@ int test_cg_add(TestState* state)
 
     rc = 0;
 fail:
-    cg_destroy(test.cg);
-    my_free(test.cg);
+    cg_destroy(test->cg);
+    my_free(test->cg);
     return rc;
 }
 
@@ -4368,7 +4326,7 @@ int test_cg_bitmath(TestState* state)
     CGTest test = {
         .cg = my_malloc(sizeof(struct CodeGen)),
     };
-    cg_init(test.cg);
+    cg_init(test->cg);
     TACEntry taces[] = {
         {
             TACO_BAND,
@@ -4391,7 +4349,7 @@ int test_cg_bitmath(TestState* state)
             0,
         },
     };
-    rc = cg_gen_taces(test.cg, taces, sizeof(taces) / sizeof(taces[0]), 100);
+    rc = cg_gen_taces(test->cg, taces, sizeof(taces) / sizeof(taces[0]), 100);
     if (rc)
     {
         parser_print_errors(stderr);
@@ -4422,8 +4380,8 @@ int test_cg_bitmath(TestState* state)
 
     rc = 0;
 fail:
-    cg_destroy(test.cg);
-    my_free(test.cg);
+    cg_destroy(test->cg);
+    my_free(test->cg);
     return rc;
 }
 
@@ -4455,9 +4413,36 @@ int main(int argc, char** argv)
         g_datadir_sz = strlen(argv[1]);
     }
 
-    RUN_TEST(parse_unk_array);
-    RUN_TEST(parse_initializer_struct);
-    RUN_TEST(preproc_ternary);
+    typedef int (*stdtest_t)();
+
+    static const int (*stdtests[])(struct TestState*, struct StandardTest*) = {
+        parse_unk_array,
+        test_be_static_init,
+    };
+
+    static const int (*othertests[])(struct TestState*) = {
+        parse_initializer_struct,
+    };
+
+    for (size_t i = 0; i < sizeof(stdtests) / sizeof(stdtests[0]); ++i)
+    {
+        struct StandardTest test = {0};
+        state->tests++;
+        if (stdtests[i](state, &test))
+        {
+            state->testfails++;
+        }
+        stdtest_destroy(&test);
+    }
+    for (size_t i = 0; i < sizeof(othertests) / sizeof(othertests[0]); ++i)
+    {
+        state->tests++;
+        if (othertests[i](state))
+        {
+            state->testfails++;
+        }
+    }
+
     RUN_TEST(preproc_comma_paste);
     RUN_TEST(parse_strings);
     RUN_TEST(parse_cmake_size_test);
@@ -4510,7 +4495,6 @@ int main(int argc, char** argv)
     RUN_TEST(test_be_init);
     RUN_TEST(test_be_switch);
     RUN_TEST(test_be_ternary);
-    RUN_TEST(test_be_static_init);
     RUN_TEST(test_be_fnstatic);
     RUN_TEST(test_cg_assign);
     RUN_TEST(test_cg_call);
