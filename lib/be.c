@@ -403,11 +403,11 @@ static int be_compile_init(
 fail:
     return rc;
 }
-static int be_compile_stmts(struct BackEnd* be, size_t offset, size_t extent)
+static int be_compile_stmts(struct BackEnd* be, SeqView seq)
 {
     int rc = 0;
-    void* const* const seqs = (void**)be->parser->expr_seqs.data + offset;
-    for (size_t i = 0; i < extent; ++i)
+    void* const* const seqs = (void**)be->parser->expr_seqs.data + seq.off;
+    for (size_t i = 0; i < seq.ext; ++i)
     {
         UNWRAP(be_compile_stmt(be, seqs[i]));
     }
@@ -419,8 +419,8 @@ static int be_compile_Decl(struct BackEnd* be, struct Decl* decl);
 static int be_compile_StmtDecls(struct BackEnd* be, struct StmtDecls* stmt)
 {
     int rc = 0;
-    void* const* const decls = (void**)be->parser->expr_seqs.data + stmt->decls.off;
-    for (size_t i = 0; i < stmt->decls.ext; ++i)
+    void* const* const decls = (void**)be->parser->expr_seqs.data + stmt->seq.off;
+    for (size_t i = 0; i < stmt->seq.ext; ++i)
     {
         UNWRAP(be_compile_Decl(be, decls[i]));
     }
@@ -432,7 +432,7 @@ static int be_compile_StmtBlock(struct BackEnd* be, struct StmtBlock* stmt)
 {
     int rc = 0;
     int start_frame_size = be->frame_size;
-    UNWRAP(be_compile_stmts(be, stmt->offset, stmt->extent));
+    UNWRAP(be_compile_stmts(be, stmt->seq));
 
 fail:
     be->frame_size = start_frame_size;
@@ -771,7 +771,7 @@ static int be_compile_ExprBuiltin(struct BackEnd* be, struct ExprBuiltin* e, str
             // gp_offset
             tace.arg1.is_addr = 1;
             tace.arg1.sizing = s_sizing_uint;
-            tace.arg2 = taca_imm(be->cur_fn->extent * 8);
+            tace.arg2 = taca_imm(be->cur_fn->seq.ext * 8);
             be_push_tace(be, &tace, s_sizing_zero);
             // fp_offset
             // TODO: fix floating point
@@ -1214,7 +1214,7 @@ static int be_compile_StmtSwitch(struct BackEnd* be, struct StmtSwitch* stmt)
     size_t jump_table = ++be->next_label;
     be_push_jump(be, jump_table);
 
-    UNWRAP(be_compile_stmts(be, stmt->offset, stmt->extent));
+    UNWRAP(be_compile_stmts(be, stmt->seq));
     be_push_jump(be, be->break_label);
     be_push_label(be, jump_table);
     struct TACEntry load = {
@@ -1683,13 +1683,13 @@ int be_compile_toplevel_decl(struct BackEnd* be, Decl* decl)
 
             Ast** const asts = be->parser->expr_seqs.data;
             if (declfn->is_param_list) abort();
-            for (size_t i = 0; i < declfn->extent; ++i)
+            for (size_t i = 0; i < declfn->seq.ext; ++i)
             {
-                Ast* ast = asts[declfn->offset + i];
+                Ast* ast = asts[declfn->seq.off + i];
                 if (ast->kind != STMT_DECLS) abort();
                 StmtDecls* decls = (void*)ast;
-                if (decls->decls.ext != 1) abort();
-                Ast* arg_ast = asts[decls->decls.off];
+                if (decls->seq.ext != 1) abort();
+                Ast* arg_ast = asts[decls->seq.off];
                 if (arg_ast->kind != AST_DECL) abort();
                 Decl* arg_decl = (void*)arg_ast;
 
@@ -1749,8 +1749,8 @@ int be_compile(struct BackEnd* be)
 
     // then compile all functions
     void* const* const ast_seqs = be->parser->expr_seqs.data;
-    SeqView const top = be->parser->top.seq;
-    StmtDecls* const* const top_seq = ast_seqs + top.off;
+    SeqView const top = be->parser->top->seq;
+    StmtDecls* const* const top_seq = (void*)(ast_seqs + top.off);
     for (size_t i = 0; i < top.ext; ++i)
     {
         struct StmtDecls* decls = top_seq[i];
@@ -1758,8 +1758,8 @@ int be_compile(struct BackEnd* be)
         if (decls->kind != STMT_DECLS) abort();
 #endif
         if (decls->specs->is_typedef) continue;
-        Decl* const* const decl_seq = ast_seqs + decls->decls.off;
-        for (size_t j = 0; j < decls->decls.ext; ++j)
+        Decl* const* const decl_seq = (void*)(ast_seqs + decls->seq.off);
+        for (size_t j = 0; j < decls->seq.ext; ++j)
         {
             struct Decl* decl = decl_seq[j];
 #ifndef NDEBUG

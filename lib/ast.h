@@ -245,7 +245,7 @@ typedef struct StmtDecls
 
     struct DeclSpecs* specs;
 
-    SeqView decls;
+    SeqView seq;
 } StmtDecls;
 #define AST_STRUCT_STMT_DECLS StmtDecls
 #define AST_KIND_StmtDecls STMT_DECLS

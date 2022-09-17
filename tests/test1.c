@@ -224,14 +224,14 @@ static int betest_run(struct TestState* state, StandardTest* test, const char* t
     void** seqs = test->parser->expr_seqs.data;
     SeqView top = test->parser->top->seq;
     REQUIRE(0 < top.ext);
-    StmtDecls** top_seq = seqs + top.off;
+    StmtDecls** top_seq = (void*)(seqs + top.off);
     for (size_t i = 0; i < top.ext; ++i)
     {
         StmtDecls* decls = top_seq[i];
         if (decls->specs->is_typedef) continue;
-        for (size_t j = 0; j < decls->extent; ++j)
+        for (size_t j = 0; j < decls->seq.ext; ++j)
         {
-            Decl* decl = (Decl*)exprs[decls->offset + j];
+            Decl* decl = (Decl*)seqs[decls->seq.off + j];
             REQUIRE_EQ(0, be_compile_toplevel_decl(test->be, decl));
         }
     }
@@ -261,12 +261,12 @@ int parse_main(struct TestState* state)
     SUBTEST(stdtest_parse(state, &test, "int main() {}"));
     Parser* parser = test.parser;
 
-    REQUIRE_EQ(1, parser->top->extent);
+    REQUIRE_EQ(1, parser->top->seq.ext);
     struct Expr** const exprs = parser->expr_seqs.data;
-    struct StmtDecls* decls = (struct StmtDecls*)exprs[parser->top->offset];
+    struct StmtDecls* decls = (struct StmtDecls*)exprs[parser->top->seq.ext];
     REQUIRE_EQ(STMT_DECLS, decls->kind);
-    REQUIRE_EQ(1, decls->extent);
-    struct Decl* main = (struct Decl*)((struct Expr**)parser->expr_seqs.data)[decls->offset];
+    REQUIRE_EQ(1, decls->seq.ext);
+    struct Decl* main = (struct Decl*)((struct Expr**)parser->expr_seqs.data)[decls->seq.off];
     REQUIRE_EQ(AST_DECL, main->kind);
     REQUIRE_STR_EQ("main", main->sym->name);
     struct DeclFn* mainfn = (struct DeclFn*)main->type;
@@ -287,7 +287,7 @@ int parse_main(struct TestState* state)
     REQUIRE(main->init);
     REQUIRE_EQ(STMT_BLOCK, main->init->kind);
     struct StmtBlock* init = (void*)main->init;
-    REQUIREZ(init->extent);
+    REQUIREZ(init->seq.ext);
 
     rc = 0;
 fail:
@@ -302,12 +302,12 @@ int parse_typedef(struct TestState* state)
     struct Preprocessor* pp;
     SUBTEST(test_parse(state, &parser, &pp, "typedef unsigned long size_t;\ntypedef unsigned long size_t;"));
 
-    REQUIRE_EQ(2, parser->top->extent);
+    REQUIRE_EQ(2, parser->top->seq.ext);
     struct Expr** const exprs = parser->expr_seqs.data;
-    struct StmtDecls* decls = (struct StmtDecls*)exprs[parser->top->offset];
+    struct StmtDecls* decls = (struct StmtDecls*)exprs[parser->top->seq.off];
     REQUIRE_EQ(STMT_DECLS, decls->kind);
-    REQUIRE_EQ(1, decls->extent);
-    struct Decl* def = (struct Decl*)((struct Expr**)parser->expr_seqs.data)[decls->offset];
+    REQUIRE_EQ(1, decls->seq.ext);
+    struct Decl* def = (struct Decl*)((struct Expr**)parser->expr_seqs.data)[decls->seq.off];
     REQUIRE_EQ(AST_DECL, def->kind);
     REQUIRE_STR_EQ("size_t", def->sym->name);
     REQUIRE(def->type);
@@ -351,10 +351,10 @@ int parse_struct(struct TestState* state)
                        "} const a;\n"));
 
     struct Expr** const exprs = parser->expr_seqs.data;
-    REQUIRE_EQ(2, parser->top->extent);
-    struct StmtDecls* decls = (struct StmtDecls*)exprs[parser->top->offset + 1];
+    REQUIRE_EQ(2, parser->top->seq.ext);
+    struct StmtDecls* decls = (struct StmtDecls*)exprs[parser->top->seq.off + 1];
     REQUIRE_EQ(STMT_DECLS, decls->kind);
-    REQUIRE_EQ(1, decls->extent);
+    REQUIRE_EQ(1, decls->seq.ext);
     REQUIRE(decls->specs);
     struct DeclSpecs* def = decls->specs;
     REQUIRE_STR_EQ("Array", def->name);
@@ -362,13 +362,13 @@ int parse_struct(struct TestState* state)
     REQUIRE(def->suinit);
     REQUIRE(def->is_const);
     struct StmtBlock* blk = def->suinit;
-    REQUIRE_EQ(3, blk->extent);
+    REQUIRE_EQ(3, blk->seq.ext);
     // "size_t sz;"
-    REQUIRE(exprs[blk->offset] && exprs[blk->offset]->kind == STMT_DECLS);
-    struct StmtDecls* mem1 = (struct StmtDecls*)exprs[blk->offset];
-    REQUIRE(mem1->extent == 1);
-    REQUIRE(exprs[mem1->offset] && exprs[mem1->offset]->kind == AST_DECL);
-    struct Decl* mem1def = (struct Decl*)exprs[mem1->offset];
+    REQUIRE(exprs[blk->seq.off] && exprs[blk->seq.off]->kind == STMT_DECLS);
+    struct StmtDecls* mem1 = (struct StmtDecls*)exprs[blk->seq.off];
+    REQUIRE(mem1->seq.ext == 1);
+    REQUIRE(exprs[mem1->seq.off] && exprs[mem1->seq.off]->kind == AST_DECL);
+    struct Decl* mem1def = (struct Decl*)exprs[mem1->seq.off];
     REQUIRE_STR_EQ("sz", mem1def->sym->name);
     REQUIRE(mem1def->type && mem1def->type->kind == AST_DECLSPEC);
     struct DeclSpecs* mem1specs = (struct DeclSpecs*)mem1def->type;
@@ -412,11 +412,11 @@ int parse_strings(struct TestState* state)
 
     // from https://en.cppreference.com/w/c/language/initialization
     struct Expr** const exprs = (struct Expr**)test.parser->expr_seqs.data;
-    REQUIRE_EQ(1, test.parser->top->extent);
-    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->offset])
+    REQUIRE_EQ(1, test.parser->top->seq.ext);
+    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->seq.off])
     {
-        REQUIRE_EQ(1, decls->extent);
-        REQUIRE_EXPR(Decl, w, exprs[decls->offset])
+        REQUIRE_EQ(1, decls->seq.ext);
+        REQUIRE_EXPR(Decl, w, exprs[decls->seq.off])
         {
             REQUIRE_EQ(9, w->sym->size.width);
             REQUIRE_AST(ExprLit, e, w->init) { REQUIRE_MEM_EQ("==hello\n", 9, e->text, e->tok->tok_len + 1); }
@@ -426,85 +426,6 @@ int parse_strings(struct TestState* state)
     rc = 0;
 fail:
     stdtest_destroy(&test);
-    return rc;
-}
-
-int parse_cmake_size_test(struct TestState* state)
-{
-    int rc = 1;
-    StandardTest test = {0};
-    SUBTEST(stdtest_run(state,
-                        &test,
-                        "#define SIZEOF_DPTR (sizeof(void*))\n"
-                        "const char info_sizeof_dptr[] = {\n"
-                        "'I', 'N', 'F', 'O', ':', 's', 'i', 'z', 'e', 'o', 'f', '_', 'd', 'p', 't',\n"
-                        "'r', '[', ('0' + ((SIZEOF_DPTR / 10) % 10)), ('0' + (SIZEOF_DPTR % 10)), ']',\n"
-                        "'\\0'\n"
-                        "};"));
-
-    rc = 0;
-
-fail:
-    return rc;
-}
-
-int parse_fdset(struct TestState* state)
-{
-    int rc = 1;
-    StandardTest test = {0};
-    SUBTEST(stdtest_run(state,
-                        &test,
-                        "int arr1[sizeof(int) * 8];\n"
-                        "int arr2[1 + 1024 % (sizeof(int) * 8)];\n"
-                        "int arr3[1024 / (sizeof(int) * 8)];\n"
-                        "int arr4[1024 == 1024];\n"
-                        "int arr5[10 ? 20 : 30];\n"
-                        "typedef int int_t;\n"
-                        "int arr6[sizeof(int_t) % 10];\n"
-                        "#define __DARWIN_howmany(x, y)  ((((x) % (y)) == 0) ? ((x) / (y)) : (((x) / (y)) + 1)) /* # "
-                        "y's == x bits? */\n"
-                        "\n"
-                        "typedef struct fd_set {\n"
-                        "	int       fds_bits[__DARWIN_howmany(1024, sizeof(int) * 8)];\n"
-                        "} fd_set;\n"));
-
-    rc = 0;
-
-fail:
-    return rc;
-}
-
-int parse_primitive_types(struct TestState* state)
-{
-    int rc = 1;
-    StandardTest test = {0};
-    SUBTEST(stdtest_run(state,
-                        &test,
-                        "const char x;\n"
-                        "char const x2;\n"
-                        "const char * const y;\n"
-                        "char const unsigned * const z;\n"
-                        "char extern unsigned w;\n"
-                        "unsigned const char * const q;\n"));
-
-    rc = 0;
-
-fail:
-    return rc;
-}
-
-int parse_typedef_enum(struct TestState* state)
-{
-    int rc = 1;
-    StandardTest test = {0};
-    SUBTEST(stdtest_run(state,
-                        &test,
-                        "typedef enum {   CURLPX_OK, } CURLproxycode;\n"
-                        "struct PureInfo { CURLproxycode pc; };"));
-
-    rc = 0;
-
-fail:
     return rc;
 }
 
@@ -527,11 +448,11 @@ int parse_initializer(struct TestState* state)
                        "struct Array arr3 = { .cap = 1, 4 };"));
 
     struct Expr** const exprs = (struct Expr**)parser->expr_seqs.data;
-    REQUIRE_EQ(4, parser->top->extent);
-    REQUIRE_EXPR(StmtDecls, decl1, exprs[parser->top->offset + 1])
+    REQUIRE_EQ(4, parser->top->seq.ext);
+    REQUIRE_EXPR(StmtDecls, decl1, exprs[parser->top->seq.off + 1])
     {
-        REQUIRE_EQ(1, decl1->extent);
-        REQUIRE_EXPR(Decl, def, exprs[decl1->offset])
+        REQUIRE_EQ(1, decl1->seq.ext);
+        REQUIRE_EXPR(Decl, def, exprs[decl1->seq.off])
         {
             REQUIRE_STR_EQ("arr", def->sym->name);
             REQUIRE_AST(AstInit, init, def->init)
@@ -543,10 +464,10 @@ int parse_initializer(struct TestState* state)
             }
         }
     }
-    REQUIRE_EXPR(StmtDecls, decl1, exprs[parser->top->offset + 2])
+    REQUIRE_EXPR(StmtDecls, decl1, exprs[parser->top->seq.off + 2])
     {
-        REQUIRE_EQ(1, decl1->extent);
-        REQUIRE_EXPR(Decl, def, exprs[decl1->offset])
+        REQUIRE_EQ(1, decl1->seq.ext);
+        REQUIRE_EXPR(Decl, def, exprs[decl1->seq.off])
         {
             REQUIRE_AST(AstInit, init, def->init)
             {
@@ -559,10 +480,10 @@ int parse_initializer(struct TestState* state)
         }
     }
 
-    REQUIRE_EXPR(StmtDecls, decl1, exprs[parser->top->offset + 3])
+    REQUIRE_EXPR(StmtDecls, decl1, exprs[parser->top->seq.off + 3])
     {
-        REQUIRE_EQ(1, decl1->extent);
-        REQUIRE_EXPR(Decl, def, exprs[decl1->offset])
+        REQUIRE_EQ(1, decl1->seq.ext);
+        REQUIRE_EXPR(Decl, def, exprs[decl1->seq.off])
         {
             REQUIRE_AST(AstInit, init, def->init)
             {
@@ -609,16 +530,16 @@ int parse_nested_struct(struct TestState* state)
     REQUIREZ(elaborate(elab));
 
     struct Expr** const exprs = (struct Expr**)parser->expr_seqs.data;
-    REQUIRE(0 < parser->top->extent);
-    REQUIRE_EXPR(StmtDecls, decls, exprs[parser->top->offset])
+    REQUIRE(0 < parser->top->seq.ext);
+    REQUIRE_EXPR(StmtDecls, decls, exprs[parser->top->seq.off])
     {
         REQUIRE(decls->specs);
         REQUIRE(decls->specs->suinit);
-        REQUIRE_EQ(2, decls->specs->suinit->extent);
-        REQUIRE_EXPR(StmtDecls, addr_t_decls, exprs[decls->specs->suinit->offset])
+        REQUIRE_EQ(2, decls->specs->suinit->seq.ext);
+        REQUIRE_EXPR(StmtDecls, addr_t_decls, exprs[decls->specs->suinit->seq.off])
         {
-            REQUIRE_EQ(1, addr_t_decls->extent);
-            REQUIRE_EXPR(Decl, addr_t_decl, exprs[addr_t_decls->offset])
+            REQUIRE_EQ(1, addr_t_decls->seq.ext);
+            REQUIRE_EXPR(Decl, addr_t_decl, exprs[addr_t_decls->seq.off])
             {
                 REQUIRE_PTR_EQ(addr_t_decl->sym, decls->specs->sym->first_member);
                 REQUIRE_EQ(4, addr_t_decl->sym->align);
@@ -626,10 +547,10 @@ int parse_nested_struct(struct TestState* state)
             }
         }
         REQUIRE(decls->specs->sym->first_member->next_field);
-        REQUIRE_EXPR(StmtDecls, in_u_decls, exprs[decls->specs->suinit->offset + 1])
+        REQUIRE_EXPR(StmtDecls, in_u_decls, exprs[decls->specs->suinit->seq.off + 1])
         {
-            REQUIRE_EQ(1, in_u_decls->extent);
-            REQUIRE_EXPR(Decl, in_u_decl, exprs[in_u_decls->offset])
+            REQUIRE_EQ(1, in_u_decls->seq.ext);
+            REQUIRE_EXPR(Decl, in_u_decl, exprs[in_u_decls->seq.off])
             {
                 REQUIRE_PTR_EQ(in_u_decl->sym, decls->specs->sym->first_member->next_field);
                 REQUIRE_EQ(2, in_u_decl->sym->align);
@@ -677,11 +598,11 @@ int parse_initializer_struct(struct TestState* state)
     REQUIREZ(elaborate(elab));
 
     struct Expr** const exprs = (struct Expr**)parser->expr_seqs.data;
-    REQUIRE_EQ(2, parser->top->extent);
-    REQUIRE_EXPR(StmtDecls, decls, exprs[parser->top->offset + 1])
+    REQUIRE_EQ(2, parser->top->seq.ext);
+    REQUIRE_EXPR(StmtDecls, decls, exprs[parser->top->seq.off + 1])
     {
-        REQUIRE_EQ(1, decls->extent);
-        REQUIRE_EXPR(Decl, a, exprs[decls->offset])
+        REQUIRE_EQ(1, decls->seq.ext);
+        REQUIRE_EXPR(Decl, a, exprs[decls->seq.off])
         {
             REQUIRE_AST(AstInit, a_init, a->init)
             {
@@ -743,11 +664,11 @@ int parse_initializer_union(struct TestState* state)
     REQUIREZ(elaborate(elab));
 
     struct Expr** const exprs = (struct Expr**)parser->expr_seqs.data;
-    REQUIRE_EQ(2, parser->top->extent);
-    REQUIRE_EXPR(StmtDecls, decls, exprs[parser->top->offset + 1])
+    REQUIRE_EQ(2, parser->top->seq.ext);
+    REQUIRE_EXPR(StmtDecls, decls, exprs[parser->top->seq.off + 1])
     {
-        REQUIRE_EQ(1, decls->extent);
-        REQUIRE_EXPR(Decl, a, exprs[decls->offset])
+        REQUIRE_EQ(1, decls->seq.ext);
+        REQUIRE_EXPR(Decl, a, exprs[decls->seq.off])
         {
             REQUIRE_AST(AstInit, a_init, a->init)
             {
@@ -786,11 +707,11 @@ int parse_initializer_array(struct TestState* state)
     REQUIREZ(elaborate(elab));
 
     struct Expr** const exprs = (struct Expr**)parser->expr_seqs.data;
-    REQUIRE(0 < parser->top->extent);
-    REQUIRE_EXPR(StmtDecls, decls, exprs[parser->top->offset])
+    REQUIRE(0 < parser->top->seq.ext);
+    REQUIRE_EXPR(StmtDecls, decls, exprs[parser->top->seq.off])
     {
-        REQUIRE_EQ(1, decls->extent);
-        REQUIRE_EXPR(Decl, a, exprs[decls->offset])
+        REQUIRE_EQ(1, decls->seq.ext);
+        REQUIRE_EXPR(Decl, a, exprs[decls->seq.off])
         {
             REQUIRE_AST(AstInit, a_init, a->init)
             {
@@ -853,11 +774,11 @@ int parse_initializer2b(struct TestState* state)
     REQUIREZ(elaborate(elab));
 
     struct Expr** const exprs = (struct Expr**)parser->expr_seqs.data;
-    REQUIRE_EQ(4, parser->top->extent);
-    REQUIRE_EXPR(StmtDecls, decls, exprs[parser->top->offset + 1])
+    REQUIRE_EQ(4, parser->top->seq.ext);
+    REQUIRE_EXPR(StmtDecls, decls, exprs[parser->top->seq.off + 1])
     {
-        REQUIRE_EQ(1, decls->extent);
-        REQUIRE_EXPR(Decl, a, exprs[decls->offset])
+        REQUIRE_EQ(1, decls->seq.ext);
+        REQUIRE_EXPR(Decl, a, exprs[decls->seq.off])
         {
             REQUIRE_AST(AstInit, a_init, a->init)
             {
@@ -866,10 +787,10 @@ int parse_initializer2b(struct TestState* state)
             }
         }
     }
-    REQUIRE_EXPR(StmtDecls, decls, exprs[parser->top->offset + 2])
+    REQUIRE_EXPR(StmtDecls, decls, exprs[parser->top->seq.off + 2])
     {
-        REQUIRE_EQ(1, decls->extent);
-        REQUIRE_EXPR(Decl, a, exprs[decls->offset])
+        REQUIRE_EQ(1, decls->seq.ext);
+        REQUIRE_EXPR(Decl, a, exprs[decls->seq.off])
         {
             REQUIRE_AST(AstInit, a_init, a->init)
             {
@@ -898,10 +819,10 @@ int parse_initializer2b(struct TestState* state)
             }
         }
     }
-    REQUIRE_EXPR(StmtDecls, decls, exprs[parser->top->offset + 3])
+    REQUIRE_EXPR(StmtDecls, decls, exprs[parser->top->seq.off + 3])
     {
-        REQUIRE_EQ(1, decls->extent);
-        REQUIRE_EXPR(Decl, a, exprs[decls->offset])
+        REQUIRE_EQ(1, decls->seq.ext);
+        REQUIRE_EXPR(Decl, a, exprs[decls->seq.off])
         {
             REQUIRE_AST(AstInit, a_init, a->init)
             {
@@ -951,11 +872,11 @@ int parse_initializer_designated(struct TestState* state)
     REQUIREZ(elaborate(elab));
 
     struct Expr** const exprs = (struct Expr**)parser->expr_seqs.data;
-    REQUIRE_EQ(1, parser->top->extent);
-    REQUIRE_EXPR(StmtDecls, decls, exprs[parser->top->offset])
+    REQUIRE_EQ(1, parser->top->seq.ext);
+    REQUIRE_EXPR(StmtDecls, decls, exprs[parser->top->seq.off])
     {
-        REQUIRE_EQ(1, decls->extent);
-        REQUIRE_EXPR(Decl, w, exprs[decls->offset])
+        REQUIRE_EQ(1, decls->seq.ext);
+        REQUIRE_EXPR(Decl, w, exprs[decls->seq.off])
         {
             REQUIRE_AST(AstInit, w_init, w->init)
             {
@@ -1047,16 +968,16 @@ int parse_unk_array(struct TestState* state, StandardTest* test)
 
     // from https://en.cppreference.com/w/c/language/initialization
     struct Expr** const exprs = (struct Expr**)parser->expr_seqs.data;
-    REQUIRE_EQ(5, parser->top->extent);
-    REQUIRE_EXPR(StmtDecls, decls, exprs[parser->top->offset])
+    REQUIRE_EQ(5, parser->top->seq.ext);
+    REQUIRE_EXPR(StmtDecls, decls, exprs[parser->top->seq.off])
     {
-        REQUIRE_EQ(1, decls->extent);
-        REQUIRE_EXPR(Decl, w, exprs[decls->offset]) { REQUIRE_EQ(6, w->sym->size.width); }
+        REQUIRE_EQ(1, decls->seq.ext);
+        REQUIRE_EXPR(Decl, w, exprs[decls->seq.off]) { REQUIRE_EQ(6, w->sym->size.width); }
     }
-    REQUIRE_EXPR(StmtDecls, decls, exprs[parser->top->offset + 1])
+    REQUIRE_EXPR(StmtDecls, decls, exprs[parser->top->seq.off + 1])
     {
-        REQUIRE_EQ(1, decls->extent);
-        REQUIRE_EXPR(Decl, w, exprs[decls->offset])
+        REQUIRE_EQ(1, decls->seq.ext);
+        REQUIRE_EXPR(Decl, w, exprs[decls->seq.off])
         {
             REQUIRE_EQ(5 * 8, w->sym->size.width);
             REQUIRE_AST(AstInit, i, w->init)
@@ -1128,28 +1049,28 @@ int parse_uuva_list(struct TestState* state)
     rc = 0;
 
     struct Expr** const exprs = (struct Expr**)test.parser->expr_seqs.data;
-    REQUIRE_EQ(3, test.parser->top->extent);
-    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->offset + 2])
+    REQUIRE_EQ(3, test.parser->top->seq.ext);
+    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->seq.off + 2])
     {
-        REQUIRE_EQ(1, decls->extent);
-        REQUIRE_EXPR(Decl, w, exprs[decls->offset])
+        REQUIRE_EQ(1, decls->seq.ext);
+        REQUIRE_EXPR(Decl, w, exprs[decls->seq.off])
         {
             REQUIRE_AST(StmtBlock, body, w->init)
             {
-                REQUIRE_EQ(5, body->extent);
-                REQUIRE_EXPR(StmtDecls, decls, exprs[body->offset])
+                REQUIRE_EQ(5, body->seq.ext);
+                REQUIRE_EXPR(StmtDecls, decls, exprs[body->seq.off])
                 {
-                    REQUIRE_EQ(1, decls->extent);
-                    REQUIRE_EXPR(Decl, v, exprs[decls->offset])
+                    REQUIRE_EQ(1, decls->seq.ext);
+                    REQUIRE_EXPR(Decl, v, exprs[decls->seq.off])
                     {
                         REQUIRE_EQ(24, v->sym->size.width);
                         REQUIRE_EQ('_', v->sym->type.buf.buf[1]);
                     }
                 }
-                REQUIRE_EXPR(StmtDecls, decls, exprs[body->offset + 1])
+                REQUIRE_EXPR(StmtDecls, decls, exprs[body->seq.off + 1])
                 {
-                    REQUIRE_EQ(1, decls->extent);
-                    REQUIRE_EXPR(Decl, v, exprs[decls->offset])
+                    REQUIRE_EQ(1, decls->seq.ext);
+                    REQUIRE_EXPR(Decl, v, exprs[decls->seq.off])
                     {
                         REQUIRE_EQ(24, v->sym->size.width);
                         REQUIRE_EQ('_', v->sym->type.buf.buf[1]);
@@ -1221,26 +1142,26 @@ int parse_sizeof(struct TestState* state)
     rc = 0;
 
     struct Expr** const exprs = (struct Expr**)test.parser->expr_seqs.data;
-    REQUIRE_EQ(5, test.parser->top->extent);
-    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->offset])
+    REQUIRE_EQ(5, test.parser->top->seq.ext);
+    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->seq.off])
     {
-        REQUIRE_EQ(1, decls->extent);
-        REQUIRE_EXPR(Decl, d, exprs[decls->offset]) { REQUIRE_SIZING_EQ(s_sizing_uint, d->sym->size); }
+        REQUIRE_EQ(1, decls->seq.ext);
+        REQUIRE_EXPR(Decl, d, exprs[decls->seq.off]) { REQUIRE_SIZING_EQ(s_sizing_uint, d->sym->size); }
     }
-    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->offset + 1])
+    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->seq.off + 1])
     {
-        REQUIRE_EQ(1, decls->extent);
-        REQUIRE_EXPR(Decl, d, exprs[decls->offset]) { REQUIRE_SIZING_EQ(s_sizing_uint, d->sym->size); }
+        REQUIRE_EQ(1, decls->seq.ext);
+        REQUIRE_EXPR(Decl, d, exprs[decls->seq.off]) { REQUIRE_SIZING_EQ(s_sizing_uint, d->sym->size); }
     }
-    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->offset + 2])
+    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->seq.off + 2])
     {
-        REQUIRE_EQ(1, decls->extent);
-        REQUIRE_EXPR(Decl, d, exprs[decls->offset]) { REQUIRE_EQ(7, d->sym->size.width); }
+        REQUIRE_EQ(1, decls->seq.ext);
+        REQUIRE_EXPR(Decl, d, exprs[decls->seq.off]) { REQUIRE_EQ(7, d->sym->size.width); }
     }
-    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->offset + 3])
+    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->seq.off + 3])
     {
-        REQUIRE_EQ(1, decls->extent);
-        REQUIRE_EXPR(Decl, d, exprs[decls->offset]) { REQUIRE_EQ(7, d->sym->size.width); }
+        REQUIRE_EQ(1, decls->seq.ext);
+        REQUIRE_EXPR(Decl, d, exprs[decls->seq.off]) { REQUIRE_EQ(7, d->sym->size.width); }
     }
 
 fail:
@@ -1274,99 +1195,99 @@ int parse_constants(struct TestState* state)
     rc = 0;
 
     struct Expr** const exprs = (struct Expr**)test.parser->expr_seqs.data;
-    REQUIRE_EQ(2, test.parser->top->extent);
-    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->offset])
+    REQUIRE_EQ(2, test.parser->top->seq.ext);
+    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->seq.off])
     {
-        REQUIRE_EQ(1, decls->extent);
-        REQUIRE_EXPR(Decl, d, exprs[decls->offset]) { REQUIRE_EQ('\\', d->sym->size.width); }
+        REQUIRE_EQ(1, decls->seq.ext);
+        REQUIRE_EXPR(Decl, d, exprs[decls->seq.off]) { REQUIRE_EQ('\\', d->sym->size.width); }
     }
-    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->offset + 1])
+    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->seq.off + 1])
     {
-        REQUIRE_EQ(1, decls->extent);
-        REQUIRE_EXPR(Decl, d, exprs[decls->offset])
+        REQUIRE_EQ(1, decls->seq.ext);
+        REQUIRE_EXPR(Decl, d, exprs[decls->seq.off])
         {
             REQUIRE_AST(StmtBlock, b, d->init)
             {
-                REQUIRE_EQ(14, b->extent);
-                REQUIRE_EXPR(ExprLit, e, exprs[b->offset])
+                REQUIRE_EQ(14, b->seq.ext);
+                REQUIRE_EXPR(ExprLit, e, exprs[b->seq.off])
                 {
                     REQUIRE_EQ(1, e->numeric);
                     REQUIRE_EQ(LIT_SUFFIX_NONE_DECIMAL, e->suffix);
                     REQUIRE_SIZING_EQ(s_sizing_int, e->sizing);
                 }
-                REQUIRE_EXPR(ExprLit, e, exprs[b->offset + 1])
+                REQUIRE_EXPR(ExprLit, e, exprs[b->seq.off + 1])
                 {
                     REQUIRE_EQ(0x7fffffff, e->numeric);
                     REQUIRE_EQ(LIT_SUFFIX_NONE, e->suffix);
                     REQUIRE_SIZING_EQ(s_sizing_int, e->sizing);
                 }
-                REQUIRE_EXPR(ExprLit, e, exprs[b->offset + 2])
+                REQUIRE_EXPR(ExprLit, e, exprs[b->seq.off + 2])
                 {
                     REQUIRE_EQ(0x80000000, e->numeric);
                     REQUIRE_EQ(LIT_SUFFIX_NONE, e->suffix);
                     REQUIRE_SIZING_EQ(s_sizing_uint, e->sizing);
                 }
-                REQUIRE_EXPR(ExprLit, e, exprs[b->offset + 3])
+                REQUIRE_EXPR(ExprLit, e, exprs[b->seq.off + 3])
                 {
                     REQUIRE_EQ(0x7fffffff, e->numeric);
                     REQUIRE_EQ(LIT_SUFFIX_LL, e->suffix);
                     REQUIRE_SIZING_EQ(s_sizing_sptr, e->sizing);
                 }
-                REQUIRE_EXPR(ExprLit, e, exprs[b->offset + 4])
+                REQUIRE_EXPR(ExprLit, e, exprs[b->seq.off + 4])
                 {
                     REQUIRE_EQ(0x7fffffff, e->numeric);
                     REQUIRE_EQ(LIT_SUFFIX_LLU, e->suffix);
                     REQUIRE_SIZING_EQ(s_sizing_ptr, e->sizing);
                 }
-                REQUIRE_EXPR(ExprLit, e, exprs[b->offset + 5])
+                REQUIRE_EXPR(ExprLit, e, exprs[b->seq.off + 5])
                 {
                     REQUIRE_EQ('\n', e->numeric);
                     REQUIRE_EQ(LIT_SUFFIX_NONE, e->suffix);
                     REQUIRE_SIZING_EQ(s_sizing_int, e->sizing);
                 }
-                REQUIRE_EXPR(ExprLit, e, exprs[b->offset + 6])
+                REQUIRE_EXPR(ExprLit, e, exprs[b->seq.off + 6])
                 {
                     REQUIRE_EQ('\t', e->numeric);
                     REQUIRE_EQ(LIT_SUFFIX_NONE, e->suffix);
                     REQUIRE_SIZING_EQ(s_sizing_int, e->sizing);
                 }
-                REQUIRE_EXPR(ExprLit, e, exprs[b->offset + 7])
+                REQUIRE_EXPR(ExprLit, e, exprs[b->seq.off + 7])
                 {
                     REQUIRE_EQ('\b', e->numeric);
                     REQUIRE_EQ(LIT_SUFFIX_NONE, e->suffix);
                     REQUIRE_SIZING_EQ(s_sizing_int, e->sizing);
                 }
-                REQUIRE_EXPR(ExprLit, e, exprs[b->offset + 8])
+                REQUIRE_EXPR(ExprLit, e, exprs[b->seq.off + 8])
                 {
                     REQUIRE_EQ('\r', e->numeric);
                     REQUIRE_EQ(LIT_SUFFIX_NONE, e->suffix);
                     REQUIRE_SIZING_EQ(s_sizing_int, e->sizing);
                 }
-                REQUIRE_EXPR(ExprLit, e, exprs[b->offset + 9])
+                REQUIRE_EXPR(ExprLit, e, exprs[b->seq.off + 9])
                 {
                     REQUIRE_EQ(0, e->numeric);
                     REQUIRE_EQ(LIT_SUFFIX_NONE, e->suffix);
                     REQUIRE_SIZING_EQ(s_sizing_int, e->sizing);
                 }
-                REQUIRE_EXPR(ExprLit, e, exprs[b->offset + 10])
+                REQUIRE_EXPR(ExprLit, e, exprs[b->seq.off + 10])
                 {
                     REQUIRE_EQ(32, e->numeric);
                     REQUIRE_EQ(LIT_SUFFIX_NONE, e->suffix);
                     REQUIRE_SIZING_EQ(s_sizing_int, e->sizing);
                 }
-                REQUIRE_EXPR(ExprLit, e, exprs[b->offset + 11])
+                REQUIRE_EXPR(ExprLit, e, exprs[b->seq.off + 11])
                 {
                     REQUIRE_EQ(0, e->numeric);
                     REQUIRE_EQ(LIT_SUFFIX_L, e->suffix);
                     REQUIRE_SIZING_EQ(s_sizing_sptr, e->sizing);
                 }
-                REQUIRE_EXPR(ExprLit, e, exprs[b->offset + 12])
+                REQUIRE_EXPR(ExprLit, e, exprs[b->seq.off + 12])
                 {
                     REQUIRE_EQ(8, e->numeric);
                     REQUIRE_EQ(LIT_SUFFIX_NONE, e->suffix);
                     REQUIRE_SIZING_EQ(s_sizing_int, e->sizing);
                 }
-                REQUIRE_EXPR(ExprLit, e, exprs[b->offset + 13])
+                REQUIRE_EXPR(ExprLit, e, exprs[b->seq.off + 13])
                 {
                     REQUIRE_EQ(12345678, e->numeric);
                     REQUIRE_EQ(LIT_SUFFIX_NONE_DECIMAL, e->suffix);
@@ -1459,23 +1380,23 @@ int parse_implicit_conversion(struct TestState* state)
     rc = 0;
 
     struct Ast** const asts = test.parser->expr_seqs.data;
-    REQUIRE_EQ(1, test.parser->top->extent);
-    REQUIRE_AST(StmtDecls, decls, asts[test.parser->top->offset])
+    REQUIRE_EQ(1, test.parser->top->seq.ext);
+    REQUIRE_AST(StmtDecls, decls, asts[test.parser->top->seq.off])
     {
-        REQUIRE_EQ(1, decls->extent);
-        REQUIRE_AST(Decl, w, asts[decls->offset])
+        REQUIRE_EQ(1, decls->seq.ext);
+        REQUIRE_AST(Decl, w, asts[decls->seq.off])
         {
             REQUIRE_AST(StmtBlock, body, w->init)
             {
-                REQUIRE_EQ(6, body->extent);
+                REQUIRE_EQ(6, body->seq.ext);
 
-                REQUIRE_AST(ExprBinOp, e, asts[body->offset + 2])
+                REQUIRE_AST(ExprBinOp, e, asts[body->seq.off + 2])
                 REQUIRE_SIZING_EQ(s_sizing_int, e->sizing);
 
-                REQUIRE_AST(ExprBinOp, e, asts[body->offset + 3])
+                REQUIRE_AST(ExprBinOp, e, asts[body->seq.off + 3])
                 REQUIRE_SIZING_EQ(s_sizing_sptr, e->sizing);
 
-                REQUIRE_AST(ExprBinOp, e, asts[body->offset + 4])
+                REQUIRE_AST(ExprBinOp, e, asts[body->seq.off + 4])
                 REQUIRE_SIZING_EQ(s_sizing_sptr, e->sizing);
             }
         }
@@ -1530,25 +1451,25 @@ int parse_enums(struct TestState* state)
     rc = 0;
 
     struct Expr** const exprs = (struct Expr**)test.parser->expr_seqs.data;
-    REQUIRE_EQ(5, test.parser->top->extent);
-    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->offset])
+    REQUIRE_EQ(5, test.parser->top->seq.ext);
+    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->seq.off])
     {
-        REQUIRE_EQ(0, decls->extent);
+        REQUIRE_EQ(0, decls->seq.ext);
         REQUIRE(decls->specs->enum_init);
-        REQUIRE_EQ(3, decls->specs->enum_init->extent);
-        REQUIRE_EXPR(Decl, w, exprs[decls->specs->enum_init->offset])
+        REQUIRE_EQ(3, decls->specs->enum_init->seq.ext);
+        REQUIRE_EXPR(Decl, w, exprs[decls->specs->enum_init->seq.off])
         {
             REQUIRE_EQ(5, w->sym->enum_value);
             REQUIRE_PTR_EQ(w, w->sym->def);
             REQUIRE_SIZING_EQ(s_sizing_int, w->sym->size);
         }
-        REQUIRE_EXPR(Decl, w, exprs[decls->specs->enum_init->offset + 1])
+        REQUIRE_EXPR(Decl, w, exprs[decls->specs->enum_init->seq.off + 1])
         {
             REQUIRE_EQ(6, w->sym->enum_value);
             REQUIRE_PTR_EQ(w, w->sym->def);
             REQUIRE_SIZING_EQ(s_sizing_int, w->sym->size);
         }
-        REQUIRE_EXPR(Decl, w, exprs[decls->specs->enum_init->offset + 2])
+        REQUIRE_EXPR(Decl, w, exprs[decls->specs->enum_init->seq.off + 2])
         {
             REQUIRE_EQ(26, w->sym->enum_value);
             REQUIRE_PTR_EQ(w, w->sym->def);
@@ -1579,29 +1500,29 @@ int parse_typedefs(struct TestState* state)
     const TypeStr i = {.buf = {1, TYPE_BYTE_INT}};
 
     struct Expr** const exprs = (struct Expr**)test.parser->expr_seqs.data;
-    REQUIRE_EQ(3, test.parser->top->extent);
-    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->offset])
+    REQUIRE_EQ(3, test.parser->top->seq.ext);
+    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->seq.off])
     {
-        REQUIRE_EQ(1, decls->extent);
-        REQUIRE_EXPR(Decl, w, exprs[decls->offset]) { REQUIRE_TYPESTR_EQ(i, w->sym->type); }
+        REQUIRE_EQ(1, decls->seq.ext);
+        REQUIRE_EXPR(Decl, w, exprs[decls->seq.off]) { REQUIRE_TYPESTR_EQ(i, w->sym->type); }
     }
-    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->offset + 1])
+    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->seq.off + 1])
     {
-        REQUIRE_EQ(1, decls->extent);
-        REQUIRE_EXPR(Decl, w, exprs[decls->offset]) { REQUIRE_TYPESTR_EQ(i, w->sym->type); }
+        REQUIRE_EQ(1, decls->seq.ext);
+        REQUIRE_EXPR(Decl, w, exprs[decls->seq.off]) { REQUIRE_TYPESTR_EQ(i, w->sym->type); }
     }
-    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->offset + 2])
+    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->seq.off + 2])
     {
-        REQUIRE_EQ(1, decls->extent);
-        REQUIRE_EXPR(Decl, w, exprs[decls->offset])
+        REQUIRE_EQ(1, decls->seq.ext);
+        REQUIRE_EXPR(Decl, w, exprs[decls->seq.off])
         {
             REQUIRE_AST(StmtBlock, body, w->init)
             {
-                REQUIRE_EQ(1, body->extent);
-                REQUIRE_EXPR(StmtDecls, decls, exprs[body->offset])
+                REQUIRE_EQ(1, body->seq.ext);
+                REQUIRE_EXPR(StmtDecls, decls, exprs[body->seq.off])
                 {
-                    REQUIRE_EQ(1, decls->extent);
-                    REQUIRE_EXPR(Decl, w, exprs[decls->offset])
+                    REQUIRE_EQ(1, decls->seq.ext);
+                    REQUIRE_EXPR(Decl, w, exprs[decls->seq.off])
                     {
                         REQUIRE_TYPESTR_EQ(i, w->sym->type);
                         REQUIRE_SIZING_EQ(s_sizing_int, w->sym->size);
@@ -1635,18 +1556,18 @@ int parse_aggregates(struct TestState* state)
     rc = 0;
 
     struct Ast** const asts = test.parser->expr_seqs.data;
-    REQUIRE_EQ(2, test.parser->top->extent);
-    REQUIRE_AST(StmtDecls, decls, asts[test.parser->top->offset + 1])
+    REQUIRE_EQ(2, test.parser->top->seq.ext);
+    REQUIRE_AST(StmtDecls, decls, asts[test.parser->top->seq.off + 1])
     {
-        REQUIRE_EQ(1, decls->extent);
-        REQUIRE_AST(Decl, w, asts[decls->offset])
+        REQUIRE_EQ(1, decls->seq.ext);
+        REQUIRE_AST(Decl, w, asts[decls->seq.off])
         REQUIRE_AST(StmtBlock, body, w->init)
         {
-            REQUIRE_EQ(2, body->extent);
-            REQUIRE_AST(StmtDecls, a, asts[body->offset])
+            REQUIRE_EQ(2, body->seq.ext);
+            REQUIRE_AST(StmtDecls, a, asts[body->seq.off])
             {
-                REQUIRE_EQ(1, a->extent);
-                REQUIRE_AST(Decl, d, asts[a->offset])
+                REQUIRE_EQ(1, a->seq.ext);
+                REQUIRE_AST(Decl, d, asts[a->seq.off])
                 REQUIRE_AST(AstInit, i, d->init)
                 {
                     REQUIRE_EQ(4, i->offset);
@@ -1661,7 +1582,7 @@ int parse_aggregates(struct TestState* state)
                     REQUIRE_AST(AstInit, ii, nn->init) { REQUIRE_EQ(4, ii->offset); }
                 }
             }
-            REQUIRE_AST(ExprField, f, asts[body->offset + 1])
+            REQUIRE_AST(ExprField, f, asts[body->seq.off + 1])
             {
                 REQUIRE_EQ(0, f->is_arrow);
                 REQUIRE(f->sym);
@@ -1803,11 +1724,11 @@ int parse_params(struct TestState* state)
 
     Array arr = {0};
     struct Expr** const exprs = (struct Expr**)test.parser->expr_seqs.data;
-    REQUIRE_EQ(5, test.parser->top->extent);
-    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->offset])
+    REQUIRE_EQ(5, test.parser->top->seq.ext);
+    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->seq.off])
     {
-        REQUIRE_EQ(1, decls->extent);
-        REQUIRE_EXPR(Decl, w, exprs[decls->offset])
+        REQUIRE_EQ(1, decls->seq.ext);
+        REQUIRE_EXPR(Decl, w, exprs[decls->seq.off])
         {
             array_clear(&arr);
             typestr_fmt(test.elab->types, &w->sym->type, &arr);
@@ -1815,10 +1736,10 @@ int parse_params(struct TestState* state)
             REQUIRE_STR_EQ("function of (pointer to int) returning int", arr.data);
         }
     }
-    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->offset + 1])
+    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->seq.off + 1])
     {
-        REQUIRE_EQ(1, decls->extent);
-        REQUIRE_EXPR(Decl, w, exprs[decls->offset])
+        REQUIRE_EQ(1, decls->seq.ext);
+        REQUIRE_EXPR(Decl, w, exprs[decls->seq.off])
         {
             array_clear(&arr);
             typestr_fmt(test.elab->types, &w->sym->type, &arr);
@@ -1826,10 +1747,10 @@ int parse_params(struct TestState* state)
             REQUIRE_STR_EQ("function of (pointer to int) returning int", arr.data);
         }
     }
-    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->offset + 2])
+    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->seq.off + 2])
     {
-        REQUIRE_EQ(1, decls->extent);
-        REQUIRE_EXPR(Decl, w, exprs[decls->offset])
+        REQUIRE_EQ(1, decls->seq.ext);
+        REQUIRE_EXPR(Decl, w, exprs[decls->seq.off])
         {
             array_clear(&arr);
             typestr_fmt(test.elab->types, &w->sym->type, &arr);
@@ -1837,10 +1758,10 @@ int parse_params(struct TestState* state)
             REQUIRE_STR_EQ("function of (pointer to __builtin_va_list) returning int", arr.data);
         }
     }
-    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->offset + 4])
+    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->seq.off + 4])
     {
-        REQUIRE_EQ(1, decls->extent);
-        REQUIRE_EXPR(Decl, w, exprs[decls->offset])
+        REQUIRE_EQ(1, decls->seq.ext);
+        REQUIRE_EXPR(Decl, w, exprs[decls->seq.off])
         {
             array_clear(&arr);
             typestr_fmt(test.elab->types, &w->sym->type, &arr);
@@ -1848,11 +1769,11 @@ int parse_params(struct TestState* state)
             REQUIRE_STR_EQ("function of (pointer to int) returning int", arr.data);
             REQUIRE_AST(DeclFn, fn, &w->type->ast)
             {
-                REQUIRE_EQ(1, fn->extent);
-                REQUIRE_EXPR(StmtDecls, arg1s, exprs[fn->offset])
+                REQUIRE_EQ(1, fn->seq.ext);
+                REQUIRE_EXPR(StmtDecls, arg1s, exprs[fn->seq.off])
                 {
-                    REQUIRE_EQ(1, arg1s->extent);
-                    REQUIRE_EXPR(Decl, arg1, exprs[arg1s->offset])
+                    REQUIRE_EQ(1, arg1s->seq.ext);
+                    REQUIRE_EXPR(Decl, arg1, exprs[arg1s->seq.off])
                     {
                         array_clear(&arr);
                         typestr_fmt(test.elab->types, &arg1->sym->type, &arr);
@@ -4117,11 +4038,11 @@ int test_be_static_init(TestState* state, StandardTest* test)
                        "static void* ptrs[] = { foo, bar };\n"));
 
     struct Expr** const exprs = (struct Expr**)test->parser->expr_seqs.data;
-    REQUIRE_EQ(6, test->parser->top->extent);
-    REQUIRE_EXPR(StmtDecls, decls, exprs[test->parser->top->offset + 1])
+    REQUIRE_EQ(6, test->parser->top->seq.ext);
+    REQUIRE_EXPR(StmtDecls, decls, exprs[test->parser->top->seq.off + 1])
     {
-        REQUIRE_EQ(1, decls->extent);
-        REQUIRE_EXPR(Decl, w, exprs[decls->offset])
+        REQUIRE_EQ(1, decls->seq.ext);
+        REQUIRE_EXPR(Decl, w, exprs[decls->seq.off])
         {
             REQUIRE_AST(AstInit, w_init, w->init)
             {

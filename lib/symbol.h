@@ -121,12 +121,7 @@ typedef struct Decl
     DeclSpecs* specs;
     Ast* init;
 
-    // View<StmtDecls*>
-    struct
-    {
-        size_t offset;
-        size_t extent;
-    } decl_list;
+    SeqView decl_list;
 
     struct Decl* prev_decl;
     struct Symbol* sym;

@@ -828,7 +828,7 @@ static int di_fill_frame(DInitFrame* frame,
                     return parser_ferror(rc, "error: invalid member designator for array object\n");
                 }
                 TypeStr ts = {0};
-                elaborate_expr(elab, NULL, designator->array_expr, &ts);
+                elaborate_expr(elab, designator->array_expr, &ts);
                 int32_t k = i32constant_or_err(&ts, designator->array_expr->tok);
                 if (k >= frame->extent)
                 {
@@ -931,7 +931,7 @@ static void elaborate_init_ty_AstInit(struct Elaborator* elab, size_t offset, co
     if (typestr_is_char_array(dty) && init->is_braced_strlit)
     {
         TypeStr ts;
-        elaborate_expr(elab, NULL, (Expr*)init->init, &ts);
+        elaborate_expr(elab, (Expr*)init->init, &ts);
         return;
     }
 
@@ -976,7 +976,7 @@ static void elaborate_init_ty_AstInit(struct Elaborator* elab, size_t offset, co
             Expr* expr = (Expr*)init->init;
             // standard expression initialization
             struct TypeStr ts, ts_decay;
-            elaborate_expr(elab, NULL, expr, &ts);
+            elaborate_expr(elab, expr, &ts);
             ts_decay = ts;
             const int ts_decay_addr_taken = typestr_decay(&ts_decay);
             const int ts_is_strlit = expr->kind == EXPR_LIT && expr->tok->type == LEX_STRING;
@@ -1020,7 +1020,7 @@ static void elaborate_init_ty(struct Elaborator* elab, size_t offset, const Type
     const char tyb = typestr_byte(dty);
     switch (tyb)
     {
-        case TYPE_BYTE_FUNCTION: elaborate_stmt(elab, NULL, ast); break;
+        case TYPE_BYTE_FUNCTION: elaborate_stmt(elab, ast); break;
         case TYPE_BYTE_ARRAY:
         case TYPE_BYTE_UNK_ARRAY:
         {
@@ -1038,7 +1038,7 @@ static void elaborate_init_ty(struct Elaborator* elab, size_t offset, const Type
                                  "error: array initializer must be an initializer list or a string literal\n");
                 break;
             }
-            elaborate_expr(elab, NULL, (Expr*)ast, &ts);
+            elaborate_expr(elab, (Expr*)ast, &ts);
             break;
         }
         case TYPE_BYTE_UNION:
@@ -1053,7 +1053,7 @@ static void elaborate_init_ty(struct Elaborator* elab, size_t offset, const Type
             Expr* expr = (Expr*)ast;
             // standard expression initialization
             struct TypeStr ts;
-            elaborate_expr_decay(elab, NULL, expr, &ts);
+            elaborate_expr_decay(elab, expr, &ts);
             typestr_implicit_conversion(elab->types, ast->tok ? &ast->tok->rc : NULL, &ts, dty);
         }
     }
@@ -1140,8 +1140,8 @@ static void elaborate_stmt(struct Elaborator* elab, struct Ast* ast)
         {
             struct StmtDecls* stmt = top;
             elaborate_declspecs(elab, stmt->specs);
-            Decl* const* const decls = (void*)((void**)elab->p->expr_seqs.data + stmt->decls.off);
-            for (size_t i = 0; i < stmt->decls.ext; ++i)
+            Decl* const* const decls = (void*)((void**)elab->p->expr_seqs.data + stmt->seq.off);
+            for (size_t i = 0; i < stmt->seq.ext; ++i)
                 elaborate_decl(elab, decls[i]);
             return;
         }
@@ -1616,7 +1616,7 @@ static void elaborate_decltype(Elaborator* elab, AstType* ast)
             if (arr->arity != NULL)
             {
                 TypeStr ts = {0};
-                elaborate_expr(elab, NULL, arr->arity, &ts);
+                elaborate_expr(elab, arr->arity, &ts);
                 int arity = i32constant_or_err(&ts, arr->arity->tok);
                 if (arity <= 0)
                 {
@@ -1636,7 +1636,7 @@ static void elaborate_decltype(Elaborator* elab, AstType* ast)
             elaborate_decltype(elab, fn->type);
             if (!fn->is_param_list)
             {
-                elaborate_stmts(elab, NULL, fn->seq);
+                elaborate_stmts(elab, fn->seq);
             }
             break;
         }
@@ -1694,7 +1694,7 @@ static int elaborate_constinit(
         else
         {
             TypeStr ty = {0};
-            elaborate_expr(elab, NULL, (Expr*)ast, &ty);
+            elaborate_expr(elab, (Expr*)ast, &ty);
             if (!ty.c.is_const)
             {
                 return parser_tok_error(ast->tok, "error: expected constant expression\n");
@@ -1901,12 +1901,14 @@ static int elaborate_declspecs(struct Elaborator* elab, struct DeclSpecs* specs)
         if (specs->enum_init)
         {
             struct StmtDecls* block = specs->enum_init;
-            struct Expr** const seqs = elab->p->expr_seqs.data;
+            Decl** const seqs = (Decl**)((void**)elab->p->expr_seqs.data + block->seq.off);
             int enum_value = -1;
-            for (size_t i = 0; i < block->extent; ++i)
+            for (size_t i = 0; i < block->seq.ext; ++i)
             {
-                if (seqs[i + block->offset]->kind != AST_DECL) abort();
-                struct Decl* edecl = (struct Decl*)seqs[i + block->offset];
+#ifndef NDEBUG
+                if (seqs[i]->kind != AST_DECL) abort();
+#endif
+                struct Decl* edecl = seqs[i];
                 UNWRAP(elaborate_decl(elab, edecl));
                 if (edecl->init)
                 {
@@ -1916,7 +1918,7 @@ static int elaborate_declspecs(struct Elaborator* elab, struct DeclSpecs* specs)
                     }
 
                     TypeStr ts = {0};
-                    elaborate_expr(elab, NULL, (Expr*)edecl->init, &ts);
+                    elaborate_expr(elab, (Expr*)edecl->init, &ts);
                     enum_value = i32constant_or_err(&ts, edecl->init->tok);
                 }
                 else
@@ -1938,16 +1940,17 @@ static int elaborate_declspecs(struct Elaborator* elab, struct DeclSpecs* specs)
 
             Symbol** p_next_decl = &specs->sym->first_member;
 
-            struct Ast** const seqs = elab->p->expr_seqs.data;
-            for (size_t i = 0; i < block->extent; ++i)
+            void** expr_seqs = elab->p->expr_seqs.data;
+            StmtDecls** const seqs = (StmtDecls**)expr_seqs + block->seq.off;
+            for (size_t i = 0; i < block->seq.ext; ++i)
             {
-                if (seqs[i + block->offset]->kind != STMT_DECLS) abort();
-                struct StmtDecls* decls = (struct StmtDecls*)seqs[i + block->offset];
+                if (seqs[i]->kind != STMT_DECLS) abort();
+                struct StmtDecls* decls = seqs[i];
                 UNWRAP(elaborate_declspecs(elab, decls->specs));
-                for (size_t j = 0; j < decls->extent; ++j)
+                Decl** const decl_seqs = (Decl**)expr_seqs + decls->seq.off;
+                for (size_t j = 0; j < decls->seq.ext; ++j)
                 {
-                    if (seqs[decls->offset + j]->kind != AST_DECL) abort();
-                    struct Decl* field = (struct Decl*)seqs[decls->offset + j];
+                    struct Decl* field = decl_seqs[j];
                     UNWRAP(elaborate_decl(elab, field));
                     *p_next_decl = field->sym;
                     p_next_decl = &field->sym->next_field;
@@ -2003,7 +2006,7 @@ int elaborate(struct Elaborator* elab)
 {
     struct Parser* const p = elab->p;
     if (!p->top) abort();
-    elaborate_stmt(elab, NULL, &p->top->ast);
+    elaborate_stmt(elab, &p->top->ast);
     return parser_has_errors();
 }
 

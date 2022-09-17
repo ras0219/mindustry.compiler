@@ -208,8 +208,10 @@ static void parse_push_expr_seq_arr(Parser* p, const Array* arr, SeqView* out_vi
 #endif
     array_push(&p->expr_seqs, arr->data, arr->sz);
 }
-static __forceinline void parse_push_decl_seq(struct Parser* p, struct Decl** data, size_t n)
+static __forceinline void parse_push_decl_seq(struct Parser* p, struct Decl** data, size_t n, SeqView* out_view)
 {
+    out_view->off = arrptr_size(&p->expr_seqs);
+    out_view->ext = n;
     if (n == 0) return;
     for (size_t i = 0; i < n; ++i)
     {
@@ -906,10 +908,8 @@ static struct StmtDecls* push_stmt_decls(struct Parser* p, struct DeclSpecs* spe
     struct StmtDecls ret = {
         .kind = STMT_DECLS,
         .specs = specs,
-        .offset = array_size(&p->expr_seqs, sizeof(void*)),
-        .extent = array_size(arr, sizeof(void*)),
     };
-    parse_push_expr_seq_arr(p, arr);
+    parse_push_expr_seq_arr(p, arr, &ret.seq);
     return pool_push(&p->ast_pools[STMT_DECLS], &ret, sizeof(ret));
 }
 static struct StmtDecls* push_stmt_decl(struct Parser* p, struct DeclSpecs* specs, struct Decl* decl)
@@ -917,17 +917,15 @@ static struct StmtDecls* push_stmt_decl(struct Parser* p, struct DeclSpecs* spec
     struct StmtDecls ret = {
         .kind = STMT_DECLS,
         .specs = specs,
-        .offset = array_size(&p->expr_seqs, sizeof(void*)),
-        .extent = 1,
     };
-    parse_push_decl_seq(p, &decl, 1);
+    parse_push_decl_seq(p, &decl, 1, &ret.seq);
     return pool_push(&p->ast_pools[STMT_DECLS], &ret, sizeof(ret));
 }
 
 static const struct Token* parse_param_list_knr(Parser* p, const struct Token* cur_tok, struct DeclFn* fn)
 {
     fn->is_param_list = 1;
-    fn->offset = arrptr_size(&p->token_seqs);
+    fn->seq.off = arrptr_size(&p->token_seqs);
     while (1)
     {
         if (cur_tok->type != LEX_IDENT)
@@ -944,7 +942,7 @@ static const struct Token* parse_param_list_knr(Parser* p, const struct Token* c
         PARSER_DO(token_consume_sym(p, cur_tok, ')', " in function declaration"));
         break;
     }
-    fn->extent = arrptr_size(&p->token_seqs) - fn->offset;
+    fn->seq.ext = arrptr_size(&p->token_seqs) - fn->seq.off;
 
 fail:
     return cur_tok;
@@ -982,9 +980,7 @@ static const struct Token* parse_param_list(Parser* p, const struct Token* cur_t
         }
         PARSER_FAIL("error: expected ',' and further parameter declarations or ')'\n");
     }
-    fn->offset = array_size(&p->expr_seqs, sizeof(struct Expr*));
-    fn->extent = array_size(&args_array, sizeof(StmtDecls*));
-    parse_push_expr_seq_arr(p, &args_array);
+    parse_push_expr_seq_arr(p, &args_array, &fn->seq);
 
 fail:
     array_destroy(&args_array);
@@ -1453,16 +1449,16 @@ static const struct Token* parse_fnbody(Parser* p, const struct Token* cur_tok, 
     DeclFn* fn = (DeclFn*)pdecl->type;
     if (fn->is_param_list)
     {
-        if (!pdecl->decl_list.extent)
+        if (!pdecl->decl_list.ext)
         {
             PARSER_FAIL_TOK(cur_tok,
                             "error: an identifier list requires all identifiers to be typed in the definition.\n");
         }
         // Check uniqueness
-        const Token* const* const toks = (const Token* const*)p->token_seqs.data + fn->offset;
-        for (size_t i = 0; i < fn->extent; ++i)
+        const Token* const* const toks = (const Token* const*)p->token_seqs.data + fn->seq.off;
+        for (size_t i = 0; i < fn->seq.ext; ++i)
         {
-            for (size_t j = i + 1; j < fn->extent; ++j)
+            for (size_t j = i + 1; j < fn->seq.ext; ++j)
             {
                 if (toks[i]->sp_offset == toks[j]->sp_offset)
                 {
@@ -1471,25 +1467,25 @@ static const struct Token* parse_fnbody(Parser* p, const struct Token* cur_tok, 
             }
         }
 
-        void* const* const decls = (void**)p->expr_seqs.data + pdecl->decl_list.offset;
-        for (size_t i = 0; i < pdecl->decl_list.extent; ++i)
+        void* const* const decls = (void**)p->expr_seqs.data + pdecl->decl_list.off;
+        for (size_t i = 0; i < pdecl->decl_list.ext; ++i)
         {
             StmtDecls* argdecl = decls[i];
-            void* const* const decls2 = (void**)p->expr_seqs.data + argdecl->offset;
-            for (size_t j = 0; j < argdecl->extent; ++j)
+            void* const* const decls2 = (void**)p->expr_seqs.data + argdecl->seq.off;
+            for (size_t j = 0; j < argdecl->seq.ext; ++j)
             {
                 PARSER_CHECK_NOT(insert_definition(p, decls2[j]));
             }
         }
     }
-    else if (fn->extent > 0)
+    else if (fn->seq.ext > 0)
     {
-        void* const* const decls = (void**)p->expr_seqs.data + fn->offset;
-        for (size_t i = 0; i < fn->extent; ++i)
+        void* const* const decls = (void**)p->expr_seqs.data + fn->seq.off;
+        for (size_t i = 0; i < fn->seq.ext; ++i)
         {
             StmtDecls* argdecl = decls[i];
-            if (argdecl->extent != 1) abort();
-            PARSER_CHECK_NOT(insert_definition(p, ((void**)p->expr_seqs.data)[argdecl->offset]));
+            if (argdecl->seq.ext != 1) abort();
+            PARSER_CHECK_NOT(insert_definition(p, ((void**)p->expr_seqs.data)[argdecl->seq.off]));
         }
     }
     p->parent = pdecl;
@@ -1520,9 +1516,7 @@ static const struct Token* parse_decl_list(Parser* p, const struct Token* cur_to
         arrptr_push(&stmts, push_stmt_decls(p, specs, &decls));
     } while (cur_tok->type != TOKEN_SYM1('{'));
 
-    decl->decl_list.offset = array_size(&p->expr_seqs, sizeof(struct Expr*));
-    decl->decl_list.extent = array_size(&stmts, sizeof(StmtDecls*));
-    parse_push_expr_seq_arr(p, &stmts);
+    parse_push_expr_seq_arr(p, &stmts, &decl->decl_list);
 
 fail:
     array_destroy(&decls);
@@ -1669,16 +1663,16 @@ static const struct Token* parse_su_body(struct Parser* p, const struct Token* c
     p->cur_su = specs->sym;
     scope_push_subscope(&p->su_scope);
     PARSER_DO(parse_stmt_block(p, cur_tok, &specs->suinit));
-    for (size_t i = 0; i < specs->suinit->extent; ++i)
+    for (size_t i = 0; i < specs->suinit->seq.ext; ++i)
     {
-        StmtDecls* decls = ((StmtDecls**)p->expr_seqs.data)[specs->suinit->offset + i];
-        if (decls->extent == 0 && !decls->specs->name)
+        StmtDecls* decls = ((StmtDecls**)p->expr_seqs.data)[specs->suinit->seq.off + i];
+        if (decls->seq.ext == 0 && !decls->specs->name)
         {
             // Inject anonymous declarations into suinit bodies
             Decl* anon_decl = parse_alloc_decl(p, decls->specs);
             anon_decl->type = &decls->specs->ast_type;
-            decls->offset = array_size(&p->expr_seqs, sizeof(void*));
-            decls->extent = 1;
+            decls->seq.off = array_size(&p->expr_seqs, sizeof(void*));
+            decls->seq.ext = 1;
             arrptr_push(&p->expr_seqs, anon_decl);
             PARSER_CHECK_NOT(insert_definition(p, anon_decl));
         }
@@ -1693,7 +1687,7 @@ fail:
     return cur_tok;
 }
 
-static const struct Token* parse_stmts(Parser* p, const struct Token* cur_tok, size_t* p_offset, size_t* p_extent)
+static const struct Token* parse_stmts(Parser* p, const struct Token* cur_tok, SeqView* out_seq)
 {
     struct Array arr_stmts = {0};
     do
@@ -1702,9 +1696,7 @@ static const struct Token* parse_stmts(Parser* p, const struct Token* cur_tok, s
         PARSER_DO(parse_stmt(p, cur_tok, array_alloc(&arr_stmts, sizeof(void*))));
         if ((*(struct Ast**)array_back(&arr_stmts, sizeof(void*)))->kind == -1) abort();
     } while (1);
-    *p_offset = array_size(&p->expr_seqs, sizeof(void*));
-    *p_extent = array_size(&arr_stmts, sizeof(void*));
-    parse_push_expr_seq_arr(p, &arr_stmts);
+    parse_push_expr_seq_arr(p, &arr_stmts, out_seq);
 fail:
     array_destroy(&arr_stmts);
     return cur_tok;
@@ -1715,7 +1707,7 @@ static const struct Token* parse_stmt_block(Parser* p, const struct Token* cur_t
     struct StmtBlock ret = {
         .kind = STMT_BLOCK,
     };
-    PARSER_DO(parse_stmts(p, cur_tok, &ret.offset, &ret.extent));
+    PARSER_DO(parse_stmts(p, cur_tok, &ret.seq));
     *p_expr = pool_push(&p->ast_pools[STMT_BLOCK], &ret, sizeof(ret));
 fail:
     return cur_tok;
@@ -1811,7 +1803,7 @@ static const struct Token* parse_stmt(Parser* p, const struct Token* cur_tok, st
             PARSER_DO(parse_conditional(p, cur_tok, &ret.expr));
             PARSER_DO(token_consume_sym(p, cur_tok, '{', "in switch statement"));
             scope_push_subscope(&p->scope);
-            PARSER_DO(parse_stmts(p, cur_tok, &ret.offset, &ret.extent));
+            PARSER_DO(parse_stmts(p, cur_tok, &ret.seq));
             scope_pop_subscope(&p->scope);
             PARSER_DO(token_consume_sym(p, cur_tok, '}', "in switch statement"));
             *p_expr = pool_push(&p->ast_pools[STMT_SWITCH], &ret, sizeof(ret));
@@ -2044,10 +2036,10 @@ static void parser_dump_ast(struct Parser* p, FILE* f, Ast* ast, int depth)
         {
             struct StmtBlock* blk = (void*)ast;
             fprintf(f, "(STMT_BLOCK");
-            for (size_t i = 0; i < blk->extent; ++i)
+            for (size_t i = 0; i < blk->seq.ext; ++i)
             {
                 nl_indent(f, depth);
-                parser_dump_ast(p, f, ((Ast**)p->expr_seqs.data)[blk->offset + i], depth + 1);
+                parser_dump_ast(p, f, ((Ast**)p->expr_seqs.data)[blk->seq.off + i], depth + 1);
             }
             fprintf(f, ")");
             break;
@@ -2061,10 +2053,10 @@ static void parser_dump_ast(struct Parser* p, FILE* f, Ast* ast, int depth)
                 nl_indent(f, depth);
                 parser_dump_ast(p, f, &blk->specs->ast, depth + 1);
             }
-            for (size_t i = 0; i < blk->extent; ++i)
+            for (size_t i = 0; i < blk->seq.ext; ++i)
             {
                 nl_indent(f, depth);
-                parser_dump_ast(p, f, ((Ast**)p->expr_seqs.data)[blk->offset + i], depth + 1);
+                parser_dump_ast(p, f, ((Ast**)p->expr_seqs.data)[blk->seq.off + i], depth + 1);
             }
             fprintf(f, ")");
             break;

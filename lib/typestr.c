@@ -302,13 +302,13 @@ static void typestr_append_decltype(const void* const* expr_seqs, TypeTable* tt,
             }
             else
             {
-                const StmtDecls* const* const d_seq = (void*)(expr_seqs + d->offset);
-                for (size_t i = 0; i < d->extent; ++i)
+                const StmtDecls* const* const d_seq = (void*)(expr_seqs + d->seq.off);
+                for (size_t i = 0; i < d->seq.ext; ++i)
                 {
                     struct TypeStr* arg_ts = array_alloc(&args, sizeof(struct TypeStr));
                     const struct StmtDecls* arg_decls = d_seq[i];
-                    if (arg_decls->decls.ext != 1) abort();
-                    typestr_from_decltype_Decl(expr_seqs, tt, arg_ts, expr_seqs[arg_decls->decls.off]);
+                    if (arg_decls->seq.ext != 1) abort();
+                    typestr_from_decltype_Decl(expr_seqs, tt, arg_ts, expr_seqs[arg_decls->seq.off]);
                     arg_ts->c = s_not_constant;
                 }
                 if (d->is_varargs)
