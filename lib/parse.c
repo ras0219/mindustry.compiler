@@ -926,13 +926,23 @@ static const struct Token* parse_param_list_knr(Parser* p, const struct Token* c
 {
     fn->is_param_list = 1;
     fn->seq.off = arrptr_size(&p->token_seqs);
+    fn->seq.ext = 0;
     while (1)
     {
         if (cur_tok->type != LEX_IDENT)
         {
             PARSER_FAIL("error: expected identifier in parameter list.\n");
         }
+        const Token* const* const toks = (const Token* const*)p->token_seqs.data + fn->seq.off;
+        for (size_t i = 0; i < fn->seq.ext; ++i)
+        {
+            if (toks[i]->sp_offset == cur_tok->sp_offset)
+            {
+                PARSER_FAIL("error: duplicate identifier in parameter list\n");
+            }
+        }
         arrptr_push(&p->token_seqs, cur_tok);
+        ++fn->seq.ext;
         ++cur_tok;
         if (cur_tok->type == TOKEN_SYM1(','))
         {
@@ -942,8 +952,6 @@ static const struct Token* parse_param_list_knr(Parser* p, const struct Token* c
         PARSER_DO(token_consume_sym(p, cur_tok, ')', " in function declaration"));
         break;
     }
-    fn->seq.ext = arrptr_size(&p->token_seqs) - fn->seq.off;
-
 fail:
     return cur_tok;
 }
@@ -1440,67 +1448,6 @@ static int insert_typedef(Parser* p, Decl* decl)
     return 0;
 }
 
-static const struct Token* parse_fnbody(Parser* p, const struct Token* cur_tok, Decl* pdecl)
-{
-    Decl* const prev_parent = p->parent;
-    scope_push_subscope(&p->scope);
-    if (pdecl->type->kind != AST_DECLFN)
-        PARSER_FAIL_TOK(cur_tok, "error: only function types can be defined with a code block\n");
-    DeclFn* fn = (DeclFn*)pdecl->type;
-    if (fn->is_param_list)
-    {
-        if (!pdecl->decl_list.ext)
-        {
-            PARSER_FAIL_TOK(cur_tok,
-                            "error: an identifier list requires all identifiers to be typed in the definition.\n");
-        }
-        // Check uniqueness
-        const Token* const* const toks = (const Token* const*)p->token_seqs.data + fn->seq.off;
-        for (size_t i = 0; i < fn->seq.ext; ++i)
-        {
-            for (size_t j = i + 1; j < fn->seq.ext; ++j)
-            {
-                if (toks[i]->sp_offset == toks[j]->sp_offset)
-                {
-                    PARSER_FAIL_TOK(toks[j], "error: duplicate parameter in parameter list\n");
-                }
-            }
-        }
-
-        void* const* const decls = (void**)p->expr_seqs.data + pdecl->decl_list.off;
-        for (size_t i = 0; i < pdecl->decl_list.ext; ++i)
-        {
-            StmtDecls* argdecl = decls[i];
-            void* const* const decls2 = (void**)p->expr_seqs.data + argdecl->seq.off;
-            for (size_t j = 0; j < argdecl->seq.ext; ++j)
-            {
-                PARSER_CHECK_NOT(insert_definition(p, decls2[j]));
-            }
-        }
-    }
-    else if (fn->seq.ext > 0)
-    {
-        void* const* const decls = (void**)p->expr_seqs.data + fn->seq.off;
-        for (size_t i = 0; i < fn->seq.ext; ++i)
-        {
-            StmtDecls* argdecl = decls[i];
-            if (argdecl->seq.ext != 1) abort();
-            PARSER_CHECK_NOT(insert_definition(p, ((void**)p->expr_seqs.data)[argdecl->seq.off]));
-        }
-    }
-    p->parent = pdecl;
-    struct StmtBlock* init;
-    PARSER_DO(parse_stmt_block(p, cur_tok + 1, &init));
-    pdecl->init = &init->ast;
-    PARSER_DO(token_consume_sym(p, cur_tok, '}', " in function definition"));
-fail:
-    // Remove function arguments from the scope
-    scope_pop_subscope(&p->scope);
-    p->parent = prev_parent;
-
-    return cur_tok;
-}
-
 static const struct Token* parse_decl_list(Parser* p, const struct Token* cur_tok, Decl* decl)
 {
     Array decls = {0};
@@ -1524,6 +1471,65 @@ fail:
     return cur_tok;
 }
 
+static const struct Token* parse_fnbody(Parser* p, const struct Token* cur_tok, Decl* pdecl)
+{
+    Decl* const prev_parent = p->parent;
+    scope_push_subscope(&p->scope);
+    p->parent = pdecl;
+    if (pdecl->type->kind != AST_DECLFN) abort();
+    DeclFn* fn = (DeclFn*)pdecl->type;
+    if (fn->is_param_list)
+    {
+        if (cur_tok->basic_type == LEX_IDENT)
+        {
+            PARSER_DO(parse_decl_list(p, cur_tok, pdecl));
+        }
+        const Token* const* toks = (const Token* const*)p->token_seqs.data + fn->seq.off;
+
+        size_t n = 0;
+        void* const* const decls = (void**)p->expr_seqs.data + pdecl->decl_list.off;
+        for (size_t i = 0; i < pdecl->decl_list.ext; ++i)
+        {
+            StmtDecls* argdecl = decls[i];
+            Decl* const* const decls2 = (Decl**)p->expr_seqs.data + argdecl->seq.off;
+            for (size_t j = 0; j < argdecl->seq.ext; ++j)
+            {
+                for (size_t k = 0; k < fn->seq.ext; ++k)
+                {
+                    if (toks[k]->sp_offset == decls2[j]->tok->sp_offset) goto found_param;
+                }
+                PARSER_FAIL_TOK(decls2[j]->tok, "declaration does not match any parameters");
+            found_param:
+                ++n;
+            }
+        }
+        if (n != fn->seq.ext)
+        {
+            PARSER_FAIL("expected all parameters to be declared");
+        }
+    }
+    else if (fn->seq.ext > 0)
+    {
+        void* const* const decls = (void**)p->expr_seqs.data + fn->seq.off;
+        for (size_t i = 0; i < fn->seq.ext; ++i)
+        {
+            StmtDecls* argdecl = decls[i];
+            if (argdecl->seq.ext != 1) abort();
+            PARSER_CHECK_NOT(insert_definition(p, ((void**)p->expr_seqs.data)[argdecl->seq.off]));
+        }
+    }
+    struct StmtBlock* init;
+    PARSER_DO(parse_stmt_block(p, cur_tok + 1, &init));
+    pdecl->init = &init->ast;
+    PARSER_DO(token_consume_sym(p, cur_tok, '}', " in function definition"));
+fail:
+    // Remove function arguments from the scope
+    scope_pop_subscope(&p->scope);
+    p->parent = prev_parent;
+
+    return cur_tok;
+}
+
 /// \param pdecls - Array<Decl*>
 static const struct Token* parse_decls(Parser* p,
                                        const struct Token* cur_tok,
@@ -1539,14 +1545,8 @@ static const struct Token* parse_decls(Parser* p,
         if (pdecl->type->kind == AST_DECLFN)
         {
             DeclFn* fn = (DeclFn*)pdecl->type;
-            if (fn->is_param_list && cur_tok->basic_type == LEX_IDENT)
+            if (fn->is_param_list && cur_tok->basic_type == LEX_IDENT || cur_tok->type == TOKEN_SYM1('{'))
             {
-                PARSER_DO(parse_decl_list(p, cur_tok, pdecl));
-                goto fndef;
-            }
-            if (cur_tok->type == TOKEN_SYM1('{'))
-            {
-            fndef:
                 if (!pdecl->tok) PARSER_FAIL_TOK(cur_tok, "error: anonymous function declaration not allowed\n");
                 if (scope_in_subscope(&p->su_scope))
                     PARSER_FAIL_TOK(cur_tok, "error: member function definitions are not allowed\n");
