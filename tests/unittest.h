@@ -43,7 +43,7 @@ typedef struct TestState
 void unittest_print_stack(const struct TestState* state);
 
 #define REQUIRE_FAIL_MSG_IMPL(file, line, fmt, ...)                                                                    \
-    fprintf(stderr, "%s%s:%d: error: " fmt "%s\n", state->colorerr, file, line, __VA_ARGS__, state->colorreset);
+    fprintf(stderr, "%s%s:%d: error: " fmt "%s\n", state->colorerr, file, line, ##__VA_ARGS__, state->colorreset);
 
 #define REQUIRE_FAIL_IMPL(file, line, fmt, ...)                                                                        \
     do                                                                                                                 \

@@ -640,14 +640,6 @@ int parse_initializer_union(struct TestState* state)
     struct Preprocessor* pp = NULL;
     struct Elaborator* elab = NULL;
 
-    SUBTEST(test_elaborate_fail(state,
-                                "union a_t {\n"
-                                "    int a;\n"
-                                "    short b;\n"
-                                "    int c;\n"
-                                "};\n"
-                                "union a_t a = { 1, 2 };\n"));
-
     // from https://en.cppreference.com/w/c/language/struct_initialization
     SUBTEST(test_parse(state,
                        &parser,
@@ -699,7 +691,6 @@ int parse_initializer_array(struct TestState* state)
     struct Preprocessor* pp = NULL;
     struct Elaborator* elab = NULL;
     // from https://en.cppreference.com/w/c/language/array_initialization
-    SUBTEST(test_elaborate_fail(state, "int a[3] = { 1, 2, 3, 4 };\n"));
     SUBTEST(test_parse(state, &parser, &pp, "int a[3] = { 1, 2, 3 };\n"));
 
     elab = my_malloc(sizeof(Elaborator));
@@ -920,34 +911,6 @@ int parse_initializer_expr_designated(struct TestState* state)
                         "struct B {struct A a, b;};\n"
                         "void bar()\n"
                         "{ struct B a = { foo() }; }\n"));
-    rc = 0;
-fail:
-    stdtest_destroy(&test);
-    return rc;
-}
-
-int parse_initializer_expr_sue(struct TestState* state)
-{
-    int rc = 1;
-    StandardTest test = {0};
-    SUBTEST(stdtest_run(state,
-                        &test,
-                        "struct A {int x;};\n"
-                        "struct A foo();\n"
-                        "void bar()\n"
-                        "{ struct A a = foo(); }\n"));
-    SUBTEST(stdtest_run(state,
-                        &test,
-                        "union A {int x;};\n"
-                        "union A foo();\n"
-                        "void bar()\n"
-                        "{ union A a = foo(); }\n"));
-    SUBTEST(stdtest_run(state,
-                        &test,
-                        "enum A {first};\n"
-                        "enum A foo();\n"
-                        "void bar()\n"
-                        "{ enum A a = foo(); }\n"));
     rc = 0;
 fail:
     stdtest_destroy(&test);
@@ -1651,6 +1614,52 @@ static int test_file(struct TestState* state, const char* path)
     rc = 0;
 fail:
     if (parser_has_errors()) parser_print_msgs(stderr), parser_clear_errors();
+    elaborator_destroy(&elab);
+    parser_destroy(&parser);
+    if (pp) preproc_free(pp);
+    if (f) fclose(f);
+    return rc;
+}
+
+static int test_file_fail(struct TestState* state, const char* path)
+{
+    int rc = 1;
+    Preprocessor* pp = NULL;
+    Parser parser = {0};
+    Elaborator elab = {0};
+    FILE* f = fopen(path, "r");
+    if (!f) REQUIRE_FAIL("failed to open test file %s", path);
+
+    parser_clear_errors();
+    pp = preproc_alloc();
+    if (preproc_file(pp, f, path))
+    {
+        rc = 0;
+        goto fail;
+    }
+    if (parser_parse(&parser, preproc_tokens(pp), preproc_stringpool(pp)))
+    {
+        rc = 0;
+        goto fail;
+    }
+    parser_debug_check(&parser);
+    if (parser_has_errors())
+    {
+        rc = 0;
+        goto fail;
+    }
+
+    elaborator_init(&elab, &parser);
+    if (elaborate(&elab))
+    {
+        rc = 0;
+        goto fail;
+    }
+    REQUIRE_FAIL_IMPL(path, 1, "was expected to fail, but passed");
+
+fail:
+    if (parser_has_errors()) parser_print_msgs(stderr), parser_clear_errors();
+    elaborator_destroy(&elab);
     parser_destroy(&parser);
     if (pp) preproc_free(pp);
     if (f) fclose(f);
@@ -1688,6 +1697,45 @@ void test_passing(struct TestState* state)
         array_push_byte(&arr, '\0');
 
         test_file(state, arr.data);
+    }
+
+    closedir(dir);
+    if (f) fclose(f);
+    array_destroy(&arr);
+    array_destroy(&filebuf);
+}
+
+void test_failing(struct TestState* state)
+{
+    Array filebuf = {0};
+    Array arr = {0};
+    assign_path_join(&arr, g_datadir, g_datadir_sz, "tests/fail", sizeof("tests/fail") - 1);
+    DIR* dir = opendir(arr.data);
+    FILE* f = NULL;
+    if (!dir)
+    {
+        fprintf(stderr, "error: opendir(): ");
+        perror(arr.data);
+        exit(1);
+    }
+    const size_t base_sz = arr.sz - 1;
+    struct dirent* ent;
+    while (ent = readdir(dir))
+    {
+        if (ent->d_name[0] == '.' && (ent->d_name[1] == '\0' || (ent->d_name[1] == '.' && ent->d_name[2] == '\0')))
+        {
+            continue;
+        }
+
+        array_shrink(&arr, base_sz, 1);
+#ifdef __APPLE__
+        path_combine(&arr, ent->d_name, ent->d_namlen);
+#else
+        path_combine(&arr, ent->d_name, strlen(ent->d_name));
+#endif
+        array_push_byte(&arr, '\0');
+
+        test_file_fail(state, arr.data);
     }
 
     closedir(dir);
@@ -1787,6 +1835,7 @@ int parse_params(struct TestState* state)
 
     rc = 0;
 fail:
+    array_destroy(&arr);
     stdtest_destroy(&test);
     return rc;
 }
@@ -1838,15 +1887,18 @@ fail:
 
 int require_taca(TestState* state, struct TACAddress* expected, struct TACAddress* actual, const char* file, int line)
 {
+    int rc = 1;
     struct Array buf_expected = {0};
     struct Array buf_actual = {0};
     debug_taca(&buf_expected, expected);
     debug_taca(&buf_actual, actual);
     REQUIRE_MEM_EQ_IMPL(
         file, line, "expected", buf_expected.data, buf_expected.sz, "actual", buf_actual.data, buf_actual.sz);
-    return 0;
+    rc = 0;
 fail:
-    return 1;
+    array_destroy(&buf_expected);
+    array_destroy(&buf_actual);
+    return rc;
 }
 
 int require_tace(TestState* state, struct TACEntry* expected, struct TACEntry* actual, const char* file, int line)
@@ -4325,10 +4377,6 @@ int main(int argc, char** argv)
 
     RUN_TEST(preproc_comma_paste);
     RUN_TEST(parse_strings);
-    RUN_TEST(parse_cmake_size_test);
-    RUN_TEST(parse_fdset);
-    RUN_TEST(parse_primitive_types);
-    RUN_TEST(parse_typedef_enum);
     RUN_TEST(parse_main);
     RUN_TEST(parse_body);
     RUN_TEST(parse_sizeof);
@@ -4347,7 +4395,6 @@ int main(int argc, char** argv)
     RUN_TEST(parse_decls_and_defs);
     RUN_TEST(parse_uuva_list);
     RUN_TEST(parse_shadow);
-    RUN_TEST(parse_initializer_expr_sue);
     RUN_TEST(parse_initializer_expr_designated);
     RUN_TEST(parse_fn_ptr_conversion);
     RUN_TEST(parse_implicit_conversion);
@@ -4368,6 +4415,9 @@ int main(int argc, char** argv)
            state->assertions,
            state->assertionfails,
            _state.colorreset);
+
+    array_destroy(&state->info);
+    array_destroy(&state->stack);
 
     return state->testfails > 0 || state->assertionfails > 0;
 }

@@ -22,6 +22,7 @@ void cg_init(struct CodeGen* cg)
 void cg_destroy(struct CodeGen* cg)
 {
     array_destroy(&cg->const_);
+    array_destroy(&cg->data);
     array_destroy(&cg->code);
     sm_destroy(&cg->file_numbers);
 }

@@ -1960,6 +1960,7 @@ void parser_destroy(struct Parser* p)
 {
     autoheap_destroy(&p->strings_to_free);
     scope_destroy(&p->scope);
+    scope_destroy(&p->su_scope);
     scope_destroy(&p->typedef_scope);
     scope_destroy(&p->type_scope);
 
@@ -1973,6 +1974,7 @@ void parser_destroy(struct Parser* p)
     array_destroy(&p->expr_seqs);
     array_destroy(&p->callparams);
     array_destroy(&p->designators);
+    array_destroy(&p->token_seqs);
 }
 
 __attribute__((unused)) static void* find_with_stride(void* arr_start, size_t arr_size, void* key, size_t stride)

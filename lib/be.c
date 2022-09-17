@@ -529,7 +529,7 @@ static int be_compile_ExprCall(struct BackEnd* be, struct ExprCall* e, struct TA
     if (!e->fn) return parser_ice_tok(e->tok);
 
     int rc = 0;
-    struct Array param_addr = {};
+    struct Array param_addr = {0};
 
     struct TACEntry call = {
         .op = TACO_CALL,
@@ -607,6 +607,7 @@ static int be_compile_ExprCall(struct BackEnd* be, struct ExprCall* e, struct TA
     }
 
 fail:
+    array_destroy(&param_addr);
     return rc;
 }
 static int be_compile_lvalue_ExprCall(struct BackEnd* be, struct ExprCall* e, struct TACAddress* out)

@@ -337,6 +337,7 @@ static void typestr_append_decltype(const void* const* expr_seqs, TypeTable* tt,
                 arrsz_push(&tt->fn_args_ends, array_size(&tt->fn_args, sizeof(struct TypeStr)));
             }
             typestr_append_offset(s, i, TYPE_BYTE_FUNCTION);
+            array_destroy(&args);
             break;
         }
         default:
