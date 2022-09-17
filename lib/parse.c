@@ -195,13 +195,17 @@ static struct Decl* parse_alloc_decl(Parser* p, struct DeclSpecs* specs)
     return decl;
 }
 
-static __forceinline void parse_push_expr_seq_arr(struct Parser* p, struct Array* arr)
+static void parse_push_expr_seq_arr(Parser* p, const Array* arr, SeqView* out_view)
 {
-    if (arr->sz == 0) return;
-    for (size_t i = 0; i < array_size(arr, sizeof(void*)); ++i)
+    out_view->off = arrptr_size(&p->expr_seqs);
+    out_view->ext = arrptr_size(arr);
+    if (out_view->ext == 0) return;
+#ifndef NDEBUG
+    for (size_t i = 0; i < out_view->ext; ++i)
     {
         if (((struct Ast**)arr->data)[i]->kind == -1) abort();
     }
+#endif
     array_push(&p->expr_seqs, arr->data, arr->sz);
 }
 static __forceinline void parse_push_decl_seq(struct Parser* p, struct Decl** data, size_t n)
@@ -1447,7 +1451,6 @@ static const struct Token* parse_fnbody(Parser* p, const struct Token* cur_tok, 
     if (pdecl->type->kind != AST_DECLFN)
         PARSER_FAIL_TOK(cur_tok, "error: only function types can be defined with a code block\n");
     DeclFn* fn = (DeclFn*)pdecl->type;
-    void* const* const decls = p->expr_seqs.data;
     if (fn->is_param_list)
     {
         if (!pdecl->decl_list.extent)
@@ -1468,18 +1471,25 @@ static const struct Token* parse_fnbody(Parser* p, const struct Token* cur_tok, 
             }
         }
 
-        for (size_t i = 0; i < fn->extent; ++i)
+        void* const* const decls = (void**)p->expr_seqs.data + pdecl->decl_list.offset;
+        for (size_t i = 0; i < pdecl->decl_list.extent; ++i)
         {
-            StmtDecls* argdecl = decls[fn->offset + i];
-            PARSER_CHECK_NOT(insert_definition(p, decls[argdecl->offset]));
+            StmtDecls* argdecl = decls[i];
+            void* const* const decls2 = (void**)p->expr_seqs.data + argdecl->offset;
+            for (size_t j = 0; j < argdecl->extent; ++j)
+            {
+                PARSER_CHECK_NOT(insert_definition(p, decls2[j]));
+            }
         }
     }
-    else
+    else if (fn->extent > 0)
     {
+        void* const* const decls = (void**)p->expr_seqs.data + fn->offset;
         for (size_t i = 0; i < fn->extent; ++i)
         {
-            StmtDecls* argdecl = decls[fn->offset + i];
-            PARSER_CHECK_NOT(insert_definition(p, decls[argdecl->offset]));
+            StmtDecls* argdecl = decls[i];
+            if (argdecl->extent != 1) abort();
+            PARSER_CHECK_NOT(insert_definition(p, ((void**)p->expr_seqs.data)[argdecl->offset]));
         }
     }
     p->parent = pdecl;

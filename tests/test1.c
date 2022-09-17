@@ -221,11 +221,13 @@ static int betest_run(struct TestState* state, StandardTest* test, const char* t
     be_init(test->be, test->parser, test->elab, test->cg);
     cg_init(test->cg);
 
-    struct Expr** exprs = test->parser->expr_seqs.data;
-    REQUIRE(0 < test->parser->top->extent);
-    for (size_t i = 0; i < test->parser->top->extent; ++i)
+    void** seqs = test->parser->expr_seqs.data;
+    SeqView top = test->parser->top->seq;
+    REQUIRE(0 < top.ext);
+    StmtDecls** top_seq = seqs + top.off;
+    for (size_t i = 0; i < top.ext; ++i)
     {
-        StmtDecls* decls = (StmtDecls*)exprs[test->parser->top->offset + i];
+        StmtDecls* decls = top_seq[i];
         if (decls->specs->is_typedef) continue;
         for (size_t j = 0; j < decls->extent; ++j)
         {
@@ -430,7 +432,7 @@ fail:
 int parse_cmake_size_test(struct TestState* state)
 {
     int rc = 1;
-    StandardTest test;
+    StandardTest test = {0};
     SUBTEST(stdtest_run(state,
                         &test,
                         "#define SIZEOF_DPTR (sizeof(void*))\n"
@@ -449,7 +451,7 @@ fail:
 int parse_fdset(struct TestState* state)
 {
     int rc = 1;
-    StandardTest test;
+    StandardTest test = {0};
     SUBTEST(stdtest_run(state,
                         &test,
                         "int arr1[sizeof(int) * 8];\n"
@@ -475,7 +477,7 @@ fail:
 int parse_primitive_types(struct TestState* state)
 {
     int rc = 1;
-    StandardTest test;
+    StandardTest test = {0};
     SUBTEST(stdtest_run(state,
                         &test,
                         "const char x;\n"
@@ -494,7 +496,7 @@ fail:
 int parse_typedef_enum(struct TestState* state)
 {
     int rc = 1;
-    StandardTest test;
+    StandardTest test = {0};
     SUBTEST(stdtest_run(state,
                         &test,
                         "typedef enum {   CURLPX_OK, } CURLproxycode;\n"
@@ -989,7 +991,7 @@ fail:
 int parse_initializer_expr_designated(struct TestState* state)
 {
     int rc = 1;
-    StandardTest test;
+    StandardTest test = {0};
     SUBTEST(stdtest_run(state,
                         &test,
                         "struct A {int x;};\n"
@@ -1006,7 +1008,7 @@ fail:
 int parse_initializer_expr_sue(struct TestState* state)
 {
     int rc = 1;
-    StandardTest test;
+    StandardTest test = {0};
     SUBTEST(stdtest_run(state,
                         &test,
                         "struct A {int x;};\n"
@@ -1076,7 +1078,7 @@ fail:
 int parse_anon_decls(struct TestState* state)
 {
     int rc = 1;
-    StandardTest test;
+    StandardTest test = {0};
     SUBTEST(stdtest_run(state,
                         &test,
                         "struct __darwin_pthread_handler_rec {\n"
@@ -1094,7 +1096,7 @@ fail:
 int parse_decls_and_defs(struct TestState* state)
 {
     int rc = 1;
-    StandardTest test;
+    StandardTest test = {0};
     SUBTEST(stdtest_run(state,
                         &test,
                         "extern int i;\n"
@@ -1110,7 +1112,7 @@ fail:
 int parse_uuva_list(struct TestState* state)
 {
     int rc = 1;
-    StandardTest test;
+    StandardTest test = {0};
     SUBTEST(stdtest_run(state,
                         &test,
                         "typedef __builtin_va_list __gnu_va_list;\n"
@@ -1165,7 +1167,7 @@ fail:
 int parse_shadow(struct TestState* state)
 {
     int rc = 1;
-    StandardTest test;
+    StandardTest test = {0};
     SUBTEST(stdtest_run(state,
                         &test,
                         "int i;\n"
@@ -1182,7 +1184,7 @@ fail:
 int parse_body(struct TestState* state)
 {
     int rc = 1;
-    StandardTest test;
+    StandardTest test = {0};
     SUBTEST(stdtest_run(state,
                         &test,
                         "int i;\n"
@@ -1208,7 +1210,7 @@ fail:
 int parse_sizeof(struct TestState* state)
 {
     int rc = 1;
-    StandardTest test;
+    StandardTest test = {0};
     SUBTEST(stdtest_run(state,
                         &test,
                         "char d1[sizeof(int)];\n"
@@ -1249,7 +1251,7 @@ fail:
 int parse_constants(struct TestState* state)
 {
     int rc = 1;
-    StandardTest test;
+    StandardTest test = {0};
     SUBTEST(stdtest_run(state,
                         &test,
                         "char d1['\\\\'];"
@@ -1382,7 +1384,7 @@ fail:
 int parse_constinit(struct TestState* state)
 {
     int rc = 1;
-    StandardTest test;
+    StandardTest test = {0};
     SUBTEST(stdtest_run(state,
                         &test,
                         "void f();\n"
@@ -1399,7 +1401,7 @@ fail:
 int parse_lvalues(struct TestState* state)
 {
     int rc = 1;
-    StandardTest test;
+    StandardTest test = {0};
     SUBTEST(stdtest_run(state,
                         &test,
                         "void f() {\n"
@@ -1425,7 +1427,7 @@ fail:
 int parse_fn_ptr_conversion(struct TestState* state)
 {
     int rc = 1;
-    StandardTest test;
+    StandardTest test = {0};
     SUBTEST(stdtest_run(state,
                         &test,
                         "int foo();\n"
@@ -1442,7 +1444,7 @@ fail:
 int parse_implicit_conversion(struct TestState* state)
 {
     int rc = 1;
-    StandardTest test;
+    StandardTest test = {0};
     SUBTEST(stdtest_run(state,
                         &test,
                         "int main(char c, unsigned char hu, unsigned int u, long long ll, unsigned long long ull) {\n"
@@ -1486,7 +1488,7 @@ fail:
 int parse_expr1(struct TestState* state)
 {
     int rc = 1;
-    StandardTest test;
+    StandardTest test = {0};
     SUBTEST(stdtest_run(state,
                         &test,
                         "int foo();\n"
@@ -1510,7 +1512,7 @@ fail:
 int parse_enums(struct TestState* state)
 {
     int rc = 1;
-    StandardTest test;
+    StandardTest test = {0};
     SUBTEST(stdtest_run(state,
                         &test,
                         "enum A { a1 = 5, a2, a3 = a2 + 20 };\n"
@@ -1564,7 +1566,7 @@ fail:
 int parse_typedefs(struct TestState* state)
 {
     int rc = 1;
-    StandardTest test;
+    StandardTest test = {0};
     SUBTEST(stdtest_run(state,
                         &test,
                         "typedef int X;\n"
@@ -1617,7 +1619,7 @@ fail:
 int parse_aggregates(struct TestState* state)
 {
     int rc = 1;
-    StandardTest test;
+    StandardTest test = {0};
     SUBTEST(stdtest_run(state,
                         &test,
                         "struct A {\n"
@@ -1679,7 +1681,7 @@ fail:
 int parse_ptrconvert(struct TestState* state)
 {
     int rc = 1;
-    StandardTest test;
+    StandardTest test = {0};
     SUBTEST(stdtest_run(state,
                         &test,
                         "typedef int Int;"
@@ -1776,7 +1778,7 @@ void test_passing(struct TestState* state)
 int parse_params(struct TestState* state)
 {
     int rc = 1;
-    StandardTest test;
+    StandardTest test = {0};
     SUBTEST(stdtest_run(state,
                         &test,
                         "int arr(int i[1]);\n"
@@ -1938,8 +1940,8 @@ int require_tace(TestState* state, struct TACEntry* expected, struct TACEntry* a
 #define REQUIRE_TACES()                                                                                                \
     do                                                                                                                 \
     {                                                                                                                  \
-        struct TACEntry* data = test.be->code.data;                                                                    \
-        const size_t actual_sz = array_size(&test.be->code, sizeof(struct TACEntry));                                  \
+        struct TACEntry* data = test->be->code.data;                                                                   \
+        const size_t actual_sz = array_size(&test->be->code, sizeof(struct TACEntry));                                 \
         const size_t expected_sz = sizeof(expected) / sizeof(expected[0]);                                             \
         size_t sz = actual_sz;                                                                                         \
         if (sz > expected_sz) sz = expected_sz;                                                                        \
@@ -2023,11 +2025,10 @@ static size_t start_of_line_text(size_t offset, const char* const data, const si
         }                                                                                                              \
     } while (0)
 
-int test_be_simple(TestState* state)
+int test_be_simple(TestState* state, StandardTest* test)
 {
     int rc = 1;
-    BETest test;
-    SUBTEST(betest_run_cg(state, &test, "int main() { return 42; }"));
+    SUBTEST(betest_run_cg(state, test, "int main() { return 42; }"));
 
     size_t index = 0;
     REQUIRE_NEXT_TACE({
@@ -2051,15 +2052,13 @@ int test_be_simple(TestState* state)
 
     rc = 0;
 fail:
-    betest_destroy(&test);
     return rc;
 }
 
-int test_be_simple2(TestState* state)
+int test_be_simple2(TestState* state, StandardTest* test)
 {
     int rc = 1;
-    BETest test;
-    SUBTEST(betest_run_cg(state, &test, "int main(int argc, char** argv) { return argc; }"));
+    SUBTEST(betest_run_cg(state, test, "int main(int argc, char** argv) { return argc; }"));
 
     size_t index = 0;
 
@@ -2096,15 +2095,13 @@ int test_be_simple2(TestState* state)
 
     rc = 0;
 fail:
-    betest_destroy(&test);
     return rc;
 }
 
-int test_be_simple3(TestState* state)
+int test_be_simple3(TestState* state, StandardTest* test)
 {
     int rc = 1;
-    BETest test;
-    SUBTEST(betest_run_cg(state, &test, "void main() { }"));
+    SUBTEST(betest_run_cg(state, test, "void main() { }"));
 
     size_t index = 0;
     REQUIRE_NEXT_TACE({TACO_RETURN});
@@ -2121,16 +2118,14 @@ int test_be_simple3(TestState* state)
 
     rc = 0;
 fail:
-    betest_destroy(&test);
     return rc;
 }
 
-int test_be_relations(TestState* state)
+int test_be_relations(TestState* state, StandardTest* test)
 {
     int rc = 1;
-    BETest test;
     SUBTEST(betest_run_cg(state,
-                          &test,
+                          test,
                           "int is_ascii_alphu(int ch) { return ('a' <= ch && 'z' >= ch) || ('A' < ch && 'Z' > ch) || "
                           "ch == '_' || ch != ' '; }"));
 
@@ -2316,16 +2311,15 @@ int test_be_relations(TestState* state)
 
     rc = 0;
 fail:
-    betest_destroy(&test);
+
     return rc;
 }
 
-int test_be_arithmetic(TestState* state)
+int test_be_arithmetic(TestState* state, StandardTest* test)
 {
     int rc = 1;
-    BETest test;
     SUBTEST(betest_run_cg(state,
-                          &test,
+                          test,
                           "void f(int* ch, int i) {\n"
                           " ch += 1;\n"
                           " ch -= 1;\n"
@@ -2410,15 +2404,14 @@ int test_be_arithmetic(TestState* state)
 
     rc = 0;
 fail:
-    betest_destroy(&test);
+
     return rc;
 }
-int test_be_bitmath(TestState* state)
+int test_be_bitmath(TestState* state, StandardTest* test)
 {
     int rc = 1;
-    BETest test;
     SUBTEST(betest_run_cg(state,
-                          &test,
+                          test,
                           "void f(int i, int j) {\n"
                           " int k = i & j;\n"
                           " int l = i | j;\n"
@@ -2485,16 +2478,15 @@ int test_be_bitmath(TestState* state)
 
     rc = 0;
 fail:
-    betest_destroy(&test);
+
     return rc;
 }
 
-int test_be_memory_ret(TestState* state)
+int test_be_memory_ret(TestState* state, StandardTest* test)
 {
     int rc = 1;
-    BETest test;
     SUBTEST(betest_run(state,
-                       &test,
+                       test,
                        "struct A { char buf[32]; };\n"
                        "struct A main(int n, void* v, struct A m) { return m; }"));
 
@@ -2531,16 +2523,15 @@ int test_be_memory_ret(TestState* state)
 
     rc = 0;
 fail:
-    betest_destroy(&test);
+
     return rc;
 }
 
-int test_be_nested_array(TestState* state)
+int test_be_nested_array(TestState* state, StandardTest* test)
 {
     int rc = 1;
-    BETest test;
     SUBTEST(betest_run(state,
-                       &test,
+                       test,
                        "static const char mode[][5] = { \"AAAA\", \"BBBB\" };\n"
                        "const char* main() { return mode[0]; }"));
 
@@ -2567,16 +2558,15 @@ int test_be_nested_array(TestState* state)
 
     rc = 0;
 fail:
-    betest_destroy(&test);
+
     return rc;
 }
 
-int test_be_cast(TestState* state)
+int test_be_cast(TestState* state, StandardTest* test)
 {
     int rc = 1;
-    BETest test;
     SUBTEST(betest_run(state,
-                       &test,
+                       test,
                        "void main() {"
                        " char ch;"
                        " int x = (int)ch++;"
@@ -2636,7 +2626,7 @@ int test_be_cast(TestState* state)
     });
     REQUIRE_END_TACE();
 
-    rc = cg_gen_taces(test->cg, test.be->code.data, array_size(&test.be->code, sizeof(TACEntry)), 100);
+    rc = cg_gen_taces(test->cg, test->be->code.data, array_size(&test->be->code, sizeof(TACEntry)), 100);
     if (rc)
     {
         parser_print_errors(stderr);
@@ -2685,16 +2675,15 @@ int test_be_cast(TestState* state)
 
     rc = 0;
 fail:
-    betest_destroy(&test);
+
     return rc;
 }
 
-int test_be_call(TestState* state)
+int test_be_call(TestState* state, StandardTest* test)
 {
     int rc = 1;
-    BETest test;
     SUBTEST(betest_run(state,
-                       &test,
+                       test,
                        "struct A { char buf[32]; };\n"
                        "struct A mm_call(struct A a);"
                        "struct A mi_call(int a);"
@@ -2771,16 +2760,15 @@ int test_be_call(TestState* state)
 
     rc = 0;
 fail:
-    betest_destroy(&test);
+
     return rc;
 }
 
-int test_be_call2(TestState* state)
+int test_be_call2(TestState* state, StandardTest* test)
 {
     int rc = 1;
-    BETest test;
     SUBTEST(betest_run(state,
-                       &test,
+                       test,
                        "void cg_debug(struct CodeGen* cg, const char* fmt, ...);"
                        "void cg_declare_extern(struct CodeGen* cg, const char* sym)"
                        "{"
@@ -2823,16 +2811,15 @@ int test_be_call2(TestState* state)
 
     rc = 0;
 fail:
-    betest_destroy(&test);
+
     return rc;
 }
 
-int test_be_call3(TestState* state)
+int test_be_call3(TestState* state, StandardTest* test)
 {
     int rc = 1;
-    BETest test;
     SUBTEST(betest_run(state,
-                       &test,
+                       test,
                        "struct Y { char buf[20]; };"
                        "void f(int x[1], struct Y y);"
                        "void g(int x[1], struct Y y1)"
@@ -2867,16 +2854,15 @@ int test_be_call3(TestState* state)
 
     rc = 0;
 fail:
-    betest_destroy(&test);
+
     return rc;
 }
 
-int test_be_got(TestState* state)
+int test_be_got(TestState* state, StandardTest* test)
 {
     int rc = 1;
-    BETest test;
     SUBTEST(betest_run(state,
-                       &test,
+                       test,
                        "void (*g)();\n"
                        "extern void h();\n"
                        "extern void (*i)();\n"
@@ -2939,16 +2925,15 @@ int test_be_got(TestState* state)
 
     rc = 0;
 fail:
-    betest_destroy(&test);
+
     return rc;
 }
 
-int test_be_va_args(TestState* state)
+int test_be_va_args(TestState* state, StandardTest* test)
 {
     int rc = 1;
-    BETest test;
     SUBTEST(betest_run(state,
-                       &test,
+                       test,
                        "typedef __builtin_va_list __gnu_va_list;\n"
                        "typedef __gnu_va_list va_list;\n"
                        "void g(const char* fmt, __builtin_va_list w);\n"
@@ -3136,7 +3121,7 @@ int test_be_va_args(TestState* state)
     });
     REQUIRE_END_TACE();
 
-    rc = cg_gen_taces(test->cg, test.be->code.data, array_size(&test.be->code, sizeof(TACEntry)), 100);
+    rc = cg_gen_taces(test->cg, test->be->code.data, array_size(&test->be->code, sizeof(TACEntry)), 100);
     if (rc)
     {
         parser_print_errors(stderr);
@@ -3224,16 +3209,15 @@ int test_be_va_args(TestState* state)
 
     rc = 0;
 fail:
-    betest_destroy(&test);
+
     return rc;
 }
 
-int test_be_va_args2(TestState* state)
+int test_be_va_args2(TestState* state, StandardTest* test)
 {
     int rc = 1;
-    BETest test;
     SUBTEST(betest_run(state,
-                       &test,
+                       test,
                        "void f(__builtin_va_list v) {\n"
                        "int x = __builtin_va_arg(v, int);"
                        "}\n"));
@@ -3336,7 +3320,7 @@ int test_be_va_args2(TestState* state)
     });
     REQUIRE_END_TACE();
 
-    rc = cg_gen_taces(test->cg, test.be->code.data, array_size(&test.be->code, sizeof(TACEntry)), 100);
+    rc = cg_gen_taces(test->cg, test->be->code.data, array_size(&test->be->code, sizeof(TACEntry)), 100);
     if (rc)
     {
         parser_print_errors(stderr);
@@ -3418,16 +3402,15 @@ int test_be_va_args2(TestState* state)
 
     rc = 0;
 fail:
-    betest_destroy(&test);
+
     return rc;
 }
 
-int test_be_conversions(TestState* state)
+int test_be_conversions(TestState* state, StandardTest* test)
 {
     int rc = 1;
-    BETest test;
     SUBTEST(betest_run(state,
-                       &test,
+                       test,
                        "void cg_declare_extern()"
                        "{"
                        "char x = 10;"
@@ -3537,16 +3520,15 @@ int test_be_conversions(TestState* state)
 
     rc = 0;
 fail:
-    betest_destroy(&test);
+
     return rc;
 }
 
-int test_be_init(TestState* state)
+int test_be_init(TestState* state, StandardTest* test)
 {
     int rc = 1;
-    BETest test;
     SUBTEST(betest_run(state,
-                       &test,
+                       test,
                        "struct S {"
                        "int x, y, z, w;"
                        "};"
@@ -3574,16 +3556,15 @@ int test_be_init(TestState* state)
 
     rc = 0;
 fail:
-    betest_destroy(&test);
+
     return rc;
 }
 
-int test_be_switch(TestState* state)
+int test_be_switch(TestState* state, StandardTest* test)
 {
     int rc = 1;
-    BETest test;
     SUBTEST(betest_run(state,
-                       &test,
+                       test,
                        "int f(int x) {\n"
                        "switch (x) {"
                        "case 1: return 10;"
@@ -3676,16 +3657,15 @@ int test_be_switch(TestState* state)
 
     rc = 0;
 fail:
-    betest_destroy(&test);
+
     return rc;
 }
 
-int test_be_ternary(TestState* state)
+int test_be_ternary(TestState* state, StandardTest* test)
 {
     int rc = 1;
-    BETest test;
     SUBTEST(betest_run(state,
-                       &test,
+                       test,
                        "int f(int x) {\n"
                        "return x == 1 ? 10 : 20;"
                        "}"));
@@ -3740,15 +3720,14 @@ int test_be_ternary(TestState* state)
 
     rc = 0;
 fail:
-    betest_destroy(&test);
+
     return rc;
 }
 
-int test_be_fnstatic(TestState* state)
+int test_be_fnstatic(TestState* state, StandardTest* test)
 {
     int rc = 1;
-    BETest test;
-    SUBTEST(betest_run_cg(state, &test, "int main() { static const int x = 42; return x; }"));
+    SUBTEST(betest_run_cg(state, test, "int main() { static const int x = 42; return x; }"));
 
     size_t index = 0;
     REQUIRE_NEXT_TACE({
@@ -3772,16 +3751,14 @@ int test_be_fnstatic(TestState* state)
 
     rc = 0;
 fail:
-    betest_destroy(&test);
+
     return rc;
 }
 
-int test_cg_assign(TestState* state)
+int test_cg_assign(TestState* state, StandardTest* test)
 {
     int rc = 1;
-    CGTest test = {
-        .cg = my_malloc(sizeof(struct CodeGen)),
-    };
+    test->cg = my_malloc(sizeof(struct CodeGen));
     cg_init(test->cg);
     TACEntry taces[] = {
         // stores from reg
@@ -3995,17 +3972,13 @@ int test_cg_assign(TestState* state)
 
     rc = 0;
 fail:
-    cg_destroy(test->cg);
-    my_free(test->cg);
     return rc;
 }
 
-int test_cg_refs(TestState* state)
+int test_cg_refs(TestState* state, StandardTest* test)
 {
     int rc = 1;
-    CGTest test = {
-        .cg = my_malloc(sizeof(struct CodeGen)),
-    };
+    test->cg = my_malloc(sizeof(struct CodeGen));
     cg_init(test->cg);
     TACEntry taces[] = {
         {
@@ -4091,17 +4064,13 @@ int test_cg_refs(TestState* state)
 
     rc = 0;
 fail:
-    cg_destroy(test->cg);
-    my_free(test->cg);
     return rc;
 }
 
-int test_cg_regalloc(TestState* state)
+int test_cg_regalloc(TestState* state, StandardTest* test)
 {
     int rc = 1;
-    CGTest test = {
-        .cg = my_malloc(sizeof(struct CodeGen)),
-    };
+    test->cg = my_malloc(sizeof(struct CodeGen));
     cg_init(test->cg);
     TACEntry taces[] = {
         {
@@ -4132,12 +4101,10 @@ int test_cg_regalloc(TestState* state)
 
     rc = 0;
 fail:
-    cg_destroy(test->cg);
-    my_free(test->cg);
     return rc;
 }
 
-int test_be_static_init(TestState* stat, StandardTest* test)
+int test_be_static_init(TestState* state, StandardTest* test)
 {
     int rc = 1;
     SUBTEST(betest_run(state,
@@ -4199,16 +4166,14 @@ int test_be_static_init(TestState* stat, StandardTest* test)
 
     rc = 0;
 fail:
-    betest_destroy(&test);
+
     return rc;
 }
 
-int test_cg_call(TestState* state)
+int test_cg_call(TestState* state, StandardTest* test)
 {
     int rc = 1;
-    CGTest test = {
-        .cg = my_malloc(sizeof(struct CodeGen)),
-    };
+    test->cg = my_malloc(sizeof(struct CodeGen));
     cg_init(test->cg);
     TACEntry taces[] = {
         {
@@ -4261,17 +4226,13 @@ int test_cg_call(TestState* state)
 
     rc = 0;
 fail:
-    cg_destroy(test->cg);
-    my_free(test->cg);
     return rc;
 }
 
-int test_cg_add(TestState* state)
+int test_cg_add(TestState* state, StandardTest* test)
 {
     int rc = 1;
-    CGTest test = {
-        .cg = my_malloc(sizeof(struct CodeGen)),
-    };
+    test->cg = my_malloc(sizeof(struct CodeGen));
     cg_init(test->cg);
     TACEntry taces[] = {
         {
@@ -4315,17 +4276,13 @@ int test_cg_add(TestState* state)
 
     rc = 0;
 fail:
-    cg_destroy(test->cg);
-    my_free(test->cg);
     return rc;
 }
 
-int test_cg_bitmath(TestState* state)
+int test_cg_bitmath(TestState* state, StandardTest* test)
 {
     int rc = 1;
-    CGTest test = {
-        .cg = my_malloc(sizeof(struct CodeGen)),
-    };
+    test->cg = my_malloc(sizeof(struct CodeGen));
     cg_init(test->cg);
     TACEntry taces[] = {
         {
@@ -4380,8 +4337,6 @@ int test_cg_bitmath(TestState* state)
 
     rc = 0;
 fail:
-    cg_destroy(test->cg);
-    my_free(test->cg);
     return rc;
 }
 
@@ -4413,14 +4368,18 @@ int main(int argc, char** argv)
         g_datadir_sz = strlen(argv[1]);
     }
 
-    typedef int (*stdtest_t)();
+    typedef int (*stdtest_t)(struct TestState*, struct StandardTest*);
 
-    static const int (*stdtests[])(struct TestState*, struct StandardTest*) = {
-        parse_unk_array,
-        test_be_static_init,
+    static const stdtest_t stdtests[] = {
+        parse_unk_array,   test_be_static_init, test_be_simple,      test_be_simple2,    test_be_simple3,
+        test_be_relations, test_be_arithmetic,  test_be_bitmath,     test_be_memory_ret, test_be_nested_array,
+        test_be_cast,      test_be_call,        test_be_call2,       test_be_call3,      test_be_got,
+        test_be_va_args,   test_be_va_args2,    test_be_conversions, test_be_init,       test_be_switch,
+        test_be_ternary,   test_be_fnstatic,    test_cg_assign,      test_cg_call,       test_cg_add,
+        test_cg_bitmath,   test_cg_refs,        test_cg_regalloc,
     };
 
-    static const int (*othertests[])(struct TestState*) = {
+    static int (*const othertests[])(struct TestState*) = {
         parse_initializer_struct,
     };
 
@@ -4476,32 +4435,6 @@ int main(int argc, char** argv)
     RUN_TEST(parse_typedefs);
     RUN_TEST(parse_aggregates);
     RUN_TEST(parse_ptrconvert);
-    RUN_TEST(test_be_simple);
-    RUN_TEST(test_be_simple2);
-    RUN_TEST(test_be_simple3);
-    RUN_TEST(test_be_relations);
-    RUN_TEST(test_be_arithmetic);
-    RUN_TEST(test_be_bitmath);
-    RUN_TEST(test_be_memory_ret);
-    RUN_TEST(test_be_nested_array);
-    RUN_TEST(test_be_cast);
-    RUN_TEST(test_be_call);
-    RUN_TEST(test_be_call2);
-    RUN_TEST(test_be_call3);
-    RUN_TEST(test_be_got);
-    RUN_TEST(test_be_va_args);
-    RUN_TEST(test_be_va_args2);
-    RUN_TEST(test_be_conversions);
-    RUN_TEST(test_be_init);
-    RUN_TEST(test_be_switch);
-    RUN_TEST(test_be_ternary);
-    RUN_TEST(test_be_fnstatic);
-    RUN_TEST(test_cg_assign);
-    RUN_TEST(test_cg_call);
-    RUN_TEST(test_cg_add);
-    RUN_TEST(test_cg_bitmath);
-    RUN_TEST(test_cg_refs);
-    RUN_TEST(test_cg_regalloc);
 
     test_passing(state);
 

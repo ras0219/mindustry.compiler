@@ -406,8 +406,7 @@ fail:
 static int be_compile_stmts(struct BackEnd* be, size_t offset, size_t extent)
 {
     int rc = 0;
-    void** seqs = be->parser->expr_seqs.data;
-    seqs += offset;
+    void* const* const seqs = (void**)be->parser->expr_seqs.data + offset;
     for (size_t i = 0; i < extent; ++i)
     {
         UNWRAP(be_compile_stmt(be, seqs[i]));
@@ -416,9 +415,17 @@ fail:
     return rc;
 }
 
+static int be_compile_Decl(struct BackEnd* be, struct Decl* decl);
 static int be_compile_StmtDecls(struct BackEnd* be, struct StmtDecls* stmt)
 {
-    return be_compile_stmts(be, stmt->offset, stmt->extent);
+    int rc = 0;
+    void* const* const decls = (void**)be->parser->expr_seqs.data + stmt->decls.off;
+    for (size_t i = 0; i < stmt->decls.ext; ++i)
+    {
+        UNWRAP(be_compile_Decl(be, decls[i]));
+    }
+fail:
+    return rc;
 }
 
 static int be_compile_StmtBlock(struct BackEnd* be, struct StmtBlock* stmt)
@@ -1578,7 +1585,6 @@ static int be_compile_stmt(struct BackEnd* be, struct Ast* e)
         DISPATCH(STMT_CASE, StmtCase);
         DISPATCH(STMT_LABEL, StmtLabel);
         DISPATCH(STMT_GOTO, StmtGoto);
-        DISPATCH(AST_DECL, Decl);
         case STMT_NONE: return 0;
         default:
         {
@@ -1676,13 +1682,14 @@ int be_compile_toplevel_decl(struct BackEnd* be, Decl* decl)
             size_t arg_offset = 0;
 
             Ast** const asts = be->parser->expr_seqs.data;
+            if (declfn->is_param_list) abort();
             for (size_t i = 0; i < declfn->extent; ++i)
             {
                 Ast* ast = asts[declfn->offset + i];
                 if (ast->kind != STMT_DECLS) abort();
                 StmtDecls* decls = (void*)ast;
-                if (decls->extent != 1) abort();
-                Ast* arg_ast = asts[decls->offset];
+                if (decls->decls.ext != 1) abort();
+                Ast* arg_ast = asts[decls->decls.off];
                 if (arg_ast->kind != AST_DECL) abort();
                 Decl* arg_decl = (void*)arg_ast;
 
@@ -1741,19 +1748,23 @@ int be_compile(struct BackEnd* be)
     int rc = 0;
 
     // then compile all functions
-    struct Ast* const* const ast_seqs = be->parser->expr_seqs.data;
-    struct StmtBlock* const top = be->parser->top;
-
-    for (size_t i = 0; i < top->extent; ++i)
+    void* const* const ast_seqs = be->parser->expr_seqs.data;
+    SeqView const top = be->parser->top.seq;
+    StmtDecls* const* const top_seq = ast_seqs + top.off;
+    for (size_t i = 0; i < top.ext; ++i)
     {
-        if (ast_seqs[top->offset + i]->kind != STMT_DECLS) abort();
-
-        struct StmtDecls* decls = (struct StmtDecls*)ast_seqs[top->offset + i];
+        struct StmtDecls* decls = top_seq[i];
+#ifndef NDEBUG
+        if (decls->kind != STMT_DECLS) abort();
+#endif
         if (decls->specs->is_typedef) continue;
-        for (size_t j = 0; j < decls->extent; ++j)
+        Decl* const* const decl_seq = ast_seqs + decls->decls.off;
+        for (size_t j = 0; j < decls->decls.ext; ++j)
         {
-            if (ast_seqs[decls->offset + j]->kind != AST_DECL) abort();
-            struct Decl* decl = (struct Decl*)ast_seqs[decls->offset + j];
+            struct Decl* decl = decl_seq[j];
+#ifndef NDEBUG
+            if (decl->kind != AST_DECL) abort();
+#endif
             UNWRAP(be_compile_toplevel_decl(be, decl));
             if (be->code.sz)
             {

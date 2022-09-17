@@ -16,9 +16,12 @@ if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
 endif()
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-    add_compile_options(-fsanitize=undefined -fsanitize=address)
-    add_link_options(-static-libasan -static-libubsan)
-    link_libraries(-lasan -lubsan)
+    add_compile_options(-fsanitize=undefined,address)
+    add_link_options(-fsanitize=undefined,address)
+
+    if(LINUX)
+        link_libraries(-lasan -lubsan)
+    endif()
 endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Webassembly")

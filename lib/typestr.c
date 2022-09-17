@@ -176,7 +176,7 @@ void typestr_add_cvr(struct TypeStr* s, unsigned int mask)
     s->buf.buf[0] = i;
 }
 
-static void typestr_append_decltype(const Decl* const* expr_seqs, TypeTable* tt, TypeStr* s, const AstType* e);
+static void typestr_append_decltype(const void* const* expr_seqs, TypeTable* tt, TypeStr* s, const AstType* e);
 
 static void typestr_append_typestr(TypeStr* out, const TypeStr* in)
 {
@@ -266,7 +266,7 @@ static void typestr_append_decltype_DeclSpecs(TypeTable* tt, struct TypeStr* s, 
     typestr_add_cvr(s, m);
     return;
 }
-static void typestr_append_decltype(const Decl* const* expr_seqs, TypeTable* tt, TypeStr* s, const AstType* e)
+static void typestr_append_decltype(const void* const* expr_seqs, TypeTable* tt, TypeStr* s, const AstType* e)
 {
     if (!e) abort();
     switch (e->kind)
@@ -296,17 +296,26 @@ static void typestr_append_decltype(const Decl* const* expr_seqs, TypeTable* tt,
             struct DeclFn* d = (struct DeclFn*)e;
             typestr_append_decltype(expr_seqs, tt, s, d->type);
             struct Array args = {0};
-            for (size_t i = 0; i < d->extent; ++i)
+            if (d->is_param_list)
             {
-                struct TypeStr* arg_ts = array_alloc(&args, sizeof(struct TypeStr));
-                struct StmtDecls* arg_decls = (void*)expr_seqs[d->offset + i];
-                typestr_from_decltype_Decl(expr_seqs, tt, arg_ts, expr_seqs[arg_decls->offset]);
-                arg_ts->c = s_not_constant;
+                // ?
             }
-            if (d->is_varargs)
+            else
             {
-                struct TypeStr var = {.buf = {1, TYPE_BYTE_VARIADIC}};
-                array_push(&args, &var, sizeof(var));
+                const StmtDecls* const* const d_seq = (void*)(expr_seqs + d->offset);
+                for (size_t i = 0; i < d->extent; ++i)
+                {
+                    struct TypeStr* arg_ts = array_alloc(&args, sizeof(struct TypeStr));
+                    const struct StmtDecls* arg_decls = d_seq[i];
+                    if (arg_decls->decls.ext != 1) abort();
+                    typestr_from_decltype_Decl(expr_seqs, tt, arg_ts, expr_seqs[arg_decls->decls.off]);
+                    arg_ts->c = s_not_constant;
+                }
+                if (d->is_varargs)
+                {
+                    struct TypeStr var = {.buf = {1, TYPE_BYTE_VARIADIC}};
+                    array_push(&args, &var, sizeof(var));
+                }
             }
             size_t i = 0;
             struct TypeStr* tt_fn_args = tt->fn_args.data;
@@ -337,7 +346,7 @@ static void typestr_append_decltype(const Decl* const* expr_seqs, TypeTable* tt,
     }
 }
 
-void typestr_from_decltype_Decl(const Decl* const* expr_seqs, TypeTable* tt, TypeStr* s, const Decl* d)
+void typestr_from_decltype_Decl(const void* const* expr_seqs, TypeTable* tt, TypeStr* s, const Decl* d)
 {
     // initialize type
     *s = s_type_unknown;

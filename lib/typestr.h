@@ -99,7 +99,7 @@ void typestr_add_pointer(struct TypeStr* s);
 
 void typestr_addressof(struct TypeStr* s);
 
-void typestr_from_decltype_Decl(const struct Decl* const* expr_seqs,
+void typestr_from_decltype_Decl(const void* const* expr_seqs,
                                 struct TypeTable* tt,
                                 struct TypeStr* s,
                                 const struct Decl* d);

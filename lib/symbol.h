@@ -93,8 +93,7 @@ typedef struct DeclFn
     // parameter list
     unsigned char is_param_list : 1;
 
-    size_t offset;
-    size_t extent;
+    SeqView seq;
 } DeclFn;
 
 #define AST_STRUCT_AST_DECLFN DeclFn

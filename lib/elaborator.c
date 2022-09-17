@@ -11,6 +11,7 @@
 #include "errors.h"
 #include "lexstate.h"
 #include "parse.h"
+#include "seqview.h"
 #include "stdlibe.h"
 #include "symbol.h"
 #include "token.h"
@@ -80,18 +81,18 @@ static Symbol* find_field_by_name(TypeSymbol* def, const char* fieldname, size_t
 
 static int elaborate_decl(struct Elaborator* elab, struct Decl* specs);
 static int elaborate_declspecs(struct Elaborator* elab, struct DeclSpecs* specs);
-static void elaborate_stmt(struct Elaborator* elab, struct ElaborateDeclCtx* ctx, struct Ast* ast);
+static void elaborate_stmt(struct Elaborator* elab, struct Ast* ast);
 static void elaborate_expr(struct Elaborator* elab,
-                           struct ElaborateDeclCtx* ctx,
+
                            struct Expr* top_expr,
                            struct TypeStr* rty);
 static void elaborate_expr_decay(struct Elaborator* elab,
-                                 struct ElaborateDeclCtx* ctx,
+
                                  struct Expr* top_expr,
                                  struct TypeStr* rty);
 
 static void elaborate_expr_lvalue(struct Elaborator* elab,
-                                  struct ElaborateDeclCtx* ctx,
+
                                   struct Expr* top_expr,
                                   struct TypeStr* rty);
 
@@ -189,16 +190,16 @@ static void promote_common_type(TypeStr* l, TypeStr* r)
 }
 
 static void elaborate_expr_ternary(struct Elaborator* elab,
-                                   struct ElaborateDeclCtx* ctx,
+
                                    struct ExprBinOp* e,
                                    struct Expr* etrue,
                                    struct Expr* efalse,
                                    struct TypeStr* rty)
 {
     TypeStr cond_ty, etrue_ty, efalse_ty;
-    elaborate_expr_decay(elab, ctx, e->lhs, &cond_ty);
-    elaborate_expr_decay(elab, ctx, etrue, &etrue_ty);
-    elaborate_expr_decay(elab, ctx, efalse, &efalse_ty);
+    elaborate_expr_decay(elab, e->lhs, &cond_ty);
+    elaborate_expr_decay(elab, etrue, &etrue_ty);
+    elaborate_expr_decay(elab, efalse, &efalse_ty);
     const unsigned int cond_mask = typestr_mask(&cond_ty);
     const unsigned int etrue_mask = typestr_mask(&etrue_ty);
     const unsigned int efalse_mask = typestr_mask(&efalse_ty);
@@ -419,15 +420,17 @@ static void elaborate_expr_ExprBinOp_impl(
     }
 }
 
-static void elaborate_expr_ExprBinOp_assign(
-    struct Elaborator* elab, struct ElaborateDeclCtx* ctx, struct ExprBinOp* e, struct TypeStr* rty, unsigned int op)
+static void elaborate_expr_ExprBinOp_assign(struct Elaborator* elab,
+                                            struct ExprBinOp* e,
+                                            struct TypeStr* rty,
+                                            unsigned int op)
 {
     const RowCol* const rc = &e->tok->rc;
-    elaborate_expr_lvalue(elab, ctx, e->lhs, rty);
+    elaborate_expr_lvalue(elab, e->lhs, rty);
     typestr_dereference(rty);
     const struct TypeStr orig_lhs = *rty;
     struct TypeStr rhs_ty;
-    elaborate_expr_decay(elab, ctx, e->rhs, &rhs_ty);
+    elaborate_expr_decay(elab, e->rhs, &rhs_ty);
     switch (op)
     {
         case TOKEN_SYM1('='): typestr_implicit_conversion(elab->types, rc, &rhs_ty, rty); break;
@@ -457,7 +460,7 @@ static void elaborate_expr_ExprBinOp_assign(
 }
 
 static void elaborate_expr_ExprBinOp(struct Elaborator* elab,
-                                     struct ElaborateDeclCtx* ctx,
+
                                      struct ExprBinOp* e,
                                      struct TypeStr* rty)
 {
@@ -467,20 +470,20 @@ static void elaborate_expr_ExprBinOp(struct Elaborator* elab,
     if (e->tok->type == TOKEN_SYM1('?'))
     {
         if (!e->rhs || e->rhs->kind != EXPR_BINOP) abort();
-        return elaborate_expr_ternary(elab, ctx, e, ((ExprBinOp*)e->rhs)->lhs, ((ExprBinOp*)e->rhs)->rhs, rty);
+        return elaborate_expr_ternary(elab, e, ((ExprBinOp*)e->rhs)->lhs, ((ExprBinOp*)e->rhs)->rhs, rty);
     }
     const unsigned op = e->tok->type;
     const unsigned int binmask = binop_mask(op);
     if (binmask & BINOP_FLAGS_ASSIGN)
     {
-        elaborate_expr_ExprBinOp_assign(elab, ctx, e, rty, op);
+        elaborate_expr_ExprBinOp_assign(elab, e, rty, op);
     }
     else
     {
-        elaborate_expr_decay(elab, ctx, e->lhs, rty);
+        elaborate_expr_decay(elab, e->lhs, rty);
         unsigned int lhs_mask = typestr_mask(rty);
         struct TypeStr rhs_ty;
-        elaborate_expr_decay(elab, ctx, e->rhs, &rhs_ty);
+        elaborate_expr_decay(elab, e->rhs, &rhs_ty);
         unsigned int rhs_mask = typestr_mask(&rhs_ty);
         if ((op == TOKEN_SYM1('+') || op == TOKEN_SYM1('[')) && (rhs_mask & TYPE_FLAGS_POINTER))
         {
@@ -560,7 +563,7 @@ static void elaborate_expr_ExprBinOp(struct Elaborator* elab,
 static const TypeStr s_valist_ptr = {.buf = {2, TYPE_BYTE_UUVALIST, TYPE_BYTE_POINTER}};
 
 static void elaborate_expr_ExprBuiltin(struct Elaborator* elab,
-                                       struct ElaborateDeclCtx* ctx,
+
                                        struct ExprBuiltin* e,
                                        struct TypeStr* rty)
 {
@@ -569,7 +572,7 @@ static void elaborate_expr_ExprBuiltin(struct Elaborator* elab,
         case LEX_SIZEOF:
             if (e->expr1)
             {
-                elaborate_expr(elab, ctx, e->expr1, rty);
+                elaborate_expr(elab, e->expr1, rty);
             }
             else
             {
@@ -582,8 +585,8 @@ static void elaborate_expr_ExprBuiltin(struct Elaborator* elab,
             typestr_assign_constant_value(rty, mp_from_u64(e->sizeof_size));
             break;
         case LEX_UUVA_START:
-            elaborate_expr(elab, ctx, e->expr2, rty);
-            elaborate_expr_decay(elab, ctx, e->expr1, rty);
+            elaborate_expr(elab, e->expr2, rty);
+            elaborate_expr_decay(elab, e->expr1, rty);
             if (!typestr_match(rty, &s_valist_ptr))
             {
                 typestr_error2(
@@ -596,15 +599,15 @@ static void elaborate_expr_ExprBuiltin(struct Elaborator* elab,
             *rty = s_type_void;
             break;
         case LEX_UUVA_ARG:
-            elaborate_expr_decay(elab, ctx, e->expr1, rty);
+            elaborate_expr_decay(elab, e->expr1, rty);
             elaborate_declspecs(elab, e->specs);
             elaborate_decl(elab, e->type);
             typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, rty, e->type);
             break;
         case LEX_UUVA_END: *rty = s_type_void; break;
         case LEX_UUVA_COPY:
-            elaborate_expr_decay(elab, ctx, e->expr1, rty);
-            elaborate_expr_decay(elab, ctx, e->expr2, rty);
+            elaborate_expr_decay(elab, e->expr1, rty);
+            elaborate_expr_decay(elab, e->expr2, rty);
             *rty = s_type_void;
             break;
         case LEX_BUILTIN_CONSTANT_P:
@@ -615,7 +618,7 @@ static void elaborate_expr_ExprBuiltin(struct Elaborator* elab,
         case LEX_BUILTIN_BSWAP32:
         case LEX_BUILTIN_BSWAP64:;
             TypeStr ty;
-            elaborate_expr(elab, ctx, e->expr1, &ty);
+            elaborate_expr(elab, e->expr1, &ty);
             if (e->tok->type == LEX_BUILTIN_BSWAP32)
                 *rty = s_type_uint;
             else
@@ -630,17 +633,17 @@ static void elaborate_expr_ExprBuiltin(struct Elaborator* elab,
 }
 
 static void elaborate_expr_ExprUnOp(struct Elaborator* elab,
-                                    struct ElaborateDeclCtx* ctx,
+
                                     struct ExprUnOp* e,
                                     struct TypeStr* rty)
 {
     if (e->tok->type == TOKEN_SYM1('&'))
     {
-        elaborate_expr_lvalue(elab, ctx, e->lhs, rty);
+        elaborate_expr_lvalue(elab, e->lhs, rty);
         return;
     }
 
-    elaborate_expr_decay(elab, ctx, e->lhs, rty);
+    elaborate_expr_decay(elab, e->lhs, rty);
     const struct TypeStr orig_lhs = *rty;
     unsigned int lhs_mask = typestr_mask(rty);
     switch (e->tok->type)
@@ -741,12 +744,12 @@ static void elaborate_expr_ExprUnOp(struct Elaborator* elab,
         }
     }
 }
-static void elaborate_stmts(struct Elaborator* elab, struct ElaborateDeclCtx* ctx, size_t offset, size_t extent)
+static void elaborate_stmts(struct Elaborator* elab, SeqView stmts)
 {
     struct Ast** seqs = elab->p->expr_seqs.data;
-    for (size_t i = 0; i < extent; ++i)
+    for (size_t i = 0; i < stmts.ext; ++i)
     {
-        elaborate_stmt(elab, ctx, seqs[offset + i]);
+        elaborate_stmt(elab, seqs[stmts.off + i]);
     }
 }
 
@@ -1057,24 +1060,24 @@ static void elaborate_init_ty(struct Elaborator* elab, size_t offset, const Type
 }
 
 #define DISPATCH(X, Y)                                                                                                 \
-    case X: return elaborate_stmt_##Y(elab, ctx, (struct Y*)ast)
+    case X: return elaborate_stmt_##Y(elab, (struct Y*)ast)
 
-static void elaborate_stmt_StmtCase(struct Elaborator* elab, struct ElaborateDeclCtx* ctx, struct StmtCase* stmt)
+static void elaborate_stmt_StmtCase(struct Elaborator* elab, struct StmtCase* stmt)
 {
     if (stmt->expr)
     {
         TypeStr ts = {0};
-        elaborate_expr(elab, ctx, stmt->expr, &ts);
+        elaborate_expr(elab, stmt->expr, &ts);
         stmt->value = u64constant_or_err(&ts, stmt->expr->tok);
     }
 }
 
-static void elaborate_stmt(struct Elaborator* elab, struct ElaborateDeclCtx* ctx, struct Ast* ast)
+static void elaborate_stmt(struct Elaborator* elab, struct Ast* ast)
 {
     if (ast_kind_is_expr(ast->kind))
     {
         struct TypeStr ts;
-        return elaborate_expr(elab, ctx, (struct Expr*)ast, &ts);
+        return elaborate_expr(elab, (struct Expr*)ast, &ts);
     }
     ast->elaborated = 1;
     void* top = ast;
@@ -1088,7 +1091,7 @@ static void elaborate_stmt(struct Elaborator* elab, struct ElaborateDeclCtx* ctx
         case STMT_LABEL:
         {
             struct StmtLabel* expr = top;
-            return elaborate_stmt(elab, ctx, expr->stmt);
+            return elaborate_stmt(elab, expr->stmt);
         }
         case STMT_RETURN:
         {
@@ -1096,7 +1099,7 @@ static void elaborate_stmt(struct Elaborator* elab, struct ElaborateDeclCtx* ctx
             if (stmt->expr)
             {
                 struct TypeStr ts;
-                elaborate_expr_decay(elab, ctx, stmt->expr, &ts);
+                elaborate_expr_decay(elab, stmt->expr, &ts);
                 struct TypeStr fn = elab->cur_decl->sym->type;
                 typestr_pop_offset(&fn);
                 typestr_implicit_conversion(elab->types, &stmt->tok->rc, &ts, &fn);
@@ -1108,11 +1111,11 @@ static void elaborate_stmt(struct Elaborator* elab, struct ElaborateDeclCtx* ctx
         {
             struct StmtIf* stmt = top;
             struct TypeStr ts;
-            elaborate_expr(elab, ctx, stmt->cond, &ts);
-            elaborate_stmt(elab, ctx, stmt->if_body);
+            elaborate_expr(elab, stmt->cond, &ts);
+            elaborate_stmt(elab, stmt->if_body);
             if (stmt->else_body)
             {
-                elaborate_stmt(elab, ctx, stmt->else_body);
+                elaborate_stmt(elab, stmt->else_body);
             }
             return;
         }
@@ -1120,10 +1123,10 @@ static void elaborate_stmt(struct Elaborator* elab, struct ElaborateDeclCtx* ctx
         {
             struct StmtLoop* e = top;
             struct TypeStr ts;
-            if (e->init) elaborate_stmt(elab, ctx, e->init);
-            if (e->cond) elaborate_expr(elab, ctx, e->cond, &ts);
-            if (e->advance) elaborate_expr(elab, ctx, e->advance, &ts);
-            elaborate_stmt(elab, ctx, e->body);
+            if (e->init) elaborate_stmt(elab, e->init);
+            if (e->cond) elaborate_expr(elab, e->cond, &ts);
+            if (e->advance) elaborate_expr(elab, e->advance, &ts);
+            elaborate_stmt(elab, e->body);
             return;
         }
         case AST_DECL:
@@ -1137,20 +1140,22 @@ static void elaborate_stmt(struct Elaborator* elab, struct ElaborateDeclCtx* ctx
         {
             struct StmtDecls* stmt = top;
             elaborate_declspecs(elab, stmt->specs);
-            elaborate_stmts(elab, ctx, stmt->offset, stmt->extent);
+            Decl* const* const decls = (void*)((void**)elab->p->expr_seqs.data + stmt->decls.off);
+            for (size_t i = 0; i < stmt->decls.ext; ++i)
+                elaborate_decl(elab, decls[i]);
             return;
         }
         case STMT_BLOCK:
         {
             struct StmtBlock* stmt = top;
-            elaborate_stmts(elab, ctx, stmt->offset, stmt->extent);
+            elaborate_stmts(elab, stmt->seq);
             return;
         }
         case STMT_SWITCH:
         {
             struct StmtSwitch* stmt = top;
             struct TypeStr ts;
-            elaborate_expr_decay(elab, ctx, stmt->expr, &ts);
+            elaborate_expr_decay(elab, stmt->expr, &ts);
             if (!(typestr_mask(&ts) & TYPE_MASK_SCALAR))
             {
                 typestr_error1(&stmt->tok->rc,
@@ -1158,7 +1163,7 @@ static void elaborate_stmt(struct Elaborator* elab, struct ElaborateDeclCtx* ctx
                                "error: expected scalar type in switch condition but got '%.*s'\n",
                                &ts);
             }
-            elaborate_stmts(elab, ctx, stmt->offset, stmt->extent);
+            elaborate_stmts(elab, stmt->seq);
             return;
         }
         default: parser_tok_error(NULL, "error: unknown stmt kind: %s\n", ast_kind_to_string(ast->kind)); return;
@@ -1197,7 +1202,7 @@ static void typestr_from_strlit(TypeStr* t, ExprLit* lit)
 }
 
 static void elaborate_expr_ExprLit(struct Elaborator* elab,
-                                   struct ElaborateDeclCtx* ctx,
+
                                    struct ExprLit* expr,
                                    struct TypeStr* rty)
 {
@@ -1246,11 +1251,11 @@ static void elaborate_expr_ExprLit(struct Elaborator* elab,
 }
 
 static void elaborate_expr_ExprCall(struct Elaborator* elab,
-                                    struct ElaborateDeclCtx* ctx,
+
                                     struct ExprCall* expr,
                                     struct TypeStr* rty)
 {
-    elaborate_expr_decay(elab, ctx, expr->fn, rty);
+    elaborate_expr_decay(elab, expr->fn, rty);
     struct TypeStr orig_fty = *rty;
 
     FnTypeInfo fn_info = typestr_strip_fn(elab->types, rty);
@@ -1266,7 +1271,7 @@ static void elaborate_expr_ExprCall(struct Elaborator* elab,
         CallParam* const param = params + expr->param_offset + i;
         struct Expr* arg_expr = param->expr;
         if (arg_expr == NULL) abort();
-        elaborate_expr_decay(elab, ctx, arg_expr, &arg_expr_ty);
+        elaborate_expr_decay(elab, arg_expr, &arg_expr_ty);
         struct TypeStr orig_arg_expr_ty = arg_expr_ty;
         if (i < fn_info.extent)
         {
@@ -1310,14 +1315,14 @@ static void elaborate_expr_ExprCall(struct Elaborator* elab,
 }
 
 static void elaborate_expr_ExprField(struct Elaborator* elab,
-                                     struct ElaborateDeclCtx* ctx,
+
                                      struct ExprField* e,
                                      struct TypeStr* rty)
 {
 #if defined(TRACING_ELAB)
     fprintf(stderr, " EXPR_FIELD\n");
 #endif
-    elaborate_expr(elab, ctx, e->lhs, rty);
+    elaborate_expr(elab, e->lhs, rty);
     if (typestr_is_unknown(rty))
     {
         parser_tok_error(e->lhs->tok, "error: unable to elaborate expression\n");
@@ -1373,27 +1378,27 @@ static void elaborate_expr_ExprField(struct Elaborator* elab,
 }
 
 static void elaborate_expr_impl(struct Elaborator* elab,
-                                struct ElaborateDeclCtx* ctx,
+
                                 struct Expr* top_expr,
                                 struct TypeStr* rty);
 static void elaborate_expr(struct Elaborator* elab,
-                           struct ElaborateDeclCtx* ctx,
+
                            struct Expr* top_expr,
                            struct TypeStr* rty)
 {
-    elaborate_expr_impl(elab, ctx, top_expr, rty);
+    elaborate_expr_impl(elab, top_expr, rty);
     top_expr->sizing = typestr_calc_sizing_zero_void(elab->types, rty, top_expr->tok);
 }
 
 static void elaborate_expr_lvalue(struct Elaborator* elab,
-                                  struct ElaborateDeclCtx* ctx,
+
                                   struct Expr* top_expr,
                                   struct TypeStr* rty)
 {
     enum AstKind kind = top_expr->kind;
     if (kind == EXPR_REF)
     {
-        elaborate_expr_impl(elab, ctx, top_expr, rty);
+        elaborate_expr_impl(elab, top_expr, rty);
         typestr_addressof(rty);
         top_expr->take_address = 1;
     }
@@ -1404,8 +1409,8 @@ static void elaborate_expr_lvalue(struct Elaborator* elab,
         if (binop->tok->type == TOKEN_SYM1('['))
         {
             struct TypeStr rhs_ty;
-            elaborate_expr_decay(elab, ctx, binop->lhs, rty);
-            elaborate_expr_decay(elab, ctx, binop->rhs, &rhs_ty);
+            elaborate_expr_decay(elab, binop->lhs, rty);
+            elaborate_expr_decay(elab, binop->rhs, &rhs_ty);
             if (typestr_mask(&rhs_ty) & TYPE_FLAGS_POINTER)
             {
                 elaborate_expr_ExprBinOp_impl(elab, &binop->tok->rc, &rhs_ty, rty, TOKEN_SYM1('+'), &binop->info);
@@ -1421,7 +1426,7 @@ static void elaborate_expr_lvalue(struct Elaborator* elab,
         }
         else if (mask & BINOP_FLAGS_ASSIGN)
         {
-            elaborate_expr_impl(elab, ctx, top_expr, rty);
+            elaborate_expr_impl(elab, top_expr, rty);
             typestr_addressof(rty);
             top_expr->take_address = 1;
         }
@@ -1433,7 +1438,7 @@ static void elaborate_expr_lvalue(struct Elaborator* elab,
         ExprUnOp* const unop = (ExprUnOp*)top_expr;
         if (unop->tok->type == TOKEN_SYM1('*'))
         {
-            elaborate_expr_decay(elab, ctx, unop->lhs, rty);
+            elaborate_expr_decay(elab, unop->lhs, rty);
         }
         else
             goto notmatch;
@@ -1443,11 +1448,11 @@ static void elaborate_expr_lvalue(struct Elaborator* elab,
         ExprField* e = (ExprField*)top_expr;
         if (e->is_arrow)
         {
-            elaborate_expr_decay(elab, ctx, e->lhs, rty);
+            elaborate_expr_decay(elab, e->lhs, rty);
         }
         else
         {
-            elaborate_expr_lvalue(elab, ctx, e->lhs, rty);
+            elaborate_expr_lvalue(elab, e->lhs, rty);
         }
         if (typestr_is_unknown(rty)) return;
         const struct TypeStr orig_lhs = *rty;
@@ -1503,7 +1508,7 @@ static void elaborate_expr_lvalue(struct Elaborator* elab,
     else
     {
     notmatch:
-        elaborate_expr(elab, ctx, top_expr, rty);
+        elaborate_expr(elab, top_expr, rty);
         typestr_error1(
             &top_expr->tok->rc, elab->types, "error: expected lvalue but got expression of type %.*s\n", rty);
         *rty = s_type_unknown;
@@ -1512,16 +1517,16 @@ static void elaborate_expr_lvalue(struct Elaborator* elab,
 }
 
 static void elaborate_expr_decay(struct Elaborator* elab,
-                                 struct ElaborateDeclCtx* ctx,
+
                                  struct Expr* top_expr,
                                  struct TypeStr* rty)
 {
-    elaborate_expr_impl(elab, ctx, top_expr, rty);
+    elaborate_expr_impl(elab, top_expr, rty);
     top_expr->take_address = typestr_decay(rty);
     top_expr->sizing = typestr_calc_sizing_zero_void(elab->types, rty, top_expr->tok);
 }
 static void elaborate_expr_impl(struct Elaborator* elab,
-                                struct ElaborateDeclCtx* ctx,
+
                                 struct Expr* top_expr,
                                 struct TypeStr* rty)
 {
@@ -1539,7 +1544,7 @@ static void elaborate_expr_impl(struct Elaborator* elab,
     void* top = top_expr;
     switch (top_expr->kind)
     {
-        case EXPR_LIT: elaborate_expr_ExprLit(elab, ctx, top, rty); break;
+        case EXPR_LIT: elaborate_expr_ExprLit(elab, top, rty); break;
         case EXPR_REF:
         {
             struct ExprRef* esym = top;
@@ -1550,7 +1555,7 @@ static void elaborate_expr_impl(struct Elaborator* elab,
         {
             struct ExprCast* expr = top;
             TypeStr orig;
-            elaborate_expr_decay(elab, ctx, expr->expr, &orig);
+            elaborate_expr_decay(elab, expr->expr, &orig);
             elaborate_declspecs(elab, expr->specs);
             elaborate_decl(elab, expr->type);
             typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, rty, expr->type);
@@ -1581,11 +1586,11 @@ static void elaborate_expr_impl(struct Elaborator* elab,
             }
             break;
         }
-        case EXPR_CALL: elaborate_expr_ExprCall(elab, ctx, top, rty); break;
-        case EXPR_FIELD: elaborate_expr_ExprField(elab, ctx, top, rty); break;
-        case EXPR_BINOP: elaborate_expr_ExprBinOp(elab, ctx, top, rty); break;
-        case EXPR_UNOP: elaborate_expr_ExprUnOp(elab, ctx, top, rty); break;
-        case EXPR_BUILTIN: elaborate_expr_ExprBuiltin(elab, ctx, top, rty); break;
+        case EXPR_CALL: elaborate_expr_ExprCall(elab, top, rty); break;
+        case EXPR_FIELD: elaborate_expr_ExprField(elab, top, rty); break;
+        case EXPR_BINOP: elaborate_expr_ExprBinOp(elab, top, rty); break;
+        case EXPR_UNOP: elaborate_expr_ExprUnOp(elab, top, rty); break;
+        case EXPR_BUILTIN: elaborate_expr_ExprBuiltin(elab, top, rty); break;
         default: parser_tok_error(NULL, "error: unknown expr kind: %s\n", ast_kind_to_string(top_expr->kind)); return;
     }
 #if defined(TRACING_ELAB)
@@ -1631,7 +1636,7 @@ static void elaborate_decltype(Elaborator* elab, AstType* ast)
             elaborate_decltype(elab, fn->type);
             if (!fn->is_param_list)
             {
-                elaborate_stmts(elab, NULL, fn->offset, fn->extent);
+                elaborate_stmts(elab, NULL, fn->seq);
             }
             break;
         }

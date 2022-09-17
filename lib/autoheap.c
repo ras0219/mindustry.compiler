@@ -15,6 +15,9 @@ void autoheap_destroy(struct AutoHeap* heap)
     for (size_t i = 0; i < heap->arr.sz / sizeof(void*); ++i)
     {
         my_free(data[i]);
+#ifndef NDEBUG
+        data[i] = (void*)0xCC;
+#endif
     }
     array_destroy(&heap->arr);
 }

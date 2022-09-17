@@ -6,6 +6,7 @@
 #include "compilermacros.h"
 #include "freevar.h"
 #include "litsuffix.h"
+#include "seqview.h"
 #include "sizing.h"
 
 #define X_AST_POOL_KIND(Y)                                                                                             \
@@ -192,8 +193,7 @@ typedef struct ExprCall
 {
     INHERIT_EXPR;
     struct Expr* fn;
-    size_t param_offset;
-    size_t param_extent;
+    size_t param_offset, param_extent;
 } ExprCall;
 #define AST_STRUCT_EXPR_CALL ExprCall
 #define AST_KIND_ExprCall EXPR_CALL
@@ -231,24 +231,22 @@ typedef struct AstInit
 #define AST_STRUCT_AST_INIT AstInit
 #define AST_KIND_AstInit AST_INIT
 
-struct StmtReturn
+typedef struct StmtReturn
 {
     INHERIT_AST;
 
     // may be null
     struct Expr* expr;
-};
+} StmtReturn;
 
-typedef struct StmtDecls StmtDecls;
-struct StmtDecls
+typedef struct StmtDecls
 {
     INHERIT_AST;
 
     struct DeclSpecs* specs;
 
-    size_t offset;
-    size_t extent;
-};
+    SeqView decls;
+} StmtDecls;
 #define AST_STRUCT_STMT_DECLS StmtDecls
 #define AST_KIND_StmtDecls STMT_DECLS
 
@@ -267,8 +265,7 @@ struct StmtSwitch
 
     struct Expr* expr;
     // body
-    size_t offset;
-    size_t extent;
+    SeqView seq;
 };
 struct StmtCase
 {
@@ -301,8 +298,7 @@ struct StmtBlock
 {
     INHERIT_AST;
 
-    size_t offset;
-    size_t extent;
+    SeqView seq;
 };
 #define AST_STRUCT_STMT_BLOCK StmtBlock
 #define AST_KIND_StmtBlock STMT_BLOCK
