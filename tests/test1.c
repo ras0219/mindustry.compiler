@@ -1476,6 +1476,7 @@ static int test_file(struct TestState* state, const char* path)
     {
         REQUIRE_FAIL_IMPL(path, 1, "%s", "failed to elaborate");
     }
+
     rc = 0;
 fail:
     if (parser_has_errors()) parser_print_msgs(stderr), parser_clear_errors();
@@ -1548,17 +1549,18 @@ void test_passing(struct TestState* state)
     struct dirent* ent;
     while (ent = readdir(dir))
     {
-        if (ent->d_name[0] == '.' && (ent->d_name[1] == '\0' || (ent->d_name[1] == '.' && ent->d_name[2] == '\0')))
-        {
-            continue;
-        }
+#ifdef __APPLE__
+        size_t len = ent->d_namlen;
+#else
+        size_t len = strlen(ent->d_name);
+#endif
+        if (len < 2) continue;
+
+        // Only test files ending in .c
+        if (ent->d_name[len - 2] != '.' || ent->d_name[len - 1] != 'c') continue;
 
         array_shrink(&arr, base_sz, 1);
-#ifdef __APPLE__
-        path_combine(&arr, ent->d_name, ent->d_namlen);
-#else
-        path_combine(&arr, ent->d_name, strlen(ent->d_name));
-#endif
+        path_combine(&arr, ent->d_name, len);
         array_push_byte(&arr, '\0');
 
         test_file(state, arr.data);

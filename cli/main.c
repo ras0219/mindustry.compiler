@@ -591,6 +591,7 @@ fail:
     fe_destroy(&fe);
     array_destroy(&cmd_buf);
     array_destroy(&files_buf);
+    array_destroy(&link_line);
     args_destroy(&args);
     return rc;
 }
