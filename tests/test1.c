@@ -382,25 +382,6 @@ fail:
     return rc;
 }
 
-int preproc_comma_paste(struct TestState* state)
-{
-    int rc = 1;
-    struct Parser* p;
-    struct Preprocessor* pp;
-    SUBTEST(test_parse(state,
-                       &p,
-                       &pp,
-                       "#define X(...) int z, ## __VA_ARGS__;\n"
-                       "struct { X() };\n"
-                       "struct { X(a,b) };\n"));
-
-    rc = 0;
-fail:
-    if (p) parser_destroy(p), my_free(p);
-    if (pp) preproc_free(pp);
-    return rc;
-}
-
 int parse_strings(struct TestState* state)
 {
     int rc = 1;
@@ -900,23 +881,6 @@ fail:
     return rc;
 }
 
-int parse_initializer_expr_designated(struct TestState* state)
-{
-    int rc = 1;
-    StandardTest test = {0};
-    SUBTEST(stdtest_run(state,
-                        &test,
-                        "struct A {int x;};\n"
-                        "struct A foo();\n"
-                        "struct B {struct A a, b;};\n"
-                        "void bar()\n"
-                        "{ struct B a = { foo() }; }\n"));
-    rc = 0;
-fail:
-    stdtest_destroy(&test);
-    return rc;
-}
-
 int parse_unk_array(struct TestState* state, StandardTest* test)
 {
     int rc = 1;
@@ -1043,23 +1007,6 @@ int parse_uuva_list(struct TestState* state)
         }
     }
 
-fail:
-    stdtest_destroy(&test);
-    return rc;
-}
-
-int parse_shadow(struct TestState* state)
-{
-    int rc = 1;
-    StandardTest test = {0};
-    SUBTEST(stdtest_run(state,
-                        &test,
-                        "int i;\n"
-                        "int main() {\n"
-                        "int i;\n"
-                        "{ int i; }\n"
-                        "}\n"));
-    rc = 0;
 fail:
     stdtest_destroy(&test);
     return rc;
@@ -1260,66 +1207,6 @@ int parse_constants(struct TestState* state)
         }
     }
 
-fail:
-    stdtest_destroy(&test);
-    return rc;
-}
-
-int parse_constinit(struct TestState* state)
-{
-    int rc = 1;
-    StandardTest test = {0};
-    SUBTEST(stdtest_run(state,
-                        &test,
-                        "void f();\n"
-                        "void (*p_f)() = f;\n"
-                        "void (*p_f2)() = (void(*)())f;\n"
-                        "enum { A = 0xffff & ~(1<<5) };"));
-    rc = 0;
-
-fail:
-    stdtest_destroy(&test);
-    return rc;
-}
-
-int parse_lvalues(struct TestState* state)
-{
-    int rc = 1;
-    StandardTest test = {0};
-    SUBTEST(stdtest_run(state,
-                        &test,
-                        "void f() {\n"
-                        "  int x;\n"
-                        "  struct { int x; } y, *py;\n"
-                        "  int z[2];\n"
-                        "  int *p;\n"
-                        "\n"
-                        "  x = 0;\n"
-                        "  y.x = 0;\n"
-                        "  py->x = 0;\n"
-                        "  z[0] = 0;\n"
-                        "  *p = 0;\n"
-                        "  (x) = 0;\n"
-                        "}\n"));
-    rc = 0;
-
-fail:
-    stdtest_destroy(&test);
-    return rc;
-}
-
-int parse_fn_ptr_conversion(struct TestState* state)
-{
-    int rc = 1;
-    StandardTest test = {0};
-    SUBTEST(stdtest_run(state,
-                        &test,
-                        "int foo();\n"
-                        "int main() {\n"
-                        "int (*i)() = foo;\n"
-                        "int (*j)() = &foo;\n"
-                        "}\n"));
-    rc = 0;
 fail:
     stdtest_destroy(&test);
     return rc;
@@ -1562,28 +1449,6 @@ fail:
     return rc;
 }
 
-int parse_ptrconvert(struct TestState* state)
-{
-    int rc = 1;
-    StandardTest test = {0};
-    SUBTEST(stdtest_run(state,
-                        &test,
-                        "typedef int Int;"
-                        "int bar(int* i);\n"
-                        "int foo(const Int* i);\n"
-                        "int main() {\n"
-                        "int *x = (void*)0;\n"
-                        "foo(x);\n"
-                        "bar(x);\n"
-                        "const int *y = (void*)0;\n"
-                        "foo(y);\n"
-                        "}\n"));
-    rc = 0;
-fail:
-    stdtest_destroy(&test);
-    return rc;
-}
-
 static int test_file(struct TestState* state, const char* path)
 {
     int rc = 1;
@@ -1658,7 +1523,7 @@ static int test_file_fail(struct TestState* state, const char* path)
     REQUIRE_FAIL_IMPL(path, 1, "was expected to fail, but passed");
 
 fail:
-    if (parser_has_errors()) parser_print_msgs(stderr), parser_clear_errors();
+    parser_clear_errors();
     elaborator_destroy(&elab);
     parser_destroy(&parser);
     if (pp) preproc_free(pp);
@@ -1909,34 +1774,27 @@ int require_tace(TestState* state, struct TACEntry* expected, struct TACEntry* a
     INFO("arg2\n", 2) { rc |= require_taca(state, &expected->arg2, &actual->arg2, file, line - 1); }
     return rc;
 }
-
-#define REQUIRE_TACES()                                                                                                \
-    do                                                                                                                 \
-    {                                                                                                                  \
-        struct TACEntry* data = test->be->code.data;                                                                   \
-        const size_t actual_sz = array_size(&test->be->code, sizeof(struct TACEntry));                                 \
-        const size_t expected_sz = sizeof(expected) / sizeof(expected[0]);                                             \
-        size_t sz = actual_sz;                                                                                         \
-        if (sz > expected_sz) sz = expected_sz;                                                                        \
-        for (size_t i = 0; i < sz; ++i)                                                                                \
-        {                                                                                                              \
-            INFO("index %zu\n", i) { SUBTEST(require_tace(state, expected + i, data + i, __FILE__, __LINE__)); }       \
-        }                                                                                                              \
-        REQUIRE_EQ(expected_sz, actual_sz);                                                                            \
-    } while (0)
+int require_tace2(
+    TestState* state, StandardTest* test, struct TACEntry* expected, const char* file, int line, size_t* index)
+{
+    int rc = 0;
+    if (*index < array_size(&test->be->code, sizeof(struct TACEntry)))
+    {
+        UNWRAP(require_tace(state, expected, (TACEntry*)test->be->code.data + (*index)++, file, line));
+    }
+    else
+    {
+        REQUIRE_FAIL("expected additional TACEntry (found %zu)", (size_t)*index);
+    }
+fail:
+    return rc;
+}
 
 #define REQUIRE_NEXT_TACE(...)                                                                                         \
     do                                                                                                                 \
     {                                                                                                                  \
-        if (index < array_size(&test->be->code, sizeof(struct TACEntry)))                                              \
-        {                                                                                                              \
-            struct TACEntry expected = __VA_ARGS__;                                                                    \
-            UNWRAP(require_tace(state, &expected, (TACEntry*)test->be->code.data + index++, __FILE__, __LINE__));      \
-        }                                                                                                              \
-        else                                                                                                           \
-        {                                                                                                              \
-            REQUIRE_FAIL("expected additional TACEntry (found %zu)", (size_t)index);                                   \
-        }                                                                                                              \
+        struct TACEntry expected = __VA_ARGS__;                                                                        \
+        if (require_tace2(state, test, &expected, __FILE__, __LINE__, &index)) goto fail;                              \
     } while (0)
 
 #define REQUIRE_END_TACE() REQUIRE_ZU_EQ(index, array_size(&test->be->code, sizeof(struct TACEntry)))
@@ -1966,24 +1824,37 @@ static size_t start_of_line_text(size_t offset, const char* const data, const si
     } while (1);
 }
 
+static int require_next_text(TestState* state,
+                             StandardTest* test,
+                             const char* file,
+                             unsigned line,
+                             size_t* index,
+                             const char* expected,
+                             const char* expected_str)
+{
+    *index = start_of_line_text(*index, test->cg->code.data, test->cg->code.sz);
+    if (*index < test->cg->code.sz)
+    {
+        size_t expected_len = strlen(expected);
+        const char* actual = (const char*)test->cg->code.data + *index;
+        size_t actual_len = end_of_line(*index, test->cg->code.data, test->cg->code.sz) - *index;
+        REQUIRE_MEM_EQ_IMPL(file, line, expected_str, expected, expected_len, "actual", actual, actual_len);
+        *index += actual_len;
+        if (*index != test->cg->code.sz) ++*index;
+    }
+    else
+    {
+        REQUIRE_FAIL_IMPL(file, line, "%s", "expected more text.");
+    }
+    return 0;
+fail:
+    return 1;
+}
+
 #define REQUIRE_NEXT_TEXT(...)                                                                                         \
     do                                                                                                                 \
     {                                                                                                                  \
-        index = start_of_line_text(index, test->cg->code.data, test->cg->code.sz);                                     \
-        if (index < test->cg->code.sz)                                                                                 \
-        {                                                                                                              \
-            const char* expected = __VA_ARGS__;                                                                        \
-            size_t expected_len = strlen(expected);                                                                    \
-            const char* actual = (const char*)test->cg->code.data + index;                                             \
-            size_t actual_len = end_of_line(index, test->cg->code.data, test->cg->code.sz) - index;                    \
-            REQUIRE_MEM_EQ(expected, expected_len, actual, actual_len);                                                \
-            index += actual_len;                                                                                       \
-            if (index != test->cg->code.sz) ++index;                                                                   \
-        }                                                                                                              \
-        else                                                                                                           \
-        {                                                                                                              \
-            REQUIRE_FAIL("%s", "expected more text.");                                                                 \
-        }                                                                                                              \
+        if (require_next_text(state, test, __FILE__, __LINE__, &index, (__VA_ARGS__), #__VA_ARGS__)) goto fail;        \
     } while (0)
 
 #define REQUIRE_END_TEXT()                                                                                             \
@@ -2546,7 +2417,7 @@ int test_be_cast(TestState* state, StandardTest* test)
                        " int y = 2 + (int)ch;"
                        " unsigned z = (unsigned char)(char)-1;"
                        "}"));
-    int index = 0;
+    size_t index = 0;
     REQUIRE_NEXT_TACE({
         TACO_ADD,
         {TACA_FRAME, .sizing = s_sizing_schar, .frame_offset = 0},
@@ -2668,7 +2539,7 @@ int test_be_call(TestState* state, StandardTest* test)
                        " im_call(mm_call(mi_call(5)));\n"
                        " f();\n"
                        "}"));
-    int index = 0;
+    size_t index = 0;
 
     // ii_call(10);
     REQUIRE_NEXT_TACE({
@@ -2747,7 +2618,7 @@ int test_be_call2(TestState* state, StandardTest* test)
                        "{"
                        "cg_debug(cg, \"   : %s\\n\", sym);"
                        "}"));
-    int index = 0;
+    size_t index = 0;
 
     // prologue;
     REQUIRE_NEXT_TACE({
@@ -2800,7 +2671,7 @@ int test_be_call3(TestState* state, StandardTest* test)
                        " struct Y y;"
                        " f(x, y);"
                        "}"));
-    int index = 0;
+    size_t index = 0;
 
     // prologue;
     REQUIRE_NEXT_TACE({
@@ -2850,7 +2721,7 @@ int test_be_got(TestState* state, StandardTest* test)
                        " g = h;\n"
                        " g = i;\n"
                        "}\n"));
-    int index = 0;
+    size_t index = 0;
 
     // prologue;
     REQUIRE_NEXT_TACE({
@@ -2918,7 +2789,7 @@ int test_be_va_args(TestState* state, StandardTest* test)
                        "__builtin_va_end(v);"
                        "f(0, 1, 2, 2, 2, 2, 2);"
                        "}\n"));
-    int index = 0;
+    size_t index = 0;
 
     // prologue;
     REQUIRE_NEXT_TACE({
@@ -3194,7 +3065,7 @@ int test_be_va_args2(TestState* state, StandardTest* test)
                        "void f(__builtin_va_list v) {\n"
                        "int x = __builtin_va_arg(v, int);"
                        "}\n"));
-    int index = 0;
+    size_t index = 0;
 
     // prologue;
     REQUIRE_NEXT_TACE({
@@ -3397,7 +3268,7 @@ int test_be_conversions(TestState* state, StandardTest* test)
                        "unsigned long long z = x * 2;"
                        "unsigned long long w = z * 2;"
                        "}"));
-    int index = 0;
+    size_t index = 0;
 
     // char x = 10;
     REQUIRE_NEXT_TACE({
@@ -3512,7 +3383,7 @@ int test_be_init(TestState* state, StandardTest* test)
                        "{"
                        "struct A s1 = {0};"
                        "}"));
-    int index = 0;
+    size_t index = 0;
 
     // prologue;
     REQUIRE_NEXT_TACE({
@@ -3544,7 +3415,7 @@ int test_be_switch(TestState* state, StandardTest* test)
                        "case 2: return 20;"
                        "default: return 30;"
                        "}}"));
-    int index = 0;
+    size_t index = 0;
 
     // prelude
     REQUIRE_NEXT_TACE({
@@ -3642,7 +3513,7 @@ int test_be_ternary(TestState* state, StandardTest* test)
                        "int f(int x) {\n"
                        "return x == 1 ? 10 : 20;"
                        "}"));
-    int index = 0;
+    size_t index = 0;
 
     // prelude
     REQUIRE_NEXT_TACE({
@@ -4375,14 +4246,11 @@ int main(int argc, char** argv)
         }
     }
 
-    RUN_TEST(preproc_comma_paste);
     RUN_TEST(parse_strings);
     RUN_TEST(parse_main);
     RUN_TEST(parse_body);
     RUN_TEST(parse_sizeof);
     RUN_TEST(parse_constants);
-    RUN_TEST(parse_constinit);
-    RUN_TEST(parse_lvalues);
     RUN_TEST(parse_typedef);
     RUN_TEST(parse_struct);
     RUN_TEST(parse_initializer);
@@ -4394,17 +4262,14 @@ int main(int argc, char** argv)
     RUN_TEST(parse_anon_decls);
     RUN_TEST(parse_decls_and_defs);
     RUN_TEST(parse_uuva_list);
-    RUN_TEST(parse_shadow);
-    RUN_TEST(parse_initializer_expr_designated);
-    RUN_TEST(parse_fn_ptr_conversion);
     RUN_TEST(parse_implicit_conversion);
     RUN_TEST(parse_params);
     RUN_TEST(parse_enums);
     RUN_TEST(parse_typedefs);
     RUN_TEST(parse_aggregates);
-    RUN_TEST(parse_ptrconvert);
 
     test_passing(state);
+    test_failing(state);
 
     const char* color = (state->testfails + state->assertionfails == 0) ? _state.colorsuc : _state.colorerr;
 

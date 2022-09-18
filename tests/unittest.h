@@ -117,34 +117,21 @@ int unittest_require_zu_eq_impl(struct TestState* state,
             REQUIRE_FAIL("'%s eq %s' was '\"%s\" eq \"%s\"'", #expected, #actual, _expr_a, _expr_b);                   \
     } while (0)
 
+int unittest_require_mem_eq_impl(struct TestState* state,
+                                 const char* file,
+                                 int line,
+                                 const char* expected_str,
+                                 const char* expected,
+                                 int expected_len,
+                                 const char* actual_str,
+                                 const char* actual,
+                                 int actual_len);
 #define REQUIRE_MEM_EQ_IMPL(file, line, expected_str, expected, expected_len, actual_str, actual, actual_len)          \
     do                                                                                                                 \
     {                                                                                                                  \
-        state->assertions++;                                                                                           \
-        const char* _expr_a = (expected);                                                                              \
-        const char* _expr_b = (actual);                                                                                \
-        int _len_a = (int)(expected_len);                                                                              \
-        int _len_b = (int)(actual_len);                                                                                \
-        if (_len_a != _len_b || memcmp(_expr_a, _expr_b, _len_a) != 0)                                                 \
-            REQUIRE_FAIL_IMPL(file,                                                                                    \
-                              line,                                                                                    \
-                              "'%.*s' != '%.*s'\n"                                                                     \
-                              "    expected:      \"%.*s\"(%d)\n"                                                      \
-                              "    actual:        \"%.*s\"(%d)\n"                                                      \
-                              "    expected-expr: %s\n"                                                                \
-                              "    actual-expr:   %s\n",                                                               \
-                              _len_a,                                                                                  \
-                              _expr_a,                                                                                 \
-                              _len_b,                                                                                  \
-                              _expr_b,                                                                                 \
-                              _len_a,                                                                                  \
-                              _expr_a,                                                                                 \
-                              _len_a,                                                                                  \
-                              _len_b,                                                                                  \
-                              _expr_b,                                                                                 \
-                              _len_b,                                                                                  \
-                              expected_str,                                                                            \
-                              actual_str);                                                                             \
+        if (unittest_require_mem_eq_impl(                                                                              \
+                state, file, line, expected_str, (expected), (expected_len), actual_str, (actual), (actual_len)))      \
+            goto fail;                                                                                                 \
     } while (0)
 
 #define REQUIRE_MEM_EQ(expected, expected_len, actual, actual_len)                                                     \
