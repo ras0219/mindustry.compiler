@@ -1752,6 +1752,9 @@ static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
             {
                 if (!decl->init) abort();
                 if (decl->type->kind != AST_DECLFN) abort();
+
+                elaborate_stmts(elab, decl->decl_list);
+
                 TypeStr ts = sym->type;
                 typestr_pop_offset(&ts);
                 sym->fn_ret_sizing = typestr_calc_sizing_zero_void(elab->types, &ts, decl->tok);

@@ -9,6 +9,7 @@
 void array_init(struct Array* arr) { memset(arr, 0, sizeof(struct Array)); }
 void* array_alloc(struct Array* arr, size_t sz)
 {
+    if (sz == 0) return array_reserve(arr, 1), arr->data;
     arr->sz += sz;
     if (arr->sz > arr->cap)
     {
@@ -25,7 +26,7 @@ void* array_alloc(struct Array* arr, size_t sz)
 void* array_push(struct Array* arr, const void* src, size_t sz)
 {
     void* dst = array_alloc(arr, sz);
-    memcpy(dst, src, sz);
+    if (sz > 0) memcpy(dst, src, sz);
     return dst;
 }
 void* array_push_byte(struct Array* arr, char ch)

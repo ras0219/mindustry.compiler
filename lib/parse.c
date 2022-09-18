@@ -1498,14 +1498,14 @@ static const struct Token* parse_fnbody(Parser* p, const struct Token* cur_tok, 
                 {
                     if (toks[k]->sp_offset == decls2[j]->tok->sp_offset) goto found_param;
                 }
-                PARSER_FAIL_TOK(decls2[j]->tok, "declaration does not match any parameters");
+                PARSER_FAIL_TOK(decls2[j]->tok, "declaration does not match any parameters\n");
             found_param:
                 ++n;
             }
         }
         if (n != fn->seq.ext)
         {
-            PARSER_FAIL("expected all parameters to be declared");
+            PARSER_FAIL("expected all parameters to be declared\n");
         }
     }
     else if (fn->seq.ext > 0)

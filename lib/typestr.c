@@ -266,6 +266,30 @@ static void typestr_append_decltype_DeclSpecs(TypeTable* tt, struct TypeStr* s, 
     typestr_add_cvr(s, m);
     return;
 }
+
+static size_t tt_insert_fnargs(TypeTable* tt, const Array* args)
+{
+    size_t i = 0;
+    const size_t args_sz = array_size(args, sizeof(struct TypeStr));
+    struct TypeStr* tt_fn_args = tt->fn_args.data;
+    size_t fn_args_ends_sz = arrsz_size(&tt->fn_args_ends);
+    size_t prev_end = 0;
+    for (; i < fn_args_ends_sz; ++i)
+    {
+        size_t end = arrsz_at(&tt->fn_args_ends, i);
+        if (end - prev_end == args_sz && (args_sz == 0 || memcmp(tt_fn_args + prev_end, args->data, args->sz) == 0))
+        {
+            goto found;
+        }
+        prev_end = end;
+    }
+    // not found, insert seq at end
+    array_push(&tt->fn_args, args->data, args->sz);
+    arrsz_push(&tt->fn_args_ends, array_size(&tt->fn_args, sizeof(struct TypeStr)));
+found:
+    return i;
+}
+
 static void typestr_append_decltype(const void* const* expr_seqs, TypeTable* tt, TypeStr* s, const AstType* e)
 {
     if (!e) abort();
@@ -317,26 +341,7 @@ static void typestr_append_decltype(const void* const* expr_seqs, TypeTable* tt,
                     array_push(&args, &var, sizeof(var));
                 }
             }
-            size_t i = 0;
-            struct TypeStr* tt_fn_args = tt->fn_args.data;
-            size_t fn_args_ends_sz = arrsz_size(&tt->fn_args_ends);
-            size_t prev_end = 0;
-            for (; i < fn_args_ends_sz; ++i)
-            {
-                size_t end = arrsz_at(&tt->fn_args_ends, i);
-                if (end - prev_end == args.sz / sizeof(struct TypeStr) &&
-                    (args.sz == 0 || memcmp(tt_fn_args + prev_end, args.data, args.sz) == 0))
-                {
-                    break;
-                }
-                prev_end = end;
-            }
-            if (i == fn_args_ends_sz)
-            {
-                if (args.sz) array_push(&tt->fn_args, args.data, args.sz);
-                arrsz_push(&tt->fn_args_ends, array_size(&tt->fn_args, sizeof(struct TypeStr)));
-            }
-            typestr_append_offset(s, i, TYPE_BYTE_FUNCTION);
+            typestr_append_offset(s, tt_insert_fnargs(tt, &args), TYPE_BYTE_FUNCTION);
             array_destroy(&args);
             break;
         }
