@@ -7,7 +7,9 @@
 #include "dirent.h"
 #include "elaborator.h"
 #include "errors.h"
+#include "lexstate.h"
 #include "parse.h"
+#include "parse_macros.h"
 #include "path.h"
 #include "preproc.h"
 #include "stdlibe.h"
@@ -1449,13 +1451,211 @@ fail:
     return rc;
 }
 
+typedef struct AstChecker
+{
+    TestState* const state;
+    const Preprocessor* const pp;
+    const Parser* const p;
+    const Elaborator* const e;
+    const char* const filename;
+} AstChecker;
+
+static const Token* expect_str(AstChecker* ctx, const Token* cur_tok, const char* id)
+{
+    const char* tokstr = preproc_stringpool(ctx->pp) + cur_tok->sp_offset;
+    if (strcmp(tokstr, id) == 0)
+        ++cur_tok;
+    else
+        PARSER_FAIL("error: expected token '%s' but got '%s'\n", id, tokstr);
+fail:
+    return cur_tok;
+}
+static const Token* expect_number(AstChecker* ctx, const Token* cur_tok, unsigned long long n)
+{
+    if (cur_tok->type != LEX_NUMBER) PARSER_FAIL("error: expected number '%llu'\n", n);
+    const char* tokstr = preproc_stringpool(ctx->pp) + cur_tok->sp_offset;
+    unsigned long long m = strtoull(tokstr, NULL, 10);
+    if (n != m) PARSER_FAIL("error: expected '%llu' but got '%llu'\n", n, m);
+    ++cur_tok;
+fail:
+    return cur_tok;
+}
+
+static const Token* test_ast_ast(AstChecker* ctx, const Token* cur_tok, const Ast* ast)
+{
+    if (cur_tok->type == TOKEN_SYM1('?'))
+    {
+        ++cur_tok;
+    }
+    else if (cur_tok->type == TOKEN_SYM1('('))
+    {
+        ++cur_tok;
+        PARSER_DO(expect_str(ctx, cur_tok, ast_kind_to_string(ast->kind)));
+        switch (ast->kind)
+        {
+            case STMT_BLOCK:
+            {
+                const struct StmtBlock* a = (void*)ast;
+                const Ast* const* const asts = (const Ast**)ctx->p->expr_seqs.data + a->seq.off;
+                for (size_t i = 0; i < a->seq.ext; ++i)
+                {
+                    PARSER_DO(test_ast_ast(ctx, cur_tok, asts[i]));
+                }
+                break;
+            }
+            case STMT_DECLS:
+            {
+                const StmtDecls* a = (void*)ast;
+                PARSER_DO(test_ast_ast(ctx, cur_tok, &a->specs->ast));
+                const Ast* const* const asts = (const Ast**)ctx->p->expr_seqs.data + a->seq.off;
+                for (size_t i = 0; i < a->seq.ext; ++i)
+                {
+                    PARSER_DO(test_ast_ast(ctx, cur_tok, asts[i]));
+                }
+                break;
+            }
+            case AST_DECLSPEC:
+            {
+                const DeclSpecs* a = (void*)ast;
+                PARSER_DO(expect_str(ctx, cur_tok, ctx->p->tk_strdata + a->tok->sp_offset));
+                break;
+            }
+            case AST_DECL:
+            {
+                const Decl* a = (void*)ast;
+                PARSER_DO(expect_str(ctx, cur_tok, ctx->p->tk_strdata + a->tok->sp_offset));
+                PARSER_DO(test_ast_ast(ctx, cur_tok, &a->type->ast));
+                if (a->init) PARSER_DO(test_ast_ast(ctx, cur_tok, a->init));
+                break;
+            }
+            case AST_DECLARR:
+            {
+                const DeclArr* a = (void*)ast;
+                if (a->arity) PARSER_DO(test_ast_ast(ctx, cur_tok, &a->arity->ast));
+                PARSER_DO(test_ast_ast(ctx, cur_tok, &a->type->ast));
+                break;
+            }
+            case AST_DECLFN:
+            {
+                const DeclFn* a = (void*)ast;
+                if (a->is_param_list)
+                {
+                    PARSER_DO(expect_str(ctx, cur_tok, "param"));
+                }
+                else
+                {
+                    const Ast* const* const asts = (const Ast**)ctx->p->expr_seqs.data + a->seq.off;
+                    for (size_t i = 0; i < a->seq.ext; ++i)
+                    {
+                        PARSER_DO(test_ast_ast(ctx, cur_tok, asts[i]));
+                    }
+                }
+                if (a->is_varargs) PARSER_DO(expect_str(ctx, cur_tok, "..."));
+                PARSER_DO(test_ast_ast(ctx, cur_tok, &a->type->ast));
+                break;
+            }
+            case AST_DECLPTR:
+            {
+                const DeclPtr* a = (void*)ast;
+                PARSER_DO(test_ast_ast(ctx, cur_tok, &a->type->ast));
+                break;
+            }
+            case EXPR_LIT:
+            {
+                const ExprLit* a = (void*)ast;
+                if (a->sym)
+                {
+                    // string literal
+                }
+                else
+                {
+                    PARSER_DO(expect_number(ctx, cur_tok, a->numeric));
+                    if (a->suffix) PARSER_DO(expect_number(ctx, cur_tok, a->suffix));
+                }
+                break;
+            }
+            case EXPR_REF:
+            {
+                const ExprRef* a = (void*)ast;
+                PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
+                break;
+            }
+            case EXPR_CALL:
+            {
+                const ExprCall* a = (void*)ast;
+                PARSER_DO(test_ast_ast(ctx, cur_tok, &a->fn->ast));
+                const CallParam* const b = (const CallParam*)ctx->p->callparams.data + a->param_offset;
+                for (size_t i = 0; i < a->param_extent; ++i)
+                {
+                    PARSER_DO(test_ast_ast(ctx, cur_tok, &b[i].expr->ast));
+                }
+                break;
+            }
+            case AST_INIT:
+            {
+                const AstInit* a = (void*)ast;
+                while (a->init != NULL)
+                {
+                    PARSER_DO(expect_number(ctx, cur_tok, a->designator_offset));
+                    PARSER_DO(expect_number(ctx, cur_tok, a->designator_extent));
+                    PARSER_DO(test_ast_ast(ctx, cur_tok, a->init));
+                    a = a->next;
+                }
+                break;
+            }
+            default: PARSER_FAIL("error: unknown ast type: %s\n", ast_kind_to_string(ast->kind));
+        }
+        if (cur_tok->type != TOKEN_SYM1(')'))
+        {
+            PARSER_FAIL("error: expected ')'\n");
+        }
+        ++cur_tok;
+    }
+    else
+    {
+        PARSER_FAIL("error: expected '(' %s\n", ast_kind_to_string(ast->kind));
+    }
+fail:
+    return cur_tok;
+}
+static const Token* test_ast_top(AstChecker* ctx, const Token* cur_tok, const Ast* ast)
+{
+    PARSER_DO(test_ast_ast(ctx, cur_tok, ast));
+    if (cur_tok->type != LEX_EOF)
+    {
+        PARSER_FAIL("error: expected eof\n");
+    }
+fail:
+    return cur_tok;
+}
+
+static int test_ast(
+    struct TestState* state, const Preprocessor* pp, Parser* parser, Elaborator* elab, const char* filename)
+{
+    AstChecker ctx = {.state = state, .pp = pp, .p = parser, .e = elab, .filename = filename};
+    const Token* start = preproc_tokens(pp);
+    const Token* cur_tok = test_ast_top(&ctx, start, &parser->top->ast);
+    if (cur_tok == NULL)
+    {
+        parser_print_errors(stderr);
+        REQUIRE_FAIL_IMPL(filename, 999, "failed to parse");
+    }
+    REQUIREZ(parser_has_errors());
+    return 0;
+fail:
+    parser_clear_errors();
+    return 1;
+}
+
 static int test_file(struct TestState* state, const char* path)
 {
     int rc = 1;
-    Preprocessor* pp = NULL;
+    Array astfile = {0}, buf = {0};
+    Preprocessor *pp = NULL, *ast_pp = NULL;
     Parser parser = {0};
     Elaborator elab = {0};
     FILE* f = fopen(path, "r");
+    FILE* f2 = NULL;
     if (!f) REQUIRE_FAIL("failed to open test file %s", path);
 
     parser_clear_errors();
@@ -1472,18 +1672,33 @@ static int test_file(struct TestState* state, const char* path)
     }
 
     elaborator_init(&elab, &parser);
-    if (elaborate(&elab))
+    if (elaborate(&elab) || parser_has_errors())
     {
         REQUIRE_FAIL_IMPL(path, 1, "%s", "failed to elaborate");
     }
 
+    array_appends(&astfile, path);
+    array_push(&astfile, ".ast", 5);
+    if (f2 = fopen(astfile.data, "rb"))
+    {
+        ast_pp = preproc_alloc();
+        if (preproc_file(ast_pp, f2, astfile.data))
+        {
+            REQUIRE_FAIL_IMPL((char*)astfile.data, 1, "%s", "failed to preprocess");
+        }
+        if (test_ast(state, ast_pp, &parser, &elab, astfile.data)) goto fail;
+    }
     rc = 0;
 fail:
     if (parser_has_errors()) parser_print_msgs(stderr), parser_clear_errors();
     elaborator_destroy(&elab);
     parser_destroy(&parser);
+    if (ast_pp) preproc_free(ast_pp);
     if (pp) preproc_free(pp);
+    if (f2) fclose(f2);
     if (f) fclose(f);
+    array_destroy(&buf);
+    array_destroy(&astfile);
     return rc;
 }
 
@@ -1532,11 +1747,13 @@ fail:
     return rc;
 }
 
-void test_passing(struct TestState* state)
+static void foreach_c_file(struct TestState* state,
+                           const char* subdir,
+                           int (*cb)(struct TestState* state, const char* path))
 {
     Array filebuf = {0};
     Array arr = {0};
-    assign_path_join(&arr, g_datadir, g_datadir_sz, "tests/pass", sizeof("tests/pass") - 1);
+    assign_path_join(&arr, g_datadir, g_datadir_sz, subdir, strlen(subdir));
     DIR* dir = opendir(arr.data);
     FILE* f = NULL;
     if (!dir)
@@ -1563,7 +1780,7 @@ void test_passing(struct TestState* state)
         path_combine(&arr, ent->d_name, len);
         array_push_byte(&arr, '\0');
 
-        test_file(state, arr.data);
+        cb(state, arr.data);
     }
 
     closedir(dir);
@@ -1572,44 +1789,8 @@ void test_passing(struct TestState* state)
     array_destroy(&filebuf);
 }
 
-void test_failing(struct TestState* state)
-{
-    Array filebuf = {0};
-    Array arr = {0};
-    assign_path_join(&arr, g_datadir, g_datadir_sz, "tests/fail", sizeof("tests/fail") - 1);
-    DIR* dir = opendir(arr.data);
-    FILE* f = NULL;
-    if (!dir)
-    {
-        fprintf(stderr, "error: opendir(): ");
-        perror(arr.data);
-        exit(1);
-    }
-    const size_t base_sz = arr.sz - 1;
-    struct dirent* ent;
-    while (ent = readdir(dir))
-    {
-        if (ent->d_name[0] == '.' && (ent->d_name[1] == '\0' || (ent->d_name[1] == '.' && ent->d_name[2] == '\0')))
-        {
-            continue;
-        }
-
-        array_shrink(&arr, base_sz, 1);
-#ifdef __APPLE__
-        path_combine(&arr, ent->d_name, ent->d_namlen);
-#else
-        path_combine(&arr, ent->d_name, strlen(ent->d_name));
-#endif
-        array_push_byte(&arr, '\0');
-
-        test_file_fail(state, arr.data);
-    }
-
-    closedir(dir);
-    if (f) fclose(f);
-    array_destroy(&arr);
-    array_destroy(&filebuf);
-}
+static void test_passing(struct TestState* state) { foreach_c_file(state, "tests/pass", test_file); }
+static void test_failing(struct TestState* state) { foreach_c_file(state, "tests/fail", test_file_fail); }
 
 int parse_params(struct TestState* state)
 {

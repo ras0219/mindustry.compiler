@@ -74,7 +74,7 @@ typedef struct DeclSpecs
 #define AST_STRUCT_AST_DECLSPEC DeclSpecs
 #define AST_KIND_DeclSpecs AST_DECLSPEC
 
-struct DeclPtr
+typedef struct DeclPtr
 {
     INHERIT_ASTTYPE;
     struct AstType* type;
@@ -82,7 +82,7 @@ struct DeclPtr
     int is_const : 1;
     int is_volatile : 1;
     int is_restrict : 1;
-};
+} DeclPtr;
 
 typedef struct DeclFn
 {

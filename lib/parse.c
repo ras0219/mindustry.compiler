@@ -9,6 +9,7 @@
 #include "cg.h"
 #include "errors.h"
 #include "lexstate.h"
+#include "parse_macros.h"
 #include "parsestate.h"
 #include "pool.h"
 #include "scope.h"
@@ -18,55 +19,7 @@
 #include "tok.h"
 #include "token.h"
 
-#define PARSER_FAIL_RC(RC, ...)                                                                                        \
-    do                                                                                                                 \
-    {                                                                                                                  \
-        parser_ferror(RC, __VA_ARGS__);                                                                                \
-        cur_tok = NULL;                                                                                                \
-        goto fail;                                                                                                     \
-    } while (0)
-
-#define PARSER_FAIL_TOK(TOK, ...)                                                                                      \
-    do                                                                                                                 \
-    {                                                                                                                  \
-        parser_tok_error(TOK, __VA_ARGS__);                                                                            \
-        cur_tok = NULL;                                                                                                \
-        goto fail;                                                                                                     \
-    } while (0)
-
-#define PARSER_FAIL(...) PARSER_FAIL_TOK(cur_tok, __VA_ARGS__)
-
-#define PARSER_DO(X)                                                                                                   \
-    do                                                                                                                 \
-    {                                                                                                                  \
-        cur_tok = (X);                                                                                                 \
-        if (cur_tok == NULL) goto fail;                                                                                \
-    } while (0)
-
-#define PARSER_DO_WITH(X, ...)                                                                                         \
-    do                                                                                                                 \
-    {                                                                                                                  \
-        cur_tok = (X);                                                                                                 \
-        if (cur_tok == NULL)                                                                                           \
-        {                                                                                                              \
-            parser_tok_error(cur_tok, __VA_ARGS__);                                                                    \
-            goto fail;                                                                                                 \
-        }                                                                                                              \
-    } while (0)
-
-#define PARSER_CHECK_NOT(X)                                                                                            \
-    do                                                                                                                 \
-    {                                                                                                                  \
-        if (X)                                                                                                         \
-        {                                                                                                              \
-            cur_tok = NULL;                                                                                            \
-            goto fail;                                                                                                 \
-        }                                                                                                              \
-    } while (0)
-
-#define PARSER_CHECK(X) PARSER_CHECK_NOT(!(X))
-
-const char* token_str(Parser* p, const struct Token* tk) { return p->tk_strdata + tk->sp_offset; }
+const char* token_str(const Parser* p, const struct Token* tk) { return p->tk_strdata + tk->sp_offset; }
 static int token_is_sym(Parser* p, const struct Token* tk, char sym) { return tk->type == TOKEN_SYM1(sym); }
 static const struct Token* token_consume_sym(Parser* p, const struct Token* tk, char sym, const char* in)
 {
@@ -2027,7 +1980,7 @@ static void parser_dump_type_ast(struct Parser* p, FILE* f, AstType* ast, int de
     if (ast->kind != AST_DECLSPEC)
         parser_dump_ast(p, f, &ast->ast, depth);
     else
-        fprintf(f, "/**/");
+        fprintf(f, "? /* AST_DECLSPEC */");
 }
 static void parser_dump_ast(struct Parser* p, FILE* f, Ast* ast, int depth)
 {
@@ -2136,11 +2089,11 @@ static void parser_dump_ast(struct Parser* p, FILE* f, Ast* ast, int depth)
             fprintf(f, "(AST_DECL");
             if (blk->tok)
             {
-                fprintf(f, " tok='%s'", token_str(p, blk->tok));
+                fprintf(f, " %s", token_str(p, blk->tok));
             }
             if (blk->type)
             {
-                fprintf(f, " type=");
+                fprintf(f, " ");
                 parser_dump_type_ast(p, f, blk->type, depth + 1);
             }
             if (blk->init)
@@ -2156,7 +2109,7 @@ static void parser_dump_ast(struct Parser* p, FILE* f, Ast* ast, int depth)
             DeclSpecs* blk = (void*)ast;
             fprintf(f, "(AST_DECLSPEC");
             if (blk->is_typedef) fprintf(f, " typedef");
-            if (blk->tok) fprintf(f, " tok='%s'", token_str(p, blk->tok));
+            if (blk->tok) fprintf(f, " %s", token_str(p, blk->tok));
             if (blk->name)
             {
                 fprintf(f, " name=%s", blk->name);
@@ -2178,8 +2131,19 @@ static void parser_dump_ast(struct Parser* p, FILE* f, Ast* ast, int depth)
         {
             DeclFn* blk = (void*)ast;
             fprintf(f, "(AST_DECLFN");
-            if (blk->tok) fprintf(f, " tok='%s'", token_str(p, blk->tok));
-            if (blk->is_varargs) fprintf(f, " is_varargs");
+            if (blk->is_param_list)
+            {
+                fprintf(f, " param");
+            }
+            else
+            {
+                for (size_t i = 0; i < blk->seq.ext; ++i)
+                {
+                    nl_indent(f, depth);
+                    parser_dump_ast(p, f, ((Ast**)p->expr_seqs.data)[blk->seq.off + i], depth + 1);
+                }
+            }
+            if (blk->is_varargs) fprintf(f, " ...");
             if (blk->type)
             {
                 nl_indent(f, depth);
@@ -2214,7 +2178,7 @@ static void parser_dump_ast(struct Parser* p, FILE* f, Ast* ast, int depth)
         {
             struct ExprBinOp* blk = (void*)ast;
             fprintf(f, "(EXPR_BINOP");
-            if (blk->tok) fprintf(f, " tok='%s'", token_str(p, blk->tok));
+            if (blk->tok) fprintf(f, " %s", token_str(p, blk->tok));
             if (blk->lhs)
             {
                 nl_indent(f, depth);
@@ -2233,10 +2197,13 @@ static void parser_dump_ast(struct Parser* p, FILE* f, Ast* ast, int depth)
         {
             struct ExprLit* blk = (void*)ast;
             fprintf(f, "(EXPR_LIT");
-            if (blk->tok) fprintf(f, " tok='%s'", token_str(p, blk->tok));
             if (blk->numeric)
             {
-                fprintf(f, " numeric=%" PRIx64, blk->numeric);
+                fprintf(f, " %" PRIx64, blk->numeric);
+            }
+            if (blk->suffix != 0)
+            {
+                fprintf(f, " %d", blk->suffix);
             }
             fprintf(f, ")");
             break;
@@ -2245,7 +2212,7 @@ static void parser_dump_ast(struct Parser* p, FILE* f, Ast* ast, int depth)
         {
             struct ExprUnOp* blk = (void*)ast;
             fprintf(f, "(EXPR_UNOP");
-            if (blk->tok) fprintf(f, " tok='%s'|%zd", token_str(p, blk->tok), blk->tok - p->tok_data);
+            if (blk->tok) fprintf(f, " %s", token_str(p, blk->tok));
             if (blk->postfix) fprintf(f, " postfix");
             if (blk->sizeof_) fprintf(f, " sizeof_=%u", blk->sizeof_);
             if (blk->lhs)
@@ -2260,7 +2227,7 @@ static void parser_dump_ast(struct Parser* p, FILE* f, Ast* ast, int depth)
         {
             struct ExprField* blk = (void*)ast;
             fprintf(f, "(EXPR_FIELD");
-            if (blk->tok) fprintf(f, " tok='%s'|%zd", token_str(p, blk->tok), blk->tok - p->tok_data);
+            if (blk->tok) fprintf(f, " %s", token_str(p, blk->tok));
             if (blk->fieldname) fprintf(f, " %s", blk->fieldname);
             if (blk->lhs)
             {
@@ -2291,7 +2258,7 @@ static void parser_dump_ast(struct Parser* p, FILE* f, Ast* ast, int depth)
         {
             struct ExprRef* blk = (void*)ast;
             fprintf(f, "(EXPR_REF");
-            if (blk->tok) fprintf(f, " tok='%s'", token_str(p, blk->tok));
+            if (blk->tok) fprintf(f, " %s", token_str(p, blk->tok));
             fprintf(f, ")");
             break;
         }
@@ -2299,7 +2266,6 @@ static void parser_dump_ast(struct Parser* p, FILE* f, Ast* ast, int depth)
         {
             struct ExprCall* blk = (void*)ast;
             fprintf(f, "(EXPR_CALL");
-            if (blk->tok) fprintf(f, " tok='%s'", token_str(p, blk->tok));
             if (blk->fn)
             {
                 nl_indent(f, depth);
@@ -2317,7 +2283,7 @@ static void parser_dump_ast(struct Parser* p, FILE* f, Ast* ast, int depth)
         {
             struct ExprBuiltin* blk = (void*)ast;
             fprintf(f, "(EXPR_BUILTIN");
-            if (blk->tok) fprintf(f, " tok='%s'", token_str(p, blk->tok));
+            if (blk->tok) fprintf(f, " %s", token_str(p, blk->tok));
             if (blk->specs)
             {
                 nl_indent(f, depth);
@@ -2342,10 +2308,25 @@ static void parser_dump_ast(struct Parser* p, FILE* f, Ast* ast, int depth)
             fprintf(f, ")");
             break;
         }
-        default: fprintf(f, "?%d?", ast->kind); break;
+        case AST_INIT:
+        {
+            struct AstInit* a = (void*)ast;
+            fprintf(f, "(AST_INIT");
+            while (a->init != NULL)
+            {
+                nl_indent(f, depth);
+                fprintf(f, "%zu %zu ", a->designator_offset, a->designator_extent);
+                parser_dump_ast(p, f, a->init, depth + 1);
+                a = a->next;
+            }
+            fprintf(f, ")");
+            break;
+        }
+        default: fprintf(f, "/* %s */", ast_kind_to_string(ast->kind)); break;
     }
 }
 
+#if 0
 static void* dump_sym_pool(void* f, void* bucket, size_t n)
 {
     Symbol* syms = bucket;
@@ -2361,10 +2342,11 @@ static void* dump_sym_pool(void* f, void* bucket, size_t n)
 
     return NULL;
 }
+#endif
 
 void parser_dump(struct Parser* p, FILE* f)
 {
     parser_dump_ast(p, f, &p->top->ast, 1);
     fputc('\n', f);
-    pool_foreach_bucket(&p->sym_pool, dump_sym_pool, f);
+    // pool_foreach_bucket(&p->sym_pool, dump_sym_pool, f);
 }

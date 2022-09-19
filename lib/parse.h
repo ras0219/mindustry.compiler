@@ -75,7 +75,7 @@ void parser_init(struct Parser* p);
 void parser_destroy(struct Parser* p);
 /// @param tk must terminate with \c LEX_EOF Token
 int parser_parse(struct Parser* p, const struct Token* tk, const char* tk_strs);
-const char* token_str(struct Parser* p, const struct Token* tk);
+const char* token_str(const struct Parser* p, const struct Token* tk);
 
 void parser_debug_check(struct Parser* p);
 void parser_dump(struct Parser* p, FILE* f);

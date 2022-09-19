@@ -1,0 +1,80 @@
+(STMT_BLOCK
+ (STMT_DECLS
+  (AST_DECLSPEC int)
+  (AST_DECL arr (AST_DECLFN
+    (STMT_DECLS
+     (AST_DECLSPEC int)
+     (AST_DECL i (AST_DECLARR
+       (EXPR_LIT 1 8)
+       ? /* AST_DECLSPEC */)))
+    ? /* AST_DECLSPEC */)))
+ (STMT_DECLS
+  (AST_DECLSPEC int)
+  (AST_DECL arru (AST_DECLFN
+    (STMT_DECLS
+     (AST_DECLSPEC int)
+     (AST_DECL i (AST_DECLARR
+       ? /* AST_DECLSPEC */)))
+    ? /* AST_DECLSPEC */)))
+ (STMT_DECLS
+  (AST_DECLSPEC int)
+  (AST_DECL valist (AST_DECLFN
+    (STMT_DECLS
+     (AST_DECLSPEC __builtin_va_list)
+     (AST_DECL v ? /* AST_DECLSPEC */))
+    ? /* AST_DECLSPEC */)))
+ (STMT_DECLS
+  (AST_DECLSPEC int)
+  (AST_DECL ptr (AST_DECLFN
+    (STMT_DECLS
+     (AST_DECLSPEC int)
+     (AST_DECL i (AST_DECLPTR ? /* AST_DECLSPEC */)))
+    ? /* AST_DECLSPEC */)))
+ (STMT_DECLS
+  (AST_DECLSPEC int)
+  (AST_DECL m (AST_DECLFN
+    (STMT_DECLS
+     (AST_DECLSPEC int)
+     (AST_DECL i (AST_DECLARR
+       (EXPR_LIT 1 8)
+       ? /* AST_DECLSPEC */)))
+    ? /* AST_DECLSPEC */)
+   (STMT_BLOCK
+    (STMT_DECLS
+     (AST_DECLSPEC int)
+     (AST_DECL x (AST_DECLARR
+       ? /* AST_DECLSPEC */)
+      (AST_INIT
+       0 0 (EXPR_LIT 1 8)
+       0 0 (EXPR_LIT 2 8))))
+    (STMT_DECLS
+     (AST_DECLSPEC int)
+     (AST_DECL p (AST_DECLPTR ? /* AST_DECLSPEC */)
+      (EXPR_REF x)))
+    (EXPR_CALL
+     (EXPR_REF ptr)
+     (EXPR_REF x))
+    (EXPR_CALL
+     (EXPR_REF arru)
+     (EXPR_REF x))
+    (EXPR_CALL
+     (EXPR_REF arr)
+     (EXPR_REF x))
+    (EXPR_CALL
+     (EXPR_REF ptr)
+     (EXPR_REF p))
+    (EXPR_CALL
+     (EXPR_REF arru)
+     (EXPR_REF p))
+    (EXPR_CALL
+     (EXPR_REF arr)
+     (EXPR_REF p))
+    (EXPR_CALL
+     (EXPR_REF ptr)
+     (EXPR_REF i))
+    (EXPR_CALL
+     (EXPR_REF arru)
+     (EXPR_REF i))
+    (EXPR_CALL
+     (EXPR_REF arr)
+     (EXPR_REF i))))))
