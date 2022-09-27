@@ -19,7 +19,13 @@
 #include "tok.h"
 #include "token.h"
 
-const char* token_str(const Parser* p, const struct Token* tk) { return p->tk_strdata + tk->sp_offset; }
+const char* token_str(const Parser* p, const struct Token* tk)
+{
+#ifndef NDEBUG
+    if (!tk) abort();
+#endif
+    return p->tk_strdata + tk->sp_offset;
+}
 static int token_is_sym(Parser* p, const struct Token* tk, char sym) { return tk->type == TOKEN_SYM1(sym); }
 static const struct Token* token_consume_sym(Parser* p, const struct Token* tk, char sym, const char* in)
 {
@@ -2110,18 +2116,15 @@ static void parser_dump_ast(struct Parser* p, FILE* f, Ast* ast, int depth)
             fprintf(f, "(AST_DECLSPEC");
             if (blk->is_typedef) fprintf(f, " typedef");
             if (blk->tok) fprintf(f, " %s", token_str(p, blk->tok));
-            if (blk->name)
-            {
-                fprintf(f, " name=%s", blk->name);
-            }
+            if (blk->name) fprintf(f, " %s", blk->name);
             if (blk->suinit)
             {
-                fprintf(f, " suinit=");
+                fprintf(f, " su ");
                 parser_dump_ast(p, f, &blk->suinit->ast, depth + 1);
             }
             if (blk->enum_init)
             {
-                fprintf(f, " enum_init=");
+                fprintf(f, " enum ");
                 parser_dump_ast(p, f, &blk->enum_init->ast, depth + 1);
             }
             fprintf(f, ")");
@@ -2197,7 +2200,7 @@ static void parser_dump_ast(struct Parser* p, FILE* f, Ast* ast, int depth)
         {
             struct ExprLit* blk = (void*)ast;
             fprintf(f, "(EXPR_LIT");
-            if (blk->numeric)
+            if (!blk->sym)
             {
                 fprintf(f, " %" PRIx64, blk->numeric);
             }

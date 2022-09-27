@@ -1,0 +1,30 @@
+(STMT_BLOCK
+ (STMT_DECLS
+  (AST_DECLSPEC A A su (STMT_BLOCK
+    (STMT_DECLS
+     (AST_DECLSPEC int)
+     (AST_DECL y ? /* AST_DECLSPEC */))
+    (STMT_DECLS
+     (AST_DECLSPEC struct su (STMT_BLOCK
+       (STMT_DECLS
+        (AST_DECLSPEC int)
+        (AST_DECL l ? /* AST_DECLSPEC */))
+       (STMT_DECLS
+        (AST_DECLSPEC char)
+        (AST_DECL c ? /* AST_DECLSPEC */))))
+     (AST_DECL ? /* AST_DECLSPEC */)))))
+ (STMT_DECLS
+  (AST_DECLSPEC int)
+  (AST_DECL foo (AST_DECLFN
+    ? /* AST_DECLSPEC */)
+   (STMT_BLOCK
+    (STMT_DECLS
+     (AST_DECLSPEC A A)
+     (AST_DECL a ? /* AST_DECLSPEC */
+      (AST_INIT
+       0 1 (EXPR_LIT 1 8)
+       1 1 (EXPR_LIT 0)
+       2 0 (AST_INIT
+        2 0 (EXPR_LIT 2 8)))))
+    (EXPR_FIELD . l
+     (EXPR_REF a))))))

@@ -1416,24 +1416,6 @@ int parse_aggregates(struct TestState* state)
         REQUIRE_AST(StmtBlock, body, w->init)
         {
             REQUIRE_EQ(2, body->seq.ext);
-            REQUIRE_AST(StmtDecls, a, asts[body->seq.off])
-            {
-                REQUIRE_EQ(1, a->seq.ext);
-                REQUIRE_AST(Decl, d, asts[a->seq.off])
-                REQUIRE_AST(AstInit, i, d->init)
-                {
-                    REQUIRE_EQ(4, i->offset);
-
-                    AstInit* n = i->next;
-                    REQUIRE(n && n->init);
-                    REQUIRE_EQ(0, n->offset);
-
-                    AstInit* nn = n->next;
-                    REQUIRE(nn);
-                    REQUIRE_EQ(4, nn->offset);
-                    REQUIRE_AST(AstInit, ii, nn->init) { REQUIRE_EQ(4, ii->offset); }
-                }
-            }
             REQUIRE_AST(ExprField, f, asts[body->seq.off + 1])
             {
                 REQUIRE_EQ(0, f->is_arrow);
@@ -1517,14 +1499,25 @@ static const Token* test_ast_ast(AstChecker* ctx, const Token* cur_tok, const As
             case AST_DECLSPEC:
             {
                 const DeclSpecs* a = (void*)ast;
-                PARSER_DO(expect_str(ctx, cur_tok, ctx->p->tk_strdata + a->tok->sp_offset));
+                if (a->tok) PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
+                if (a->name) PARSER_DO(expect_str(ctx, cur_tok, a->name));
+                if (a->suinit)
+                {
+                    PARSER_DO(expect_str(ctx, cur_tok, "su"));
+                    PARSER_DO(test_ast_ast(ctx, cur_tok, &a->suinit->ast));
+                }
+                if (a->enum_init)
+                {
+                    PARSER_DO(expect_str(ctx, cur_tok, "enum"));
+                    PARSER_DO(test_ast_ast(ctx, cur_tok, &a->enum_init->ast));
+                }
                 break;
             }
             case AST_DECL:
             {
                 const Decl* a = (void*)ast;
-                PARSER_DO(expect_str(ctx, cur_tok, ctx->p->tk_strdata + a->tok->sp_offset));
-                PARSER_DO(test_ast_ast(ctx, cur_tok, &a->type->ast));
+                if (a->tok) PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
+                if (a->type) PARSER_DO(test_ast_ast(ctx, cur_tok, &a->type->ast));
                 if (a->init) PARSER_DO(test_ast_ast(ctx, cur_tok, a->init));
                 break;
             }
@@ -1572,6 +1565,14 @@ static const Token* test_ast_ast(AstChecker* ctx, const Token* cur_tok, const As
                     PARSER_DO(expect_number(ctx, cur_tok, a->numeric));
                     if (a->suffix) PARSER_DO(expect_number(ctx, cur_tok, a->suffix));
                 }
+                break;
+            }
+            case EXPR_FIELD:
+            {
+                const ExprField* a = (void*)ast;
+                if (a->tok) PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
+                if (a->fieldname) PARSER_DO(expect_str(ctx, cur_tok, a->fieldname));
+                if (a->lhs) PARSER_DO(test_ast_ast(ctx, cur_tok, &a->lhs->ast));
                 break;
             }
             case EXPR_REF:
@@ -1780,7 +1781,8 @@ static void foreach_c_file(struct TestState* state,
         path_combine(&arr, ent->d_name, len);
         array_push_byte(&arr, '\0');
 
-        cb(state, arr.data);
+        ++state->tests;
+        if (cb(state, arr.data)) ++state->testfails;
     }
 
     closedir(dir);
@@ -1788,9 +1790,6 @@ static void foreach_c_file(struct TestState* state,
     array_destroy(&arr);
     array_destroy(&filebuf);
 }
-
-static void test_passing(struct TestState* state) { foreach_c_file(state, "tests/pass", test_file); }
-static void test_failing(struct TestState* state) { foreach_c_file(state, "tests/fail", test_file_fail); }
 
 int parse_params(struct TestState* state)
 {
@@ -4451,8 +4450,8 @@ int main(int argc, char** argv)
     RUN_TEST(parse_typedefs);
     RUN_TEST(parse_aggregates);
 
-    test_passing(state);
-    test_failing(state);
+    foreach_c_file(state, "tests/pass", test_file);
+    foreach_c_file(state, "tests/fail", test_file_fail);
 
     const char* color = (state->testfails + state->assertionfails == 0) ? _state.colorsuc : _state.colorerr;
 
