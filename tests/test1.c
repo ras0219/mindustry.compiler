@@ -1334,105 +1334,6 @@ fail:
     return rc;
 }
 
-#define REQUIRE_TYPE_EQ(expected, actual)
-
-int parse_typedefs(struct TestState* state)
-{
-    int rc = 1;
-    StandardTest test = {0};
-    SUBTEST(stdtest_run(state,
-                        &test,
-                        "typedef int X;\n"
-                        "typedef X Y;"
-                        "int main() {\n"
-                        "Y y = 10;\n"
-                        "}\n"));
-    rc = 0;
-
-    const TypeStr i = {.buf = {1, TYPE_BYTE_INT}};
-
-    struct Expr** const exprs = (struct Expr**)test.parser->expr_seqs.data;
-    REQUIRE_EQ(3, test.parser->top->seq.ext);
-    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->seq.off])
-    {
-        REQUIRE_EQ(1, decls->seq.ext);
-        REQUIRE_EXPR(Decl, w, exprs[decls->seq.off]) { REQUIRE_TYPESTR_EQ(i, w->sym->type); }
-    }
-    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->seq.off + 1])
-    {
-        REQUIRE_EQ(1, decls->seq.ext);
-        REQUIRE_EXPR(Decl, w, exprs[decls->seq.off]) { REQUIRE_TYPESTR_EQ(i, w->sym->type); }
-    }
-    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->seq.off + 2])
-    {
-        REQUIRE_EQ(1, decls->seq.ext);
-        REQUIRE_EXPR(Decl, w, exprs[decls->seq.off])
-        {
-            REQUIRE_AST(StmtBlock, body, w->init)
-            {
-                REQUIRE_EQ(1, body->seq.ext);
-                REQUIRE_EXPR(StmtDecls, decls, exprs[body->seq.off])
-                {
-                    REQUIRE_EQ(1, decls->seq.ext);
-                    REQUIRE_EXPR(Decl, w, exprs[decls->seq.off])
-                    {
-                        REQUIRE_TYPESTR_EQ(i, w->sym->type);
-                        REQUIRE_SIZING_EQ(s_sizing_int, w->sym->size);
-                    }
-                }
-            }
-        }
-    }
-
-fail:
-    stdtest_destroy(&test);
-    return rc;
-}
-
-int parse_aggregates(struct TestState* state)
-{
-    int rc = 1;
-    StandardTest test = {0};
-    SUBTEST(stdtest_run(state,
-                        &test,
-                        "struct A {\n"
-                        "int y;"
-                        "struct {\n"
-                        "int l; char c;\n"
-                        "};\n"
-                        "};\n"
-                        "int foo() {"
-                        " struct A a = {.l=1, .y=0, {2}};"
-                        " a.l;"
-                        "}"));
-    rc = 0;
-
-    struct Ast** const asts = test.parser->expr_seqs.data;
-    REQUIRE_EQ(2, test.parser->top->seq.ext);
-    REQUIRE_AST(StmtDecls, decls, asts[test.parser->top->seq.off + 1])
-    {
-        REQUIRE_EQ(1, decls->seq.ext);
-        REQUIRE_AST(Decl, w, asts[decls->seq.off])
-        REQUIRE_AST(StmtBlock, body, w->init)
-        {
-            REQUIRE_EQ(2, body->seq.ext);
-            REQUIRE_AST(ExprField, f, asts[body->seq.off + 1])
-            {
-                REQUIRE_EQ(0, f->is_arrow);
-                REQUIRE(f->sym);
-                REQUIRE(f->sym->name);
-                REQUIRE_STR_EQ("l", f->sym->name);
-                REQUIRE_EQ(0, f->sym->field_offset);
-                REQUIRE_EQ(4, f->field_offset);
-            }
-        }
-    }
-
-fail:
-    stdtest_destroy(&test);
-    return rc;
-}
-
 typedef struct AstChecker
 {
     TestState* const state;
@@ -1463,11 +1364,16 @@ fail:
     return cur_tok;
 }
 
-static const Token* test_ast_ast(AstChecker* ctx, const Token* cur_tok, const Ast* ast)
+static const Token* test_ast_ast(AstChecker* ctx, const Token* cur_tok, const void* ast)
 {
     if (cur_tok->type == TOKEN_SYM1('?'))
     {
         ++cur_tok;
+    }
+    else if (!ast)
+    {
+        consume
+        ;
     }
     else if (cur_tok->type == TOKEN_SYM1('('))
     {
@@ -1488,7 +1394,7 @@ static const Token* test_ast_ast(AstChecker* ctx, const Token* cur_tok, const As
             case STMT_DECLS:
             {
                 const StmtDecls* a = (void*)ast;
-                PARSER_DO(test_ast_ast(ctx, cur_tok, &a->specs->ast));
+                if (a->specs) PARSER_DO(test_ast_ast(ctx, cur_tok, &a->specs->ast));
                 const Ast* const* const asts = (const Ast**)ctx->p->expr_seqs.data + a->seq.off;
                 for (size_t i = 0; i < a->seq.ext; ++i)
                 {
@@ -1496,9 +1402,18 @@ static const Token* test_ast_ast(AstChecker* ctx, const Token* cur_tok, const As
                 }
                 break;
             }
+            case STMT_IF:
+            {
+                const StmtIf* a = (void*)ast;
+                if (a->cond) PARSER_DO(test_ast_ast(ctx, cur_tok, &a->cond->ast));
+                if (a->if_body) PARSER_DO(test_ast_ast(ctx, cur_tok, &a->if_body->ast));
+                if (a->else_body) PARSER_DO(test_ast_ast(ctx, cur_tok, &a->else_body->ast));
+                break;
+            }
             case AST_DECLSPEC:
             {
                 const DeclSpecs* a = (void*)ast;
+                if (a->is_typedef) PARSER_DO(expect_str(ctx, cur_tok, "typedef"));
                 if (a->tok) PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
                 if (a->name) PARSER_DO(expect_str(ctx, cur_tok, a->name));
                 if (a->suinit)
@@ -1563,7 +1478,7 @@ static const Token* test_ast_ast(AstChecker* ctx, const Token* cur_tok, const As
                 else
                 {
                     PARSER_DO(expect_number(ctx, cur_tok, a->numeric));
-                    if (a->suffix) PARSER_DO(expect_number(ctx, cur_tok, a->suffix));
+                    if (a->suffix) PARSER_DO(expect_str(ctx, cur_tok, suffix_to_string(a->suffix)));
                 }
                 break;
             }
@@ -1572,6 +1487,7 @@ static const Token* test_ast_ast(AstChecker* ctx, const Token* cur_tok, const As
                 const ExprField* a = (void*)ast;
                 if (a->tok) PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
                 if (a->fieldname) PARSER_DO(expect_str(ctx, cur_tok, a->fieldname));
+                PARSER_DO(expect_number(ctx, cur_tok, a->field_offset));
                 if (a->lhs) PARSER_DO(test_ast_ast(ctx, cur_tok, &a->lhs->ast));
                 break;
             }
@@ -1590,6 +1506,14 @@ static const Token* test_ast_ast(AstChecker* ctx, const Token* cur_tok, const As
                 {
                     PARSER_DO(test_ast_ast(ctx, cur_tok, &b[i].expr->ast));
                 }
+                break;
+            }
+            case EXPR_BINOP:
+            {
+                const ExprBinOp* a = (void*)ast;
+                if (a->tok) PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
+                if (a->lhs) PARSER_DO(test_ast_ast(ctx, cur_tok, &a->lhs->ast));
+                if (a->rhs) PARSER_DO(test_ast_ast(ctx, cur_tok, &a->rhs->ast));
                 break;
             }
             case AST_INIT:
@@ -1614,7 +1538,8 @@ static const Token* test_ast_ast(AstChecker* ctx, const Token* cur_tok, const As
     }
     else
     {
-        PARSER_FAIL("error: expected '(' %s\n", ast_kind_to_string(ast->kind));
+        const char* const kind = ast ? ast_kind_to_string(((Ast*)ast)->kind) : "null";
+        PARSER_FAIL("error: expected '(' %s\n", kind);
     }
 fail:
     return cur_tok;
@@ -4447,8 +4372,6 @@ int main(int argc, char** argv)
     RUN_TEST(parse_implicit_conversion);
     RUN_TEST(parse_params);
     RUN_TEST(parse_enums);
-    RUN_TEST(parse_typedefs);
-    RUN_TEST(parse_aggregates);
 
     foreach_c_file(state, "tests/pass", test_file);
     foreach_c_file(state, "tests/fail", test_file_fail);

@@ -1,0 +1,62 @@
+(STMT_BLOCK
+ (STMT_DECLS
+  (AST_DECLSPEC A A enum (STMT_DECLS
+    (AST_DECL a1 ? /* AST_DECLSPEC */
+     (EXPR_LIT 5 D))
+    (AST_DECL a2 ? /* AST_DECLSPEC */)
+    (AST_DECL a3 ? /* AST_DECLSPEC */
+     (EXPR_BINOP +
+      (EXPR_REF a2)
+      (EXPR_LIT 20 D))))))
+ (STMT_DECLS
+  (AST_DECLSPEC typedef struct su (STMT_BLOCK
+    (STMT_DECLS
+     (AST_DECLSPEC A A)
+     (AST_DECL a ? /* AST_DECLSPEC */))))
+  (AST_DECL W ? /* AST_DECLSPEC */))
+ (STMT_DECLS
+  (AST_DECLSPEC int)
+  (AST_DECL main (AST_DECLFN
+    ? /* AST_DECLSPEC */)
+   (STMT_BLOCK
+    (STMT_DECLS
+     (AST_DECLSPEC A A)
+     (AST_DECL x ? /* AST_DECLSPEC */
+      (EXPR_REF a3)))
+    (STMT_DECLS
+     (AST_DECLSPEC int)
+     (AST_DECL y ? /* AST_DECLSPEC */
+      (EXPR_BINOP ==
+       (EXPR_REF x)
+       (EXPR_REF a2))))
+    (STMT_IF
+     cond=(EXPR_BINOP ==
+      (EXPR_CAST
+       (AST_DECL ? /* AST_DECLSPEC */)
+       (EXPR_REF y))
+      (EXPR_REF a1))
+     if_body=(EXPR_BUILTIN sizeof
+      (AST_DECLSPEC A A)
+      (AST_DECL ? /* AST_DECLSPEC */) sizeof_size=4))
+    (STMT_DECLS
+     (AST_DECLSPEC W W)
+     (AST_DECL w ? /* AST_DECLSPEC */)
+     (AST_DECL pw (AST_DECLPTR ? /* AST_DECLSPEC */)
+      (EXPR_UNOP &
+       (EXPR_REF w))))
+    (EXPR_BINOP =
+     (EXPR_FIELD -> a
+      (EXPR_REF pw))
+     (EXPR_REF a1)))))
+ (STMT_DECLS
+  (AST_DECLSPEC N N su (STMT_BLOCK
+    (STMT_DECLS
+     (AST_DECLSPEC enum enum (STMT_DECLS
+       (AST_DECL N1 ? /* AST_DECLSPEC */
+        (EXPR_LIT 4 D))))
+     (AST_DECL e ? /* AST_DECLSPEC */)))))
+ (STMT_DECLS
+  (AST_DECLSPEC char)
+  (AST_DECL ch (AST_DECLARR
+    (EXPR_REF N1)
+    ? /* AST_DECLSPEC */))))

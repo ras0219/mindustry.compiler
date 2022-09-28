@@ -250,7 +250,7 @@ typedef struct StmtDecls
 #define AST_STRUCT_STMT_DECLS StmtDecls
 #define AST_KIND_StmtDecls STMT_DECLS
 
-struct StmtIf
+typedef struct StmtIf
 {
     INHERIT_AST;
 
@@ -258,7 +258,7 @@ struct StmtIf
     struct Ast* if_body;
     // may be null
     struct Ast* else_body;
-};
+} StmtIf;
 struct StmtSwitch
 {
     INHERIT_AST;

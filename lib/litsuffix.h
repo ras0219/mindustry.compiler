@@ -18,3 +18,5 @@ typedef enum LitSuffix
 
     LIT_SUFFIX_MASK_UNSIGNED = 1,
 } LitSuffix;
+
+const char* suffix_to_string(LitSuffix s);

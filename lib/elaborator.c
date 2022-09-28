@@ -1386,6 +1386,7 @@ static void elaborate_expr(struct Elaborator* elab,
                            struct Expr* top_expr,
                            struct TypeStr* rty)
 {
+    top_expr->elaborated = 1;
     elaborate_expr_impl(elab, top_expr, rty);
     top_expr->sizing = typestr_calc_sizing_zero_void(elab->types, rty, top_expr->tok);
 }

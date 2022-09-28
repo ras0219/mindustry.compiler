@@ -1,0 +1,16 @@
+(STMT_BLOCK
+ (STMT_DECLS
+  (AST_DECLSPEC typedef int)
+  (AST_DECL X ? /* AST_DECLSPEC */))
+ (STMT_DECLS
+  (AST_DECLSPEC typedef X X)
+  (AST_DECL Y ? /* AST_DECLSPEC */))
+ (STMT_DECLS
+  (AST_DECLSPEC int)
+  (AST_DECL main (AST_DECLFN
+    ? /* AST_DECLSPEC */)
+   (STMT_BLOCK
+    (STMT_DECLS
+     (AST_DECLSPEC Y Y)
+     (AST_DECL y ? /* AST_DECLSPEC */
+      (EXPR_LIT 10 D)))))))

@@ -86,6 +86,7 @@ int usage(const char* self)
             "  -o <path>                         Specify output path.\n"
             "  --debug-be                        Emit backend tracing information\n"
             "  --debug-parse                     Emit parse tree.\n"
+            "  --debug-elab                      Emit parse tree with elaborated information.\n"
             "",
             self);
     return 1;
@@ -104,6 +105,7 @@ typedef struct Arguments
     unsigned fPreprocOnly : 1;
     unsigned fAssembleOnly : 1;
     unsigned fParseOnly : 1;
+    unsigned fElaborateOnly : 1;
     unsigned fDebugBE : 1;
     Array macro_name;
 
@@ -207,6 +209,10 @@ static int parse_arguments(int argc, const char* const* argv, struct Arguments* 
             else if (strcmp(argv[i] + 1, "-debug-parse") == 0)
             {
                 out->fParseOnly = 1;
+            }
+            else if (strcmp(argv[i] + 1, "-debug-elab") == 0)
+            {
+                out->fElaborateOnly = 1;
             }
             else if (strcmp(argv[i] + 1, "-debug-be") == 0)
             {
@@ -517,6 +523,12 @@ int main(int argc, const char* const* argv)
             elaborator_init(fe.elab, fe.parser);
             UNWRAP(elaborate(fe.elab));
             UNWRAP(parser_has_errors());
+
+            if (args.fElaborateOnly)
+            {
+                parser_dump(fe.parser, stdout);
+                goto fail;
+            }
 
             fe.cg = (struct CodeGen*)my_malloc(sizeof(struct CodeGen));
             cg_init(fe.cg);

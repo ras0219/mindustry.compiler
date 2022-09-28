@@ -5,7 +5,7 @@
     (STMT_DECLS
      (AST_DECLSPEC int)
      (AST_DECL i (AST_DECLARR
-       (EXPR_LIT 1 8)
+       (EXPR_LIT 1 D)
        ? /* AST_DECLSPEC */)))
     ? /* AST_DECLSPEC */)))
  (STMT_DECLS
@@ -36,7 +36,7 @@
     (STMT_DECLS
      (AST_DECLSPEC int)
      (AST_DECL i (AST_DECLARR
-       (EXPR_LIT 1 8)
+       (EXPR_LIT 1 D)
        ? /* AST_DECLSPEC */)))
     ? /* AST_DECLSPEC */)
    (STMT_BLOCK
@@ -45,8 +45,8 @@
      (AST_DECL x (AST_DECLARR
        ? /* AST_DECLSPEC */)
       (AST_INIT
-       0 0 (EXPR_LIT 1 8)
-       0 0 (EXPR_LIT 2 8))))
+       0 0 (EXPR_LIT 1 D)
+       0 0 (EXPR_LIT 2 D))))
     (STMT_DECLS
      (AST_DECLSPEC int)
      (AST_DECL p (AST_DECLPTR ? /* AST_DECLSPEC */)

@@ -2202,11 +2202,11 @@ static void parser_dump_ast(struct Parser* p, FILE* f, Ast* ast, int depth)
             fprintf(f, "(EXPR_LIT");
             if (!blk->sym)
             {
-                fprintf(f, " %" PRIx64, blk->numeric);
+                fprintf(f, " %" PRId64, blk->numeric);
             }
-            if (blk->suffix != 0)
+            if (blk->suffix != LIT_SUFFIX_NONE)
             {
-                fprintf(f, " %d", blk->suffix);
+                fprintf(f, " %s", suffix_to_string(blk->suffix));
             }
             fprintf(f, ")");
             break;
@@ -2232,6 +2232,7 @@ static void parser_dump_ast(struct Parser* p, FILE* f, Ast* ast, int depth)
             fprintf(f, "(EXPR_FIELD");
             if (blk->tok) fprintf(f, " %s", token_str(p, blk->tok));
             if (blk->fieldname) fprintf(f, " %s", blk->fieldname);
+            if (blk->elaborated) fprintf(f, " %zu", blk->field_offset);
             if (blk->lhs)
             {
                 nl_indent(f, depth);

@@ -591,6 +591,17 @@ const char* lexstate_to_string(unsigned int s)
     }
 }
 
+const char* suffix_to_string(LitSuffix s)
+{
+#define F(X) X(U) X(L) X(LU) X(LL) X(LLU)
+#define G(Y) [LIT_SUFFIX_##Y] = #Y, [LIT_SUFFIX_##Y##_DECIMAL] = #Y "D",
+    static const char* const s_litsuffix_map[] = {[LIT_SUFFIX_NONE] = "", [LIT_SUFFIX_NONE_DECIMAL] = "D", F(G)};
+#undef F
+#undef G
+
+    return s_litsuffix_map[s];
+}
+
 int lit_to_uint64(const char* s, uint64_t* out, LitSuffix* out_suffix, const struct RowCol* rc)
 {
     enum LitSuffix suffix = LIT_SUFFIX_NONE;
