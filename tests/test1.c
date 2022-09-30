@@ -1372,14 +1372,17 @@ static const Token* test_ast_ast(AstChecker* ctx, const Token* cur_tok, const vo
     }
     else if (!ast)
     {
-        consume
-        ;
+        if (cur_tok->type != TOKEN_SYM1('(')) PARSER_FAIL("error: expected '(null)'\n");
+        ++cur_tok;
+        PARSER_DO(expect_str(ctx, cur_tok, "null"));
+        if (cur_tok->type != TOKEN_SYM1(')')) PARSER_FAIL("error: expected ')'\n");
+        ++cur_tok;
     }
     else if (cur_tok->type == TOKEN_SYM1('('))
     {
         ++cur_tok;
-        PARSER_DO(expect_str(ctx, cur_tok, ast_kind_to_string(ast->kind)));
-        switch (ast->kind)
+        PARSER_DO(expect_str(ctx, cur_tok, ast_kind_to_string(((Ast*)ast)->kind)));
+        switch (((Ast*)ast)->kind)
         {
             case STMT_BLOCK:
             {
@@ -1405,9 +1408,9 @@ static const Token* test_ast_ast(AstChecker* ctx, const Token* cur_tok, const vo
             case STMT_IF:
             {
                 const StmtIf* a = (void*)ast;
-                if (a->cond) PARSER_DO(test_ast_ast(ctx, cur_tok, &a->cond->ast));
-                if (a->if_body) PARSER_DO(test_ast_ast(ctx, cur_tok, &a->if_body->ast));
-                if (a->else_body) PARSER_DO(test_ast_ast(ctx, cur_tok, &a->else_body->ast));
+                PARSER_DO(test_ast_ast(ctx, cur_tok, a->cond));
+                PARSER_DO(test_ast_ast(ctx, cur_tok, a->if_body));
+                if (a->else_body) PARSER_DO(test_ast_ast(ctx, cur_tok, a->else_body));
                 break;
             }
             case AST_DECLSPEC:
@@ -1488,7 +1491,7 @@ static const Token* test_ast_ast(AstChecker* ctx, const Token* cur_tok, const vo
                 if (a->tok) PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
                 if (a->fieldname) PARSER_DO(expect_str(ctx, cur_tok, a->fieldname));
                 PARSER_DO(expect_number(ctx, cur_tok, a->field_offset));
-                if (a->lhs) PARSER_DO(test_ast_ast(ctx, cur_tok, &a->lhs->ast));
+                PARSER_DO(test_ast_ast(ctx, cur_tok, &a->lhs->ast));
                 break;
             }
             case EXPR_REF:
@@ -1512,8 +1515,36 @@ static const Token* test_ast_ast(AstChecker* ctx, const Token* cur_tok, const vo
             {
                 const ExprBinOp* a = (void*)ast;
                 if (a->tok) PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
-                if (a->lhs) PARSER_DO(test_ast_ast(ctx, cur_tok, &a->lhs->ast));
-                if (a->rhs) PARSER_DO(test_ast_ast(ctx, cur_tok, &a->rhs->ast));
+                PARSER_DO(test_ast_ast(ctx, cur_tok, a->lhs));
+                PARSER_DO(test_ast_ast(ctx, cur_tok, a->rhs));
+                break;
+            }
+            case EXPR_CAST:
+            {
+                const ExprCast* a = (void*)ast;
+                PARSER_DO(test_ast_ast(ctx, cur_tok, a->specs));
+                PARSER_DO(test_ast_ast(ctx, cur_tok, a->type));
+                PARSER_DO(test_ast_ast(ctx, cur_tok, a->expr));
+                break;
+            }
+            case EXPR_BUILTIN:
+            {
+                const ExprBuiltin* a = (void*)ast;
+                if (a->tok) PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
+                PARSER_DO(test_ast_ast(ctx, cur_tok, a->specs));
+                PARSER_DO(test_ast_ast(ctx, cur_tok, a->type));
+                PARSER_DO(test_ast_ast(ctx, cur_tok, a->expr1));
+                PARSER_DO(test_ast_ast(ctx, cur_tok, a->expr2));
+                PARSER_DO(expect_number(ctx, cur_tok, a->sizeof_size));
+                break;
+            }
+            case EXPR_UNOP:
+            {
+                const ExprUnOp* a = (void*)ast;
+                if (a->tok) PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
+                if (a->postfix) PARSER_DO(expect_str(ctx, cur_tok, "postfix"));
+                PARSER_DO(expect_number(ctx, cur_tok, a->sizeof_));
+                PARSER_DO(test_ast_ast(ctx, cur_tok, a->lhs));
                 break;
             }
             case AST_INIT:
@@ -1528,7 +1559,7 @@ static const Token* test_ast_ast(AstChecker* ctx, const Token* cur_tok, const vo
                 }
                 break;
             }
-            default: PARSER_FAIL("error: unknown ast type: %s\n", ast_kind_to_string(ast->kind));
+            default: PARSER_FAIL("error: unknown ast type: %s\n", ast_kind_to_string(((Ast*)ast)->kind));
         }
         if (cur_tok->type != TOKEN_SYM1(')'))
         {

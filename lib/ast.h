@@ -114,18 +114,18 @@ typedef struct ExprLit
 #define AST_STRUCT_EXPR_LIT ExprLit
 #define AST_KIND_ExprLit EXPR_LIT
 
-struct ExprCast
+typedef struct ExprCast
 {
     INHERIT_EXPR;
 
     struct Expr* expr;
     struct DeclSpecs* specs;
     struct Decl* type;
-};
+} ExprCast;
 #define AST_STRUCT_EXPR_CAST ExprCast
 #define AST_KIND_ExprCast EXPR_CAST
 
-struct ExprBuiltin
+typedef struct ExprBuiltin
 {
     INHERIT_EXPR;
 
@@ -133,7 +133,7 @@ struct ExprBuiltin
     struct DeclSpecs* specs;
     struct Decl* type;
     size_t sizeof_size;
-};
+} ExprBuiltin;
 #define AST_STRUCT_EXPR_BUILTIN ExprBuiltin
 #define AST_KIND_ExprBuiltin EXPR_BUILTIN
 

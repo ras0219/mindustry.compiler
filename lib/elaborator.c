@@ -1314,20 +1314,9 @@ static void elaborate_expr_ExprCall(struct Elaborator* elab,
     }
 }
 
-static void elaborate_expr_ExprField(struct Elaborator* elab,
-
-                                     struct ExprField* e,
-                                     struct TypeStr* rty)
+static void elaborate_expr_ExprField_lhs(struct Elaborator* elab, struct ExprField* e, struct TypeStr* rty)
 {
-#if defined(TRACING_ELAB)
-    fprintf(stderr, " EXPR_FIELD\n");
-#endif
-    elaborate_expr(elab, e->lhs, rty);
-    if (typestr_is_unknown(rty))
-    {
-        parser_tok_error(e->lhs->tok, "error: unable to elaborate expression\n");
-        return;
-    }
+    if (typestr_is_unknown(rty)) return;
     const struct TypeStr orig_lhs = *rty;
     if (e->is_arrow) typestr_dereference(rty);
     unsigned int cvr_mask = typestr_strip_cvr(rty);
@@ -1375,6 +1364,18 @@ static void elaborate_expr_ExprField(struct Elaborator* elab,
         typestr_error1(&e->tok->rc, elab->types, err_fmt, &orig_lhs);
         *rty = s_type_unknown;
     }
+}
+
+static void elaborate_expr_ExprField(struct Elaborator* elab,
+
+                                     struct ExprField* e,
+                                     struct TypeStr* rty)
+{
+#if defined(TRACING_ELAB)
+    fprintf(stderr, " EXPR_FIELD\n");
+#endif
+    elaborate_expr(elab, e->lhs, rty);
+    elaborate_expr_ExprField_lhs(elab, e, rty);
 }
 
 static void elaborate_expr_impl(struct Elaborator* elab,
@@ -1454,57 +1455,11 @@ static void elaborate_expr_lvalue(struct Elaborator* elab,
         else
         {
             elaborate_expr_lvalue(elab, e->lhs, rty);
+            typestr_dereference(rty);
         }
-        if (typestr_is_unknown(rty)) return;
-        const struct TypeStr orig_lhs = *rty;
-        typestr_dereference(rty);
-        unsigned int cvr_mask = typestr_strip_cvr(rty);
-        TypeSymbol* sym = typestr_get_decl(elab->types, rty);
-        if (sym)
-        {
-            if (sym->def)
-            {
-                // find field in decl
-                Symbol* field = find_field_by_name(sym, e->fieldname, &e->field_offset);
-                if (field)
-                {
-                    e->sym = field;
-                    typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, rty, field->def);
-                    typestr_add_cvr(rty, cvr_mask);
-                    typestr_addressof(rty);
-                }
-                else
-                {
-                    DeclSpecs* first_spec = sym->last_decl;
-                    while (first_spec->prev_decl)
-                        first_spec = first_spec->prev_decl;
-
-                    struct Array buf = {0};
-                    typestr_fmt(elab->types, rty, &buf);
-                    array_push_byte(&buf, 0);
-                    parser_tok_error(
-                        e->tok, "error: could not find member '%s' in type '%s'\n", e->fieldname, buf.data);
-                    array_destroy(&buf);
-                    *rty = s_type_unknown;
-                }
-            }
-            else
-            {
-                typestr_error1(&e->tok->rc, elab->types, "error: first argument was of incomplete type %.*s\n", rty);
-                *rty = s_type_unknown;
-            }
-        }
-        else
-        {
-            const char* err_fmt;
-            if (e->is_arrow)
-                err_fmt = "error: expected first argument to be pointer to struct or union type, but got "
-                          "'%.*s'\n";
-            else
-                err_fmt = "error: expected first argument to be of struct or union type, but got '%.*s'\n";
-            typestr_error1(&e->tok->rc, elab->types, err_fmt, &orig_lhs);
-            *rty = s_type_unknown;
-        }
+        elaborate_expr_ExprField_lhs(elab, e, rty);
+        typestr_addressof(rty);
+        top_expr->take_address = 1;
     }
     else
     {
@@ -1515,6 +1470,7 @@ static void elaborate_expr_lvalue(struct Elaborator* elab,
         *rty = s_type_unknown;
     }
     top_expr->sizing = typestr_calc_elem_sizing(elab->types, rty, top_expr->tok);
+    top_expr->elaborated = 1;
 }
 
 static void elaborate_expr_decay(struct Elaborator* elab,
