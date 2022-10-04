@@ -1364,202 +1364,210 @@ fail:
     return cur_tok;
 }
 
+static const Token* test_ast_ast(AstChecker* ctx, const Token* cur_tok, const void* ast);
+
+static const Token* test_ast_ast_inner(AstChecker* ctx, const Token* cur_tok, const Ast* ast)
+{
+    switch (ast->kind)
+    {
+        case STMT_BLOCK:
+        {
+            const struct StmtBlock* a = (void*)ast;
+            const Ast* const* const asts = (const Ast**)ctx->p->expr_seqs.data + a->seq.off;
+            for (size_t i = 0; i < a->seq.ext; ++i)
+            {
+                PARSER_DO(test_ast_ast(ctx, cur_tok, asts[i]));
+            }
+            break;
+        }
+        case STMT_DECLS:
+        {
+            const StmtDecls* a = (void*)ast;
+            if (a->specs) PARSER_DO(test_ast_ast(ctx, cur_tok, &a->specs->ast));
+            const Ast* const* const asts = (const Ast**)ctx->p->expr_seqs.data + a->seq.off;
+            for (size_t i = 0; i < a->seq.ext; ++i)
+            {
+                PARSER_DO(test_ast_ast(ctx, cur_tok, asts[i]));
+            }
+            break;
+        }
+        case STMT_IF:
+        {
+            const StmtIf* a = (void*)ast;
+            PARSER_DO(test_ast_ast(ctx, cur_tok, a->cond));
+            PARSER_DO(test_ast_ast(ctx, cur_tok, a->if_body));
+            if (a->else_body) PARSER_DO(test_ast_ast(ctx, cur_tok, a->else_body));
+            break;
+        }
+        case AST_DECLSPEC:
+        {
+            const DeclSpecs* a = (void*)ast;
+            if (a->is_typedef) PARSER_DO(expect_str(ctx, cur_tok, "typedef"));
+            if (a->tok) PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
+            if (a->name) PARSER_DO(expect_str(ctx, cur_tok, a->name));
+            if (a->suinit)
+            {
+                PARSER_DO(expect_str(ctx, cur_tok, "su"));
+                PARSER_DO(test_ast_ast(ctx, cur_tok, &a->suinit->ast));
+            }
+            if (a->enum_init)
+            {
+                PARSER_DO(expect_str(ctx, cur_tok, "enum"));
+                PARSER_DO(test_ast_ast(ctx, cur_tok, &a->enum_init->ast));
+            }
+            break;
+        }
+        case AST_DECL:
+        {
+            const Decl* a = (void*)ast;
+            if (a->tok) PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
+            if (a->type) PARSER_DO(test_ast_ast(ctx, cur_tok, &a->type->ast));
+            if (a->init) PARSER_DO(test_ast_ast(ctx, cur_tok, a->init));
+            break;
+        }
+        case AST_DECLARR:
+        {
+            const DeclArr* a = (void*)ast;
+            if (a->arity) PARSER_DO(test_ast_ast(ctx, cur_tok, &a->arity->ast));
+            PARSER_DO(test_ast_ast(ctx, cur_tok, &a->type->ast));
+            break;
+        }
+        case AST_DECLFN:
+        {
+            const DeclFn* a = (void*)ast;
+            if (a->is_param_list)
+            {
+                PARSER_DO(expect_str(ctx, cur_tok, "param"));
+            }
+            else
+            {
+                const Ast* const* const asts = (const Ast**)ctx->p->expr_seqs.data + a->seq.off;
+                for (size_t i = 0; i < a->seq.ext; ++i)
+                {
+                    PARSER_DO(test_ast_ast(ctx, cur_tok, asts[i]));
+                }
+            }
+            if (a->is_varargs) PARSER_DO(expect_str(ctx, cur_tok, "..."));
+            PARSER_DO(test_ast_ast(ctx, cur_tok, &a->type->ast));
+            break;
+        }
+        case AST_DECLPTR:
+        {
+            const DeclPtr* a = (void*)ast;
+            PARSER_DO(test_ast_ast(ctx, cur_tok, &a->type->ast));
+            break;
+        }
+        case EXPR_LIT:
+        {
+            const ExprLit* a = (void*)ast;
+            if (a->sym)
+            {
+                // string literal
+            }
+            else
+            {
+                PARSER_DO(expect_number(ctx, cur_tok, a->numeric));
+                if (a->suffix) PARSER_DO(expect_str(ctx, cur_tok, suffix_to_string(a->suffix)));
+            }
+            break;
+        }
+        case EXPR_FIELD:
+        {
+            const ExprField* a = (void*)ast;
+            if (a->tok) PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
+            if (a->fieldname) PARSER_DO(expect_str(ctx, cur_tok, a->fieldname));
+            PARSER_DO(expect_number(ctx, cur_tok, a->field_offset));
+            if (a->lhs) PARSER_DO(test_ast_ast(ctx, cur_tok, &a->lhs->ast));
+            break;
+        }
+        case EXPR_REF:
+        {
+            const ExprRef* a = (void*)ast;
+            PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
+            break;
+        }
+        case EXPR_CALL:
+        {
+            const ExprCall* a = (void*)ast;
+            PARSER_DO(test_ast_ast(ctx, cur_tok, &a->fn->ast));
+            const CallParam* const b = (const CallParam*)ctx->p->callparams.data + a->param_offset;
+            for (size_t i = 0; i < a->param_extent; ++i)
+            {
+                PARSER_DO(test_ast_ast(ctx, cur_tok, &b[i].expr->ast));
+            }
+            break;
+        }
+        case EXPR_BINOP:
+        {
+            const ExprBinOp* a = (void*)ast;
+            if (a->tok) PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
+            PARSER_DO(test_ast_ast(ctx, cur_tok, a->lhs));
+            PARSER_DO(test_ast_ast(ctx, cur_tok, a->rhs));
+            break;
+        }
+        case EXPR_CAST:
+        {
+            const ExprCast* a = (void*)ast;
+            PARSER_DO(test_ast_ast(ctx, cur_tok, a->specs));
+            PARSER_DO(test_ast_ast(ctx, cur_tok, a->type));
+            PARSER_DO(test_ast_ast(ctx, cur_tok, a->expr));
+            break;
+        }
+        case EXPR_BUILTIN:
+        {
+            const ExprBuiltin* a = (void*)ast;
+            if (a->tok) PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
+            PARSER_DO(test_ast_ast(ctx, cur_tok, a->specs));
+            PARSER_DO(test_ast_ast(ctx, cur_tok, a->type));
+            PARSER_DO(test_ast_ast(ctx, cur_tok, a->expr1));
+            PARSER_DO(test_ast_ast(ctx, cur_tok, a->expr2));
+            PARSER_DO(expect_number(ctx, cur_tok, a->sizeof_size));
+            break;
+        }
+        case EXPR_UNOP:
+        {
+            const ExprUnOp* a = (void*)ast;
+            if (a->tok) PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
+            if (a->postfix) PARSER_DO(expect_str(ctx, cur_tok, "postfix"));
+            PARSER_DO(expect_number(ctx, cur_tok, a->sizeof_));
+            PARSER_DO(test_ast_ast(ctx, cur_tok, a->lhs));
+            break;
+        }
+        case AST_INIT:
+        {
+            const AstInit* a = (void*)ast;
+            while (a->init != NULL)
+            {
+                PARSER_DO(expect_number(ctx, cur_tok, a->designator_offset));
+                PARSER_DO(expect_number(ctx, cur_tok, a->designator_extent));
+                PARSER_DO(test_ast_ast(ctx, cur_tok, a->init));
+                a = a->next;
+            }
+            break;
+        }
+        default: PARSER_FAIL("error: unknown ast type: %s\n", ast_kind_to_string(ast->kind));
+    }
+fail:
+    return cur_tok;
+}
+
 static const Token* test_ast_ast(AstChecker* ctx, const Token* cur_tok, const void* ast)
 {
     if (cur_tok->type == TOKEN_SYM1('?'))
     {
         ++cur_tok;
     }
-    else if (!ast)
-    {
-        if (cur_tok->type != TOKEN_SYM1('(')) PARSER_FAIL("error: expected '(null)'\n");
-        ++cur_tok;
-        PARSER_DO(expect_str(ctx, cur_tok, "null"));
-        if (cur_tok->type != TOKEN_SYM1(')')) PARSER_FAIL("error: expected ')'\n");
-        ++cur_tok;
-    }
     else if (cur_tok->type == TOKEN_SYM1('('))
     {
         ++cur_tok;
-        PARSER_DO(expect_str(ctx, cur_tok, ast_kind_to_string(((Ast*)ast)->kind)));
-        switch (((Ast*)ast)->kind)
+        if (!ast)
         {
-            case STMT_BLOCK:
-            {
-                const struct StmtBlock* a = (void*)ast;
-                const Ast* const* const asts = (const Ast**)ctx->p->expr_seqs.data + a->seq.off;
-                for (size_t i = 0; i < a->seq.ext; ++i)
-                {
-                    PARSER_DO(test_ast_ast(ctx, cur_tok, asts[i]));
-                }
-                break;
-            }
-            case STMT_DECLS:
-            {
-                const StmtDecls* a = (void*)ast;
-                if (a->specs) PARSER_DO(test_ast_ast(ctx, cur_tok, &a->specs->ast));
-                const Ast* const* const asts = (const Ast**)ctx->p->expr_seqs.data + a->seq.off;
-                for (size_t i = 0; i < a->seq.ext; ++i)
-                {
-                    PARSER_DO(test_ast_ast(ctx, cur_tok, asts[i]));
-                }
-                break;
-            }
-            case STMT_IF:
-            {
-                const StmtIf* a = (void*)ast;
-                PARSER_DO(test_ast_ast(ctx, cur_tok, a->cond));
-                PARSER_DO(test_ast_ast(ctx, cur_tok, a->if_body));
-                if (a->else_body) PARSER_DO(test_ast_ast(ctx, cur_tok, a->else_body));
-                break;
-            }
-            case AST_DECLSPEC:
-            {
-                const DeclSpecs* a = (void*)ast;
-                if (a->is_typedef) PARSER_DO(expect_str(ctx, cur_tok, "typedef"));
-                if (a->tok) PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
-                if (a->name) PARSER_DO(expect_str(ctx, cur_tok, a->name));
-                if (a->suinit)
-                {
-                    PARSER_DO(expect_str(ctx, cur_tok, "su"));
-                    PARSER_DO(test_ast_ast(ctx, cur_tok, &a->suinit->ast));
-                }
-                if (a->enum_init)
-                {
-                    PARSER_DO(expect_str(ctx, cur_tok, "enum"));
-                    PARSER_DO(test_ast_ast(ctx, cur_tok, &a->enum_init->ast));
-                }
-                break;
-            }
-            case AST_DECL:
-            {
-                const Decl* a = (void*)ast;
-                if (a->tok) PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
-                if (a->type) PARSER_DO(test_ast_ast(ctx, cur_tok, &a->type->ast));
-                if (a->init) PARSER_DO(test_ast_ast(ctx, cur_tok, a->init));
-                break;
-            }
-            case AST_DECLARR:
-            {
-                const DeclArr* a = (void*)ast;
-                if (a->arity) PARSER_DO(test_ast_ast(ctx, cur_tok, &a->arity->ast));
-                PARSER_DO(test_ast_ast(ctx, cur_tok, &a->type->ast));
-                break;
-            }
-            case AST_DECLFN:
-            {
-                const DeclFn* a = (void*)ast;
-                if (a->is_param_list)
-                {
-                    PARSER_DO(expect_str(ctx, cur_tok, "param"));
-                }
-                else
-                {
-                    const Ast* const* const asts = (const Ast**)ctx->p->expr_seqs.data + a->seq.off;
-                    for (size_t i = 0; i < a->seq.ext; ++i)
-                    {
-                        PARSER_DO(test_ast_ast(ctx, cur_tok, asts[i]));
-                    }
-                }
-                if (a->is_varargs) PARSER_DO(expect_str(ctx, cur_tok, "..."));
-                PARSER_DO(test_ast_ast(ctx, cur_tok, &a->type->ast));
-                break;
-            }
-            case AST_DECLPTR:
-            {
-                const DeclPtr* a = (void*)ast;
-                PARSER_DO(test_ast_ast(ctx, cur_tok, &a->type->ast));
-                break;
-            }
-            case EXPR_LIT:
-            {
-                const ExprLit* a = (void*)ast;
-                if (a->sym)
-                {
-                    // string literal
-                }
-                else
-                {
-                    PARSER_DO(expect_number(ctx, cur_tok, a->numeric));
-                    if (a->suffix) PARSER_DO(expect_str(ctx, cur_tok, suffix_to_string(a->suffix)));
-                }
-                break;
-            }
-            case EXPR_FIELD:
-            {
-                const ExprField* a = (void*)ast;
-                if (a->tok) PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
-                if (a->fieldname) PARSER_DO(expect_str(ctx, cur_tok, a->fieldname));
-                PARSER_DO(expect_number(ctx, cur_tok, a->field_offset));
-                PARSER_DO(test_ast_ast(ctx, cur_tok, &a->lhs->ast));
-                break;
-            }
-            case EXPR_REF:
-            {
-                const ExprRef* a = (void*)ast;
-                PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
-                break;
-            }
-            case EXPR_CALL:
-            {
-                const ExprCall* a = (void*)ast;
-                PARSER_DO(test_ast_ast(ctx, cur_tok, &a->fn->ast));
-                const CallParam* const b = (const CallParam*)ctx->p->callparams.data + a->param_offset;
-                for (size_t i = 0; i < a->param_extent; ++i)
-                {
-                    PARSER_DO(test_ast_ast(ctx, cur_tok, &b[i].expr->ast));
-                }
-                break;
-            }
-            case EXPR_BINOP:
-            {
-                const ExprBinOp* a = (void*)ast;
-                if (a->tok) PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
-                PARSER_DO(test_ast_ast(ctx, cur_tok, a->lhs));
-                PARSER_DO(test_ast_ast(ctx, cur_tok, a->rhs));
-                break;
-            }
-            case EXPR_CAST:
-            {
-                const ExprCast* a = (void*)ast;
-                PARSER_DO(test_ast_ast(ctx, cur_tok, a->specs));
-                PARSER_DO(test_ast_ast(ctx, cur_tok, a->type));
-                PARSER_DO(test_ast_ast(ctx, cur_tok, a->expr));
-                break;
-            }
-            case EXPR_BUILTIN:
-            {
-                const ExprBuiltin* a = (void*)ast;
-                if (a->tok) PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
-                PARSER_DO(test_ast_ast(ctx, cur_tok, a->specs));
-                PARSER_DO(test_ast_ast(ctx, cur_tok, a->type));
-                PARSER_DO(test_ast_ast(ctx, cur_tok, a->expr1));
-                PARSER_DO(test_ast_ast(ctx, cur_tok, a->expr2));
-                PARSER_DO(expect_number(ctx, cur_tok, a->sizeof_size));
-                break;
-            }
-            case EXPR_UNOP:
-            {
-                const ExprUnOp* a = (void*)ast;
-                if (a->tok) PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
-                if (a->postfix) PARSER_DO(expect_str(ctx, cur_tok, "postfix"));
-                PARSER_DO(expect_number(ctx, cur_tok, a->sizeof_));
-                PARSER_DO(test_ast_ast(ctx, cur_tok, a->lhs));
-                break;
-            }
-            case AST_INIT:
-            {
-                const AstInit* a = (void*)ast;
-                while (a->init != NULL)
-                {
-                    PARSER_DO(expect_number(ctx, cur_tok, a->designator_offset));
-                    PARSER_DO(expect_number(ctx, cur_tok, a->designator_extent));
-                    PARSER_DO(test_ast_ast(ctx, cur_tok, a->init));
-                    a = a->next;
-                }
-                break;
-            }
-            default: PARSER_FAIL("error: unknown ast type: %s\n", ast_kind_to_string(((Ast*)ast)->kind));
+            PARSER_DO(expect_str(ctx, cur_tok, "null"));
+        }
+        else
+        {
+            PARSER_DO(expect_str(ctx, cur_tok, ast_kind_to_string(((Ast*)ast)->kind)));
+            PARSER_DO(test_ast_ast_inner(ctx, cur_tok, ast));
         }
         if (cur_tok->type != TOKEN_SYM1(')'))
         {
@@ -1575,6 +1583,7 @@ static const Token* test_ast_ast(AstChecker* ctx, const Token* cur_tok, const vo
 fail:
     return cur_tok;
 }
+
 static const Token* test_ast_top(AstChecker* ctx, const Token* cur_tok, const Ast* ast)
 {
     PARSER_DO(test_ast_ast(ctx, cur_tok, ast));

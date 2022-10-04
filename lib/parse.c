@@ -1983,10 +1983,12 @@ static void nl_indent(FILE* f, int depth)
         fputc(' ', f);
 }
 
-static void parser_dump_ast(struct Parser* p, FILE* f, void* ast, int depth);
+static void parser_dump_ast(struct Parser* p, FILE* f, void* ptr, int depth);
 static void parser_dump_type_ast(struct Parser* p, FILE* f, AstType* ast, int depth)
 {
-    if (ast->kind != AST_DECLSPEC)
+    if (!ast)
+        fprintf(f, "(null)");
+    else if (ast->kind != AST_DECLSPEC)
         parser_dump_ast(p, f, &ast->ast, depth);
     else
         fprintf(f, "? /* AST_DECLSPEC */");
@@ -2067,7 +2069,7 @@ static void parser_dump_ast(struct Parser* p, FILE* f, void* ptr, int depth)
             struct StmtIf* blk = (void*)ast;
             fprintf(f, "(STMT_IF");
             nl_indent(f, depth);
-            parser_dump_ast(p, f, &blk->cond->ast, depth + 1);
+            parser_dump_ast(p, f, blk->cond, depth + 1);
             nl_indent(f, depth);
             parser_dump_ast(p, f, blk->if_body, depth + 1);
             if (blk->else_body)
@@ -2082,7 +2084,7 @@ static void parser_dump_ast(struct Parser* p, FILE* f, void* ptr, int depth)
         {
             struct StmtReturn* blk = (void*)ast;
             fprintf(f, "(STMT_RETURN");
-            parser_dump_ast(p, f, &blk->expr->ast, depth + 1);
+            if (blk->expr) parser_dump_ast(p, f, blk->expr, depth + 1);
             fprintf(f, ")");
             break;
         }
@@ -2094,11 +2096,8 @@ static void parser_dump_ast(struct Parser* p, FILE* f, void* ptr, int depth)
             {
                 fprintf(f, " %s", token_str(p, blk->tok));
             }
-            if (blk->type)
-            {
-                fprintf(f, " ");
-                parser_dump_type_ast(p, f, blk->type, depth + 1);
-            }
+            fprintf(f, " ");
+            parser_dump_type_ast(p, f, blk->type, depth + 1);
             if (blk->init)
             {
                 nl_indent(f, depth);

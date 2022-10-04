@@ -30,22 +30,25 @@
        (EXPR_REF x)
        (EXPR_REF a2))))
     (STMT_IF
-     cond=(EXPR_BINOP ==
+     (EXPR_BINOP ==
       (EXPR_CAST
+       (AST_DECLSPEC int)
        (AST_DECL ? /* AST_DECLSPEC */)
        (EXPR_REF y))
       (EXPR_REF a1))
-     if_body=(EXPR_BUILTIN sizeof
+     (EXPR_BUILTIN sizeof
       (AST_DECLSPEC A A)
-      (AST_DECL ? /* AST_DECLSPEC */) sizeof_size=4))
+      (AST_DECL ? /* AST_DECLSPEC */)
+      (null)
+      (null) 4))
     (STMT_DECLS
      (AST_DECLSPEC W W)
      (AST_DECL w ? /* AST_DECLSPEC */)
      (AST_DECL pw (AST_DECLPTR ? /* AST_DECLSPEC */)
-      (EXPR_UNOP &
+      (EXPR_UNOP & 0
        (EXPR_REF w))))
     (EXPR_BINOP =
-     (EXPR_FIELD -> a
+     (EXPR_FIELD -> a 0
       (EXPR_REF pw))
      (EXPR_REF a1)))))
  (STMT_DECLS
