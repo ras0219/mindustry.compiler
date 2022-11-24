@@ -1481,6 +1481,7 @@ static void elaborate_expr_decay(struct Elaborator* elab,
     elaborate_expr_impl(elab, top_expr, rty);
     top_expr->take_address = typestr_decay(rty);
     top_expr->sizing = typestr_calc_sizing_zero_void(elab->types, rty, top_expr->tok);
+    top_expr->elaborated = 1;
 }
 static void elaborate_expr_impl(struct Elaborator* elab,
 
