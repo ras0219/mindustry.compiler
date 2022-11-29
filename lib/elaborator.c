@@ -31,7 +31,7 @@ static int32_t i32constant_or_err(const TypeStr* ts, const Token* rc)
     {
         if (!ts->c.is_lvalue && !ts->c.sym)
         {
-            return (int32_t)ts->c.value.lower;
+            return mp_i32(ts->c.value);
         }
     }
     parser_tok_error(rc, "error: expected integer constant expression\n");
@@ -43,7 +43,7 @@ static uint64_t u64constant_or_err(const TypeStr* ts, const Token* rc)
     {
         if (!ts->c.is_lvalue && !ts->c.sym)
         {
-            return ts->c.value.lower;
+            return mp_u64(ts->c.value);
         }
     }
     parser_tok_error(rc, "error: expected integer constant expression\n");
@@ -82,19 +82,9 @@ static Symbol* find_field_by_name(TypeSymbol* def, const char* fieldname, size_t
 static int elaborate_decl(struct Elaborator* elab, struct Decl* specs);
 static int elaborate_declspecs(struct Elaborator* elab, struct DeclSpecs* specs);
 static void elaborate_stmt(struct Elaborator* elab, struct Ast* ast);
-static void elaborate_expr(struct Elaborator* elab,
-
-                           struct Expr* top_expr,
-                           struct TypeStr* rty);
-static void elaborate_expr_decay(struct Elaborator* elab,
-
-                                 struct Expr* top_expr,
-                                 struct TypeStr* rty);
-
-static void elaborate_expr_lvalue(struct Elaborator* elab,
-
-                                  struct Expr* top_expr,
-                                  struct TypeStr* rty);
+static void elaborate_expr(struct Elaborator* elab, struct Expr* top_expr, struct TypeStr* rty);
+static void elaborate_expr_decay(struct Elaborator* elab, struct Expr* top_expr, struct TypeStr* rty);
+static void elaborate_expr_lvalue(struct Elaborator* elab, struct Expr* top_expr, struct TypeStr* rty);
 
 enum
 {
@@ -143,24 +133,6 @@ static unsigned int binop_mask(unsigned int tok_type)
         default: return 0;
     }
 }
-
-#if 0
-static void set_const_signed(TypeStr* l, unsigned s)
-{
-    if (l->c.is_const)
-    {
-        if (l->c.is_signed && !s)
-        {
-            l->c.u = l->c.i;
-        }
-        else if (!l->c.is_signed && s)
-        {
-            l->c.i = l->c.u;
-        }
-        l->c.is_signed = !!s;
-    }
-}
-#endif
 
 static void promote_common_type(TypeStr* l, TypeStr* r)
 {
@@ -328,7 +300,7 @@ static void elaborate_expr_ExprBinOp_impl(
             return;
         }
     }
-    else if (binmask & BINOP_FLAGS_SCALAR || op == TOKEN_SYM1('?'))
+    else if (binmask & BINOP_FLAGS_SCALAR)
     {
         if (!(lhs_mask & TYPE_MASK_SCALAR))
         {
@@ -424,6 +396,10 @@ static void elaborate_expr_ExprBinOp_assign(struct Elaborator* elab,
     elaborate_expr_lvalue(elab, e->lhs, rty);
     typestr_dereference(rty);
     const struct TypeStr orig_lhs = *rty;
+    if (typestr_is_const(rty))
+    {
+        typestr_error1(rc, elab->types, "error: assignment to const object of type '%.*s'\n", rty);
+    }
     struct TypeStr rhs_ty;
     elaborate_expr_decay(elab, e->rhs, &rhs_ty);
     switch (op)
@@ -1050,7 +1026,11 @@ static void elaborate_init_ty(struct Elaborator* elab, size_t offset, const Type
 }
 
 #define DISPATCH(X, Y)                                                                                                 \
-    case X: return elaborate_stmt_##Y(elab, (struct Y*)ast)
+    case AST_KIND_##Y:                                                                                                 \
+        X##Y(elab, (struct Y*)ast);                                                                                    \
+        break
+
+#define DISPATCH_STMT(Y) DISPATCH(elaborate_stmt_, Y)
 
 static void elaborate_stmt_StmtCase(struct Elaborator* elab, struct StmtCase* stmt)
 {
@@ -1073,7 +1053,7 @@ static void elaborate_stmt(struct Elaborator* elab, struct Ast* ast)
     void* top = ast;
     switch (ast->kind)
     {
-        DISPATCH(STMT_CASE, StmtCase);
+        DISPATCH_STMT(StmtCase);
         case STMT_NONE:
         case STMT_BREAK:
         case STMT_CONTINUE:
@@ -1369,170 +1349,173 @@ static void elaborate_expr_impl(struct Elaborator* elab, struct Expr* top_expr, 
 
 static void elaborate_expr(struct Elaborator* elab, struct Expr* top_expr, struct TypeStr* rty)
 {
-    top_expr->elaborated = 1;
     elaborate_expr_impl(elab, top_expr, rty);
     top_expr->sizing = typestr_calc_sizing_zero_void(elab->types, rty, top_expr->tok);
+    top_expr->elaborated = 1;
 }
 
-static void elaborate_expr_lvalue(struct Elaborator* elab,
-
-                                  struct Expr* top_expr,
-                                  struct TypeStr* rty)
+static void expr_addressof(Expr* e, TypeStr* ty)
 {
-    enum AstKind kind = top_expr->kind;
-    if (kind == EXPR_REF)
+    e->take_address = 1;
+    typestr_addressof(ty);
+}
+
+static void elaborate_expr_lvalue_ExprRef(Elaborator* elab, ExprRef* expr, TypeStr* rty)
+{
+    elaborate_expr_impl(elab, &expr->expr_base, rty);
+    expr_addressof(&expr->expr_base, rty);
+}
+static void elaborate_expr_lvalue_ExprBinOp(Elaborator* elab, ExprBinOp* expr, TypeStr* rty)
+{
+    if (expr->tok->type == TOKEN_SYM1('['))
     {
-        elaborate_expr_impl(elab, top_expr, rty);
-        typestr_addressof(rty);
-        top_expr->take_address = 1;
-    }
-    else if (kind == EXPR_BINOP)
-    {
-        ExprBinOp* const binop = (ExprBinOp*)top_expr;
-        const unsigned mask = binop_mask(binop->tok->type);
-        if (binop->tok->type == TOKEN_SYM1('['))
+        struct TypeStr rhs_ty;
+        elaborate_expr_decay(elab, expr->lhs, rty);
+        elaborate_expr_decay(elab, expr->rhs, &rhs_ty);
+        if (typestr_mask(&rhs_ty) & TYPE_FLAGS_POINTER)
         {
-            struct TypeStr rhs_ty;
-            elaborate_expr_decay(elab, binop->lhs, rty);
-            elaborate_expr_decay(elab, binop->rhs, &rhs_ty);
-            if (typestr_mask(&rhs_ty) & TYPE_FLAGS_POINTER)
-            {
-                elaborate_expr_ExprBinOp_impl(elab, &binop->tok->rc, &rhs_ty, rty, TOKEN_SYM1('+'), &binop->info);
-                *rty = rhs_ty;
-                Expr* e = binop->lhs;
-                binop->lhs = binop->rhs;
-                binop->rhs = e;
-            }
-            else
-            {
-                elaborate_expr_ExprBinOp_impl(elab, &binop->tok->rc, rty, &rhs_ty, TOKEN_SYM1('+'), &binop->info);
-            }
-        }
-        else if (mask & BINOP_FLAGS_ASSIGN)
-        {
-            elaborate_expr_impl(elab, top_expr, rty);
-            typestr_addressof(rty);
-            top_expr->take_address = 1;
-        }
-        else
-            goto notmatch;
-    }
-    else if (kind == EXPR_UNOP)
-    {
-        ExprUnOp* const unop = (ExprUnOp*)top_expr;
-        if (unop->tok->type == TOKEN_SYM1('*'))
-        {
-            elaborate_expr_decay(elab, unop->lhs, rty);
-        }
-        else
-            goto notmatch;
-    }
-    else if (kind == EXPR_FIELD)
-    {
-        ExprField* e = (ExprField*)top_expr;
-        if (e->is_arrow)
-        {
-            elaborate_expr_decay(elab, e->lhs, rty);
+            elaborate_expr_ExprBinOp_impl(elab, &expr->tok->rc, &rhs_ty, rty, TOKEN_SYM1('+'), &expr->info);
+            *rty = rhs_ty;
+            Expr* e = expr->lhs;
+            expr->lhs = expr->rhs;
+            expr->rhs = e;
         }
         else
         {
-            elaborate_expr_lvalue(elab, e->lhs, rty);
-            typestr_dereference(rty);
+            elaborate_expr_ExprBinOp_impl(elab, &expr->tok->rc, rty, &rhs_ty, TOKEN_SYM1('+'), &expr->info);
         }
-        elaborate_expr_ExprField_lhs(elab, e, rty);
-        typestr_addressof(rty);
-        top_expr->take_address = 1;
+    }
+    else if (binop_mask(expr->tok->type) & BINOP_FLAGS_ASSIGN)
+    {
+        elaborate_expr_ExprBinOp_assign(elab, expr, rty, expr->tok->type);
+        expr_addressof(&expr->expr_base, rty);
     }
     else
     {
-    notmatch:
-        elaborate_expr(elab, top_expr, rty);
+        elaborate_expr(elab, &expr->expr_base, rty);
         typestr_error1(
-            token_rc(top_expr->tok), elab->types, "error: expected lvalue but got expression of type %.*s\n", rty);
+            token_rc(expr->tok), elab->types, "error: expected lvalue but got expression of type %.*s\n", rty);
         *rty = s_type_unknown;
     }
-    top_expr->sizing = typestr_calc_elem_sizing(elab->types, rty, top_expr->tok);
-    top_expr->elaborated = 1;
 }
-
-static void elaborate_expr_decay(struct Elaborator* elab,
-
-                                 struct Expr* top_expr,
-                                 struct TypeStr* rty)
+static void elaborate_expr_lvalue_ExprUnOp(Elaborator* elab, ExprUnOp* expr, TypeStr* rty)
 {
-    elaborate_expr_impl(elab, top_expr, rty);
-    top_expr->take_address = typestr_decay(rty);
-    top_expr->sizing = typestr_calc_sizing_zero_void(elab->types, rty, top_expr->tok);
-    top_expr->elaborated = 1;
+    if (expr->tok->type == TOKEN_SYM1('*'))
+    {
+        elaborate_expr_decay(elab, expr->lhs, rty);
+    }
+    else
+    {
+        elaborate_expr(elab, &expr->expr_base, rty);
+        typestr_error1(
+            token_rc(expr->tok), elab->types, "error: expected lvalue but got expression of type %.*s\n", rty);
+        *rty = s_type_unknown;
+    }
 }
-static void elaborate_expr_impl(struct Elaborator* elab,
+static void elaborate_expr_lvalue_ExprField(Elaborator* elab, ExprField* e, TypeStr* rty)
+{
+    // TODO: THIS IS WRONG
+    if (e->is_arrow)
+    {
+        elaborate_expr_decay(elab, e->lhs, rty);
+    }
+    else
+    {
+        elaborate_expr_lvalue(elab, e->lhs, rty);
+        typestr_dereference(rty);
+    }
+    elaborate_expr_ExprField_lhs(elab, e, rty);
+    expr_addressof(&e->expr_base, rty);
+}
 
-                                struct Expr* top_expr,
-                                struct TypeStr* rty)
+static void elaborate_expr_lvalue(struct Elaborator* elab, struct Expr* expr, struct TypeStr* rty)
+{
+#define DISPATCH_EXPR_LVALUE(Y)                                                                                        \
+    case AST_KIND_##Y: elaborate_expr_lvalue_##Y(elab, (struct Y*)expr, rty); break
+
+    switch (expr->kind)
+    {
+        DISPATCH_EXPR_LVALUE(ExprRef);
+        DISPATCH_EXPR_LVALUE(ExprBinOp);
+        DISPATCH_EXPR_LVALUE(ExprUnOp);
+        DISPATCH_EXPR_LVALUE(ExprField);
+        default:
+            elaborate_expr(elab, expr, rty);
+            typestr_error1(
+                token_rc(expr->tok), elab->types, "error: expected lvalue but got expression of type %.*s\n", rty);
+            *rty = s_type_unknown;
+            break;
+    }
+    expr->sizing = typestr_calc_elem_sizing(elab->types, rty, expr->tok);
+    expr->elaborated = 1;
+}
+
+static void elaborate_expr_decay(struct Elaborator* elab, struct Expr* expr, struct TypeStr* rty)
+{
+    elaborate_expr_impl(elab, expr, rty);
+    expr->take_address = typestr_decay(rty);
+    expr->sizing = typestr_calc_sizing_zero_void(elab->types, rty, expr->tok);
+    expr->elaborated = 1;
+}
+static void elaborate_expr_ExprRef(Elaborator* elab, ExprRef* e, TypeStr* rty) { *rty = e->sym->type; }
+static void elaborate_expr_ExprCast(Elaborator* elab, ExprCast* e, TypeStr* rty)
+{
+    TypeStr orig;
+    elaborate_expr_decay(elab, e->expr, &orig);
+    elaborate_declspecs(elab, e->specs);
+    elaborate_decl(elab, e->type);
+    typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, rty, e->type);
+    rty->c = orig.c;
+    if (orig.c.is_const)
+    {
+        const unsigned orig_mask = typestr_mask(&orig);
+        const unsigned rty_mask = typestr_mask(rty);
+        if (rty_mask & orig_mask & TYPE_FLAGS_POINTER)
+        {
+        }
+        else if ((rty_mask & TYPE_FLAGS_POINTER) && typestr_is_constant_zero(&orig))
+        {
+        }
+        else if ((rty_mask & TYPE_FLAGS_POINTER) && (orig_mask & TYPE_MASK_FN_ARR) && orig.c.is_lvalue)
+        {
+            rty->c = orig.c;
+            rty->c.is_lvalue = 0;
+        }
+        else if (rty_mask & orig_mask & TYPE_FLAGS_INT)
+        {
+            typestr_assign_constant_value(rty, orig.c.value);
+        }
+        else
+        {
+            rty->c = s_not_constant;
+        }
+    }
+}
+
+#define DISPATCH_EXPR(Y)                                                                                               \
+    case AST_KIND_##Y: elaborate_expr_##Y(elab, (struct Y*)expr, rty); break
+
+static void elaborate_expr_impl(struct Elaborator* elab, struct Expr* expr, struct TypeStr* rty)
 {
 #if defined(TRACING_ELAB)
-    if (top_expr->tok)
-        fprintf(stderr,
-                "{elaborate_expr(%s:%d:%d)\n",
-                top_expr->tok->rc.file,
-                top_expr->tok->rc.row,
-                top_expr->tok->rc.col);
+    if (expr->tok)
+        fprintf(stderr, "{elaborate_expr(%s:%d:%d)\n", expr->tok->rc.file, expr->tok->rc.row, expr->tok->rc.col);
     else
         fprintf(stderr, "{elaborate_expr(?)\n");
 #endif
     memset(rty, 0, sizeof(*rty));
-    void* top = top_expr;
-    switch (top_expr->kind)
+    switch (expr->kind)
     {
-        case EXPR_LIT: elaborate_expr_ExprLit(elab, top, rty); break;
-        case EXPR_REF:
-        {
-            struct ExprRef* esym = top;
-            *rty = esym->sym->type;
-            break;
-        }
-        case EXPR_CAST:
-        {
-            struct ExprCast* expr = top;
-            TypeStr orig;
-            elaborate_expr_decay(elab, expr->expr, &orig);
-            elaborate_declspecs(elab, expr->specs);
-            elaborate_decl(elab, expr->type);
-            typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, rty, expr->type);
-            rty->c = orig.c;
-            if (orig.c.is_const)
-            {
-                const unsigned orig_mask = typestr_mask(&orig);
-                const unsigned rty_mask = typestr_mask(rty);
-                if (rty_mask & orig_mask & TYPE_FLAGS_POINTER)
-                {
-                }
-                else if ((rty_mask & TYPE_FLAGS_POINTER) && typestr_is_constant_zero(&orig))
-                {
-                }
-                else if ((rty_mask & TYPE_FLAGS_POINTER) && (orig_mask & TYPE_MASK_FN_ARR) && orig.c.is_lvalue)
-                {
-                    rty->c = orig.c;
-                    rty->c.is_lvalue = 0;
-                }
-                else if (rty_mask & orig_mask & TYPE_FLAGS_INT)
-                {
-                    typestr_assign_constant_value(rty, orig.c.value);
-                }
-                else
-                {
-                    rty->c = s_not_constant;
-                }
-            }
-            break;
-        }
-        case EXPR_CALL: elaborate_expr_ExprCall(elab, top, rty); break;
-        case EXPR_FIELD: elaborate_expr_ExprField(elab, top, rty); break;
-        case EXPR_BINOP: elaborate_expr_ExprBinOp(elab, top, rty); break;
-        case EXPR_TERNARY: elaborate_expr_ExprTernary(elab, top, rty); break;
-        case EXPR_UNOP: elaborate_expr_ExprUnOp(elab, top, rty); break;
-        case EXPR_BUILTIN: elaborate_expr_ExprBuiltin(elab, top, rty); break;
-        default: parser_tok_error(NULL, "error: unknown expr kind: %s\n", ast_kind_to_string(top_expr->kind)); return;
+        DISPATCH_EXPR(ExprLit);
+        DISPATCH_EXPR(ExprRef);
+        DISPATCH_EXPR(ExprCast);
+        DISPATCH_EXPR(ExprCall);
+        DISPATCH_EXPR(ExprField);
+        DISPATCH_EXPR(ExprBinOp);
+        DISPATCH_EXPR(ExprTernary);
+        DISPATCH_EXPR(ExprUnOp);
+        DISPATCH_EXPR(ExprBuiltin);
+        default: parser_tok_error(NULL, "error: unknown expr kind: %s\n", ast_kind_to_string(expr->kind)); return;
     }
 #if defined(TRACING_ELAB)
     fprintf(stderr, "}\n");

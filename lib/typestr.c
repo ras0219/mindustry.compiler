@@ -728,7 +728,11 @@ int typestr_is_char_array(const TypeStr* ts)
     }
     return 0;
 }
-
+unsigned int typestr_get_cvr(const TypeStr* ts)
+{
+    int i = ts->buf.buf[0];
+    return typestr_skip_cvr_i(ts, &i);
+}
 unsigned int typestr_strip_cvr(struct TypeStr* ts)
 {
     int i = ts->buf.buf[0];

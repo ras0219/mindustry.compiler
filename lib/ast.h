@@ -291,6 +291,9 @@ struct StmtCase
     // filled by elaboration to the numeric case value
     size_t value;
 };
+#define AST_STRUCT_STMT_CASE StmtCase
+#define AST_KIND_StmtCase STMT_CASE
+
 struct StmtGoto
 {
     INHERIT_AST;
