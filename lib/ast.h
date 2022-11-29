@@ -18,7 +18,7 @@
     Y(EXPR_TERNARY)                                                                                                    \
     Y(EXPR_UNOP)                                                                                                       \
     Y(EXPR_CALL)                                                                                                       \
-    Y(EXPR_BUILTIN)                                                                                                    \
+    Y(EXPR_BUILTIN)
 
 #define X_AST_POOL_KIND(Y)                                                                                             \
     X_FOREACH_EXPR(Y)                                                                                                  \
@@ -173,7 +173,8 @@ typedef struct ExprBinOp
     struct Expr* lhs;
     struct Expr* rhs;
     // additional info for certain operations
-    //  * '[','+', size of element
+    //  * '[','+', size of element (positive)
+    //  * '-', size of element (negative)
     int info;
 } ExprBinOp;
 #define AST_STRUCT_EXPR_BINOP ExprBinOp

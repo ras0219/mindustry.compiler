@@ -277,6 +277,25 @@ static TACAddress be_increment(struct BackEnd* be, const TACAddress* addr, int o
     };
     return be_push_tace(be, &tace, s_sizing_ptr);
 }
+static TACAddress be_umultiply(struct BackEnd* be, const TACAddress* addr, int operand)
+{
+    if (operand == 0) return taca_imm(0);
+    if (operand == 1) return *addr;
+
+    if (addr->kind == TACA_IMM)
+    {
+        return taca_imm(operand * addr->imm);
+    }
+    else
+    {
+        struct TACEntry tace = {
+            .op = TACO_MULT,
+            .arg1 = taca_imm(operand),
+            .arg2 = *addr,
+        };
+        return be_push_tace(be, &tace, s_sizing_ptr);
+    }
+}
 
 static struct TACAddress be_alloc_temp(struct BackEnd* be, Sizing sizing)
 {
@@ -628,20 +647,9 @@ static int be_compile_arith_rhs(struct BackEnd* be, struct ExprBinOp* e, struct 
     }
     else
     {
-        struct TACEntry tace = {};
-        UNWRAP(be_compile_expr(be, e->rhs, &tace.arg2));
-        if (tace.arg2.kind == TACA_IMM)
-        {
-            *out = taca_imm(e->info * tace.arg2.imm);
-        }
-        else
-        {
-            tace.rc = &e->tok->rc;
-            /* adding to pointer, e->info is size of element */
-            tace.op = TACO_MULT;
-            tace.arg1 = taca_imm(e->info);
-            *out = be_push_tace(be, &tace, s_sizing_ptr);
-        }
+        /* Adding to pointer -- e->info is size of element */
+        UNWRAP(be_compile_expr(be, e->rhs, out));
+        *out = be_umultiply(be, out, e->info);
     }
 fail:
     return rc;
@@ -670,17 +678,13 @@ static int be_compile_sub(struct BackEnd* be, struct ExprBinOp* e, struct TACAdd
     };
     UNWRAP(be_compile_expr(be, e->lhs, &tace.arg1));
     UNWRAP(be_compile_arith_rhs(be, e, &tace.arg2));
-    if (e->info < 1)
+    if (e->info < -1)
     {
         tace.arg1 = be_push_tace(be, &tace, e->sizing);
         tace.op = TACO_DIV;
         tace.arg2 = taca_imm(-e->info);
-        *out = be_push_tace(be, &tace, e->sizing);
     }
-    else
-    {
-        *out = be_push_tace(be, &tace, e->sizing);
-    }
+    *out = be_push_tace(be, &tace, e->sizing);
 fail:
     return rc;
 }
@@ -688,8 +692,7 @@ fail:
 static int be_compile_lvalue_ExprBinOp(struct BackEnd* be, struct ExprBinOp* e, struct TACAddress* out)
 {
     int rc = 0;
-    struct TACEntry tace = {};
-    tace.rc = &e->tok->rc;
+    struct TACEntry tace = {.rc = token_rc(e->tok)};
     switch (e->tok->type)
     {
         case TOKEN_SYM2('+', '='): tace.op = TACO_ADD; goto binary_op_assign;
@@ -1018,7 +1021,7 @@ static int be_compile_ExprBinOp(struct BackEnd* be, struct ExprBinOp* e, struct 
     int rc = 0;
     if (!e->lhs || !e->rhs) return parser_ice_tok(e->tok);
 
-    struct TACEntry tace = {};
+    struct TACEntry tace = {0};
     tace.rc = &e->tok->rc;
     switch (e->tok->type)
     {
