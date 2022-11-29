@@ -9,15 +9,19 @@
 #include "seqview.h"
 #include "sizing.h"
 
-#define X_AST_POOL_KIND(Y)                                                                                             \
+#define X_FOREACH_EXPR(Y)                                                                                              \
     Y(EXPR_REF)                                                                                                        \
     Y(EXPR_FIELD)                                                                                                      \
     Y(EXPR_LIT)                                                                                                        \
     Y(EXPR_CAST)                                                                                                       \
     Y(EXPR_BINOP)                                                                                                      \
+    Y(EXPR_TERNARY)                                                                                                    \
     Y(EXPR_UNOP)                                                                                                       \
     Y(EXPR_CALL)                                                                                                       \
     Y(EXPR_BUILTIN)                                                                                                    \
+
+#define X_AST_POOL_KIND(Y)                                                                                             \
+    X_FOREACH_EXPR(Y)                                                                                                  \
     Y(AST_INIT)                                                                                                        \
     Y(AST_DINIT)                                                                                                       \
     Y(AST_DECL)                                                                                                        \
@@ -174,6 +178,17 @@ typedef struct ExprBinOp
 } ExprBinOp;
 #define AST_STRUCT_EXPR_BINOP ExprBinOp
 #define AST_KIND_ExprBinOp EXPR_BINOP
+
+typedef struct ExprTernary
+{
+    INHERIT_EXPR;
+
+    struct Expr* cond;
+    struct Expr* iftrue;
+    struct Expr* iffalse;
+} ExprTernary;
+#define AST_STRUCT_EXPR_TERNARY ExprTernary
+#define AST_KIND_ExprTernary EXPR_TERNARY
 
 typedef struct ExprUnOp
 {

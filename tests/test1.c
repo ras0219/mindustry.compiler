@@ -38,7 +38,6 @@ static const Sizing s_sizing_int = {.width = 4, .is_signed = 1};
 static const Sizing s_sizing_uint = {.width = 4};
 static const Sizing s_sizing_schar = {.width = 1, .is_signed = 1};
 static const Sizing s_sizing_uchar = {.width = 1};
-static const Sizing s_sizing_ptr = {.width = 8};
 static const Sizing s_sizing_sptr = {.width = 8, .is_signed = 1};
 
 int unittest_require_typestr_eq_impl(struct TestState* state,

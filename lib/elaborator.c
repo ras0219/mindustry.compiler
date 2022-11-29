@@ -189,17 +189,12 @@ static void promote_common_type(TypeStr* l, TypeStr* r)
     }
 }
 
-static void elaborate_expr_ternary(struct Elaborator* elab,
-
-                                   struct ExprBinOp* e,
-                                   struct Expr* etrue,
-                                   struct Expr* efalse,
-                                   struct TypeStr* rty)
+static void elaborate_expr_ExprTernary(struct Elaborator* elab, ExprTernary* e, struct TypeStr* rty)
 {
     TypeStr cond_ty, etrue_ty, efalse_ty;
-    elaborate_expr_decay(elab, e->lhs, &cond_ty);
-    elaborate_expr_decay(elab, etrue, &etrue_ty);
-    elaborate_expr_decay(elab, efalse, &efalse_ty);
+    elaborate_expr_decay(elab, e->cond, &cond_ty);
+    elaborate_expr_decay(elab, e->iftrue, &etrue_ty);
+    elaborate_expr_decay(elab, e->iffalse, &efalse_ty);
     const unsigned int cond_mask = typestr_mask(&cond_ty);
     const unsigned int etrue_mask = typestr_mask(&etrue_ty);
     const unsigned int efalse_mask = typestr_mask(&efalse_ty);
@@ -467,11 +462,6 @@ static void elaborate_expr_ExprBinOp(struct Elaborator* elab,
 #if defined(TRACING_ELAB)
     fprintf(stderr, "elaborate_expr_ExprBinOp\n");
 #endif
-    if (e->tok->type == TOKEN_SYM1('?'))
-    {
-        if (!e->rhs || e->rhs->kind != EXPR_BINOP) abort();
-        return elaborate_expr_ternary(elab, e, ((ExprBinOp*)e->rhs)->lhs, ((ExprBinOp*)e->rhs)->rhs, rty);
-    }
     const unsigned op = e->tok->type;
     const unsigned int binmask = binop_mask(op);
     if (binmask & BINOP_FLAGS_ASSIGN)
@@ -1102,7 +1092,7 @@ static void elaborate_stmt(struct Elaborator* elab, struct Ast* ast)
                 elaborate_expr_decay(elab, stmt->expr, &ts);
                 struct TypeStr fn = elab->cur_decl->sym->type;
                 typestr_pop_offset(&fn);
-                typestr_implicit_conversion(elab->types, &stmt->tok->rc, &ts, &fn);
+                typestr_implicit_conversion(elab->types, token_rc(stmt->tok), &ts, &fn);
             }
 
             return;
@@ -1158,7 +1148,7 @@ static void elaborate_stmt(struct Elaborator* elab, struct Ast* ast)
             elaborate_expr_decay(elab, stmt->expr, &ts);
             if (!(typestr_mask(&ts) & TYPE_MASK_SCALAR))
             {
-                typestr_error1(&stmt->tok->rc,
+                typestr_error1(token_rc(stmt->tok),
                                elab->types,
                                "error: expected scalar type in switch condition but got '%.*s'\n",
                                &ts);
@@ -1366,10 +1356,7 @@ static void elaborate_expr_ExprField_lhs(struct Elaborator* elab, struct ExprFie
     }
 }
 
-static void elaborate_expr_ExprField(struct Elaborator* elab,
-
-                                     struct ExprField* e,
-                                     struct TypeStr* rty)
+static void elaborate_expr_ExprField(struct Elaborator* elab, struct ExprField* e, struct TypeStr* rty)
 {
 #if defined(TRACING_ELAB)
     fprintf(stderr, " EXPR_FIELD\n");
@@ -1378,14 +1365,9 @@ static void elaborate_expr_ExprField(struct Elaborator* elab,
     elaborate_expr_ExprField_lhs(elab, e, rty);
 }
 
-static void elaborate_expr_impl(struct Elaborator* elab,
+static void elaborate_expr_impl(struct Elaborator* elab, struct Expr* top_expr, struct TypeStr* rty);
 
-                                struct Expr* top_expr,
-                                struct TypeStr* rty);
-static void elaborate_expr(struct Elaborator* elab,
-
-                           struct Expr* top_expr,
-                           struct TypeStr* rty)
+static void elaborate_expr(struct Elaborator* elab, struct Expr* top_expr, struct TypeStr* rty)
 {
     top_expr->elaborated = 1;
     elaborate_expr_impl(elab, top_expr, rty);
@@ -1466,7 +1448,7 @@ static void elaborate_expr_lvalue(struct Elaborator* elab,
     notmatch:
         elaborate_expr(elab, top_expr, rty);
         typestr_error1(
-            &top_expr->tok->rc, elab->types, "error: expected lvalue but got expression of type %.*s\n", rty);
+            token_rc(top_expr->tok), elab->types, "error: expected lvalue but got expression of type %.*s\n", rty);
         *rty = s_type_unknown;
     }
     top_expr->sizing = typestr_calc_elem_sizing(elab->types, rty, top_expr->tok);
@@ -1547,6 +1529,7 @@ static void elaborate_expr_impl(struct Elaborator* elab,
         case EXPR_CALL: elaborate_expr_ExprCall(elab, top, rty); break;
         case EXPR_FIELD: elaborate_expr_ExprField(elab, top, rty); break;
         case EXPR_BINOP: elaborate_expr_ExprBinOp(elab, top, rty); break;
+        case EXPR_TERNARY: elaborate_expr_ExprTernary(elab, top, rty); break;
         case EXPR_UNOP: elaborate_expr_ExprUnOp(elab, top, rty); break;
         case EXPR_BUILTIN: elaborate_expr_ExprBuiltin(elab, top, rty); break;
         default: parser_tok_error(NULL, "error: unknown expr kind: %s\n", ast_kind_to_string(top_expr->kind)); return;

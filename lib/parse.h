@@ -21,6 +21,7 @@ typedef struct Parser
     struct TypeSymbol* cur_su;
     size_t anon_idx;
 
+    // 6.2.1 Scope types: function, file, block, function prototype
     struct Scope scope;
     struct Scope type_scope;
     struct Scope typedef_scope;
@@ -79,3 +80,9 @@ const char* token_str(const struct Parser* p, const struct Token* tk);
 
 void parser_debug_check(struct Parser* p);
 void parser_dump(struct Parser* p, FILE* f);
+
+static __forceinline CallParam* parser_params(Parser* p, ExprCall* call)
+{
+    if (!p->callparams.data) return NULL;
+    return (CallParam*)p->callparams.data + call->param_offset;
+}

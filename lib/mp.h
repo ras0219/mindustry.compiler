@@ -15,10 +15,14 @@ typedef struct Constant128
 extern const Constant128 s_one_constant;
 extern const Constant128 s_zero_constant;
 
-__forceinline static int32_t mp_i32(Constant128 a) { return (int32_t)a.lower; }
+__forceinline static uint8_t mp_u8(Constant128 a) { return (uint8_t)a.lower; }
+__forceinline static uint16_t mp_u16(Constant128 a) { return (uint16_t)a.lower; }
 __forceinline static uint32_t mp_u32(Constant128 a) { return (uint32_t)a.lower; }
-__forceinline static int64_t mp_i64(Constant128 a) { return (int64_t)a.lower; }
 __forceinline static uint64_t mp_u64(Constant128 a) { return (uint64_t)a.lower; }
+__forceinline static int8_t mp_i8(Constant128 a) { return (int8_t)a.lower; }
+__forceinline static int16_t mp_i16(Constant128 a) { return (int16_t)a.lower; }
+__forceinline static int32_t mp_i32(Constant128 a) { return (int32_t)a.lower; }
+__forceinline static int64_t mp_i64(Constant128 a) { return (int64_t)a.lower; }
 
 Constant128 mp_cast(Constant128 a, unsigned flags);
 Constant128 mp_from_u64(uint64_t u);

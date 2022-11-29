@@ -76,11 +76,21 @@ enum Precedence op_precedence(unsigned int tok_type)
 
 static struct ExprBinOp* parse_alloc_binop(Parser* p, const struct Token* tok, struct Expr* lhs, struct Expr* rhs)
 {
-    struct ExprBinOp* e = (struct ExprBinOp*)pool_alloc_zeroes(&p->ast_pools[EXPR_BINOP], sizeof(struct ExprBinOp));
+    struct ExprBinOp* e = pool_alloc_zeroes(&p->ast_pools[EXPR_BINOP], sizeof(struct ExprBinOp));
     e->kind = EXPR_BINOP;
     e->tok = tok;
     e->lhs = lhs;
     e->rhs = rhs;
+    if (!tok) abort();
+    return e;
+}
+
+static ExprTernary* parse_alloc_ternary(Parser* p, const struct Token* tok, struct Expr* cond)
+{
+    ExprTernary* e = pool_alloc_zeroes(&p->ast_pools[EXPR_TERNARY], sizeof(struct ExprTernary));
+    e->kind = EXPR_TERNARY;
+    e->tok = tok;
+    e->cond = cond;
     if (!tok) abort();
     return e;
 }
@@ -509,15 +519,11 @@ static const struct Token* parse_expr_continue(
     }
     else if (precedence <= PRECEDENCE_TERNARY && tok_op->type == TOKEN_SYM1('?'))
     {
-        // ternary operator
-        struct ExprBinOp* op_expr = parse_alloc_binop(p, tok_op, lhs, NULL);
+        ExprTernary* op_expr = parse_alloc_ternary(p, tok_op, lhs);
         *ppe = &op_expr->expr_base;
-        struct Expr* on_true;
-        PARSER_DO(parse_expr(p, cur_tok + 1, &on_true, PRECEDENCE_COMMA));
-        struct ExprBinOp* switch_expr = parse_alloc_binop(p, cur_tok, on_true, NULL);
-        op_expr->rhs = &switch_expr->expr_base;
+        PARSER_DO(parse_expr(p, cur_tok + 1, &op_expr->iftrue, PRECEDENCE_COMMA));
         PARSER_DO(token_consume_sym(p, cur_tok, ':', " in ternary operator"));
-        PARSER_DO(parse_expr(p, cur_tok, &switch_expr->rhs, PRECEDENCE_TERNARY));
+        PARSER_DO(parse_expr(p, cur_tok, &op_expr->iffalse, PRECEDENCE_TERNARY));
         return cur_tok;
     }
     *ppe = lhs;

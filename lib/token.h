@@ -16,6 +16,8 @@ typedef struct Token
     ptrdiff_t sp_offset;
 } Token;
 
+static __forceinline const RowCol* token_rc(const Token* tk) { return tk ? &tk->rc : NULL; }
+
 #define TOKEN_SYM1(A) (0x80 + (unsigned int)(A))
 #define TOKEN_SYM2(A, B) (0x80 + (unsigned int)(A) + 0x100 * (unsigned int)(B))
 #define TOKEN_SYM3(A, B, C) (0x80 + (unsigned int)(A) + 0x100 * (unsigned int)(B) + 0x10000 * (unsigned int)(C))
