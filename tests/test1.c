@@ -1527,6 +1527,28 @@ static const Token* test_ast_ast_inner(AstChecker* ctx, const Token* cur_tok, co
         {
             const ExprUnOp* a = (void*)ast;
             if (a->tok) PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
+            PARSER_DO(expect_number(ctx, cur_tok, a->sizeof_));
+            PARSER_DO(test_ast_ast(ctx, cur_tok, a->lhs));
+            break;
+        }
+        case EXPR_DEREF:
+        {
+            const ExprDeref* a = (void*)ast;
+            if (a->tok) PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
+            PARSER_DO(test_ast_ast(ctx, cur_tok, a->lhs));
+            break;
+        }
+        case EXPR_ADDRESS:
+        {
+            const ExprAddress* a = (void*)ast;
+            if (a->tok) PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
+            PARSER_DO(test_ast_ast(ctx, cur_tok, a->lhs));
+            break;
+        }
+        case EXPR_INCR:
+        {
+            const ExprIncr* a = (void*)ast;
+            if (a->tok) PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
             if (a->postfix) PARSER_DO(expect_str(ctx, cur_tok, "postfix"));
             PARSER_DO(expect_number(ctx, cur_tok, a->sizeof_));
             PARSER_DO(test_ast_ast(ctx, cur_tok, a->lhs));

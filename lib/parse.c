@@ -74,36 +74,46 @@ enum Precedence op_precedence(unsigned int tok_type)
     }
 }
 
-static struct ExprBinOp* parse_alloc_binop(Parser* p, const struct Token* tok, struct Expr* lhs, struct Expr* rhs)
+static void* parse_alloc_expr(Parser* p, const struct Token* tok, int tag, size_t size)
 {
-    struct ExprBinOp* e = pool_alloc_zeroes(&p->ast_pools[EXPR_BINOP], sizeof(struct ExprBinOp));
-    e->kind = EXPR_BINOP;
+    Expr* e = pool_alloc_zeroes(&p->ast_pools[tag], size);
+    e->kind = tag;
     e->tok = tok;
-    e->lhs = lhs;
-    e->rhs = rhs;
     if (!tok) abort();
     return e;
 }
 
-static ExprTernary* parse_alloc_ternary(Parser* p, const struct Token* tok, struct Expr* cond)
-{
-    ExprTernary* e = pool_alloc_zeroes(&p->ast_pools[EXPR_TERNARY], sizeof(struct ExprTernary));
-    e->kind = EXPR_TERNARY;
-    e->tok = tok;
-    e->cond = cond;
-    if (!tok) abort();
-    return e;
-}
+#define DEFINE_PARSE_ALLOC0(TYPE)                                                                                      \
+    static TYPE* parse_alloc_##TYPE(Parser* p, const Token* tok)                                                       \
+    {                                                                                                                  \
+        TYPE* e_ = parse_alloc_expr(p, tok, AST_KIND_##TYPE, sizeof(TYPE));                                            \
+        return e_;                                                                                                     \
+    }
+#define DEFINE_PARSE_ALLOC1(TYPE, T1, N1)                                                                              \
+    static TYPE* parse_alloc_##TYPE(Parser* p, const Token* tok, T1 N1)                                                \
+    {                                                                                                                  \
+        TYPE* e_ = parse_alloc_expr(p, tok, AST_KIND_##TYPE, sizeof(TYPE));                                            \
+        e_->N1 = N1;                                                                                                   \
+        return e_;                                                                                                     \
+    }
 
-static struct ExprUnOp* parse_alloc_unop(Parser* p, const struct Token* tok, struct Expr* lhs)
-{
-    struct ExprUnOp* e = (struct ExprUnOp*)pool_alloc_zeroes(&p->ast_pools[EXPR_UNOP], sizeof(struct ExprUnOp));
-    e->kind = EXPR_UNOP;
-    e->tok = tok;
-    e->lhs = lhs;
-    if (!tok) abort();
-    return e;
-}
+#define DEFINE_PARSE_ALLOC2(TYPE, T1, N1, T2, N2)                                                                      \
+    static TYPE* parse_alloc_##TYPE(Parser* p, const Token* tok, T1 N1, T2 N2)                                         \
+    {                                                                                                                  \
+        TYPE* e_ = parse_alloc_expr(p, tok, AST_KIND_##TYPE, sizeof(TYPE));                                            \
+        e_->N1 = N1;                                                                                                   \
+        e_->N2 = N2;                                                                                                   \
+        return e_;                                                                                                     \
+    }
+
+DEFINE_PARSE_ALLOC2(ExprBinOp, Expr*, lhs, Expr*, rhs)
+DEFINE_PARSE_ALLOC1(ExprTernary, Expr*, cond)
+DEFINE_PARSE_ALLOC0(ExprUnOp)
+DEFINE_PARSE_ALLOC0(ExprDeref)
+DEFINE_PARSE_ALLOC0(ExprAddress)
+DEFINE_PARSE_ALLOC2(ExprIncr, Expr*, lhs, int, postfix)
+DEFINE_PARSE_ALLOC1(ExprRef, Symbol*, sym)
+DEFINE_PARSE_ALLOC0(ExprCast)
 
 static struct ExprBuiltin* parse_alloc_builtin(
     Parser* p, const struct Token* tok, struct Expr* e1, struct Expr* e2, struct DeclSpecs* specs, struct Decl* decl)
@@ -120,14 +130,6 @@ static struct ExprBuiltin* parse_alloc_builtin(
     return pool_push(&p->ast_pools[e.kind], &e, sizeof(e));
 }
 
-static struct ExprRef* parse_alloc_expr_ref(Parser* p, const struct Token* tok, Symbol* sym)
-{
-    struct ExprRef* e = pool_alloc_zeroes(&p->ast_pools[EXPR_REF], sizeof(struct ExprRef));
-    e->kind = EXPR_REF;
-    e->tok = tok;
-    e->sym = sym;
-    return e;
-}
 static struct ExprLit* parse_alloc_expr_lit(Parser* p, const struct Token* tok)
 {
     struct ExprLit* e = pool_alloc_zeroes(&p->ast_pools[EXPR_LIT], sizeof(struct ExprLit));
@@ -136,14 +138,7 @@ static struct ExprLit* parse_alloc_expr_lit(Parser* p, const struct Token* tok)
     e->text = token_str(p, tok);
     return e;
 }
-static struct ExprCast* parse_alloc_expr_cast(Parser* p, struct Decl* type, struct Expr* expr)
-{
-    struct ExprCast* e = pool_alloc_zeroes(&p->ast_pools[EXPR_CAST], sizeof(struct ExprCast));
-    e->kind = EXPR_CAST;
-    e->expr = expr;
-    e->type = type;
-    return e;
-}
+
 static struct ExprCall* parse_alloc_expr_call(
     Parser* p, const struct Token* tok, struct Expr* fn, size_t off, size_t ext)
 {
@@ -242,16 +237,14 @@ top:;
         struct Expr* rhs = NULL;
         PARSER_DO(parse_expr(p, cur_tok, &rhs, PRECEDENCE_COMMA));
         PARSER_DO(token_consume_sym(p, cur_tok, ']', " in array expression"));
-        struct ExprBinOp* e = parse_alloc_binop(p, tok, lhs, rhs);
+        struct ExprBinOp* e = parse_alloc_ExprBinOp(p, tok, lhs, rhs);
         lhs = &e->expr_base;
         goto top;
     }
 
     if (cur_tok->type == TOKEN_SYM2('+', '+') || cur_tok->type == TOKEN_SYM2('-', '-'))
     {
-        struct ExprUnOp* e = parse_alloc_unop(p, cur_tok, lhs);
-        e->postfix = 1;
-        lhs = &e->expr_base;
+        lhs = &parse_alloc_ExprIncr(p, cur_tok, lhs, 1)->expr_base;
         ++cur_tok;
         goto top;
     }
@@ -334,7 +327,7 @@ static const struct Token* parse_paren_unary(Parser* p, const struct Token* cur_
     if (parse_is_token_a_type(p, cur_tok))
     {
         // cast expression
-        struct ExprCast* e = parse_alloc_expr_cast(p, NULL, NULL);
+        struct ExprCast* e = parse_alloc_ExprCast(p, cur_tok);
         e->tok = cur_tok;
         PARSER_DO(parse_type(p, cur_tok, &e->specs, &e->type));
         *ppe = &e->expr_base;
@@ -367,7 +360,7 @@ static struct ExprRef* ref_from_tok(struct Parser* p, const struct Token* tok)
         return parser_ferror(&tok->rc, "error: '%s' undeclared\n", lhs_str), NULL;
     }
     if (!lhs_bind->sym) abort();
-    return parse_alloc_expr_ref(p, tok, lhs_bind->sym);
+    return parse_alloc_ExprRef(p, tok, lhs_bind->sym);
 }
 
 static const struct Token* parse_expr_unary_atom(Parser* p, const struct Token* cur_tok, struct Expr** ppe)
@@ -375,11 +368,37 @@ static const struct Token* parse_expr_unary_atom(Parser* p, const struct Token* 
 top:
     switch (cur_tok->type)
     {
-#define Y_CASE(V, ...) case V:
-        X_PREFIX_UNARY_TOKS(Y_CASE)
-#undef Y_CASE
+        case TOKEN_SYM1('&'):
         {
-            struct ExprUnOp* e = parse_alloc_unop(p, cur_tok, NULL);
+            ExprAddress* e = parse_alloc_ExprAddress(p, cur_tok);
+            *ppe = &e->expr_base;
+            ppe = &e->lhs;
+            ++cur_tok;
+            goto top;
+        }
+        case TOKEN_SYM1('*'):
+        {
+            ExprDeref* e = parse_alloc_ExprDeref(p, cur_tok);
+            *ppe = &e->expr_base;
+            ppe = &e->lhs;
+            ++cur_tok;
+            goto top;
+        }
+        case TOKEN_SYM2('-', '-'):
+        case TOKEN_SYM2('+', '+'):
+        {
+            ExprIncr* e = parse_alloc_ExprIncr(p, cur_tok, NULL, 0);
+            *ppe = &e->expr_base;
+            ppe = &e->lhs;
+            ++cur_tok;
+            goto top;
+        }
+        case TOKEN_SYM1('!'):
+        case TOKEN_SYM1('~'):
+        case TOKEN_SYM1('-'):
+        case TOKEN_SYM1('+'):
+        {
+            struct ExprUnOp* e = parse_alloc_ExprUnOp(p, cur_tok);
             *ppe = &e->expr_base;
             ppe = &e->lhs;
             ++cur_tok;
@@ -506,7 +525,7 @@ static const struct Token* parse_expr_continue(
     {
         if (precedence <= op_prec && op_prec <= PRECEDENCE_ASSIGN)
         {
-            struct ExprBinOp* op_expr = parse_alloc_binop(p, tok_op, lhs, NULL);
+            struct ExprBinOp* op_expr = parse_alloc_ExprBinOp(p, tok_op, lhs, NULL);
             *ppe = &op_expr->expr_base;
             PARSER_DO(parse_expr(p, cur_tok + 1, &op_expr->rhs, op_prec));
             return parse_expr_continue(p, cur_tok, &op_expr->expr_base, ppe, precedence);
@@ -515,13 +534,13 @@ static const struct Token* parse_expr_continue(
         {
             struct Expr* rhs;
             PARSER_DO(parse_expr(p, cur_tok + 1, &rhs, op_prec));
-            struct ExprBinOp* op_expr = parse_alloc_binop(p, tok_op, lhs, rhs);
+            struct ExprBinOp* op_expr = parse_alloc_ExprBinOp(p, tok_op, lhs, rhs);
             return parse_expr_continue(p, cur_tok, &op_expr->expr_base, ppe, precedence);
         }
     }
     else if (precedence <= PRECEDENCE_TERNARY && tok_op->type == TOKEN_SYM1('?'))
     {
-        ExprTernary* op_expr = parse_alloc_ternary(p, tok_op, lhs);
+        ExprTernary* op_expr = parse_alloc_ExprTernary(p, tok_op, lhs);
         *ppe = &op_expr->expr_base;
         PARSER_DO(parse_expr(p, cur_tok + 1, &op_expr->iftrue, PRECEDENCE_COMMA));
         PARSER_DO(token_consume_sym(p, cur_tok, ':', " in ternary operator"));
@@ -2213,8 +2232,39 @@ static void parser_dump_ast(struct Parser* p, FILE* f, void* ptr, int depth)
             struct ExprUnOp* blk = (void*)ast;
             fprintf(f, "(EXPR_UNOP");
             if (blk->tok) fprintf(f, " %s", token_str(p, blk->tok));
+            fprintf(f, " %u", blk->sizeof_);
+            nl_indent(f, depth);
+            parser_dump_ast(p, f, &blk->lhs->ast, depth + 1);
+            fprintf(f, ")");
+            break;
+        }
+        case EXPR_INCR:
+        {
+            struct ExprIncr* blk = (void*)ast;
+            fprintf(f, "(EXPR_INCR");
+            if (blk->tok) fprintf(f, " %s", token_str(p, blk->tok));
             if (blk->postfix) fprintf(f, " postfix");
             fprintf(f, " %u", blk->sizeof_);
+            nl_indent(f, depth);
+            parser_dump_ast(p, f, &blk->lhs->ast, depth + 1);
+            fprintf(f, ")");
+            break;
+        }
+        case EXPR_DEREF:
+        {
+            struct ExprDeref* blk = (void*)ast;
+            fprintf(f, "(EXPR_DEREF");
+            if (blk->tok) fprintf(f, " %s", token_str(p, blk->tok));
+            nl_indent(f, depth);
+            parser_dump_ast(p, f, &blk->lhs->ast, depth + 1);
+            fprintf(f, ")");
+            break;
+        }
+        case EXPR_ADDRESS:
+        {
+            struct ExprDeref* blk = (void*)ast;
+            fprintf(f, "(EXPR_ADDRESS");
+            if (blk->tok) fprintf(f, " %s", token_str(p, blk->tok));
             nl_indent(f, depth);
             parser_dump_ast(p, f, &blk->lhs->ast, depth + 1);
             fprintf(f, ")");

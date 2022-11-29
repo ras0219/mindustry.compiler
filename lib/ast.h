@@ -17,6 +17,9 @@
     Y(EXPR_BINOP)                                                                                                      \
     Y(EXPR_TERNARY)                                                                                                    \
     Y(EXPR_UNOP)                                                                                                       \
+    Y(EXPR_DEREF)                                                                                                      \
+    Y(EXPR_ADDRESS)                                                                                                    \
+    Y(EXPR_INCR)                                                                                                       \
     Y(EXPR_CALL)                                                                                                       \
     Y(EXPR_BUILTIN)
 
@@ -197,13 +200,41 @@ typedef struct ExprUnOp
 
     struct Expr* lhs;
     // additional info for certain operations
-    //  * '++'/'--', 1 if postfix
     //  * 'sizeof', size of decl
-    uint32_t postfix : 1;
     uint32_t sizeof_;
 } ExprUnOp;
 #define AST_STRUCT_EXPR_UNOP ExprUnOp
 #define AST_KIND_ExprUnOp EXPR_UNOP
+
+typedef struct ExprDeref
+{
+    INHERIT_EXPR;
+
+    struct Expr* lhs;
+} ExprDeref;
+#define AST_STRUCT_EXPR_DEREF ExprDeref
+#define AST_KIND_ExprDeref EXPR_DEREF
+
+typedef struct ExprAddress
+{
+    INHERIT_EXPR;
+
+    struct Expr* lhs;
+} ExprAddress;
+#define AST_STRUCT_EXPR_ADDRESS ExprAddress
+#define AST_KIND_ExprAddress EXPR_ADDRESS
+
+typedef struct ExprIncr
+{
+    INHERIT_EXPR;
+
+    uint32_t postfix : 1;
+    uint32_t sizeof_;
+
+    struct Expr* lhs;
+} ExprIncr;
+#define AST_STRUCT_EXPR_INCR ExprIncr
+#define AST_KIND_ExprIncr EXPR_INCR
 
 typedef struct ExprCall
 {

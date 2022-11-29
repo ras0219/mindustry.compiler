@@ -1,0 +1,47 @@
+(STMT_BLOCK
+ (STMT_DECLS
+  (AST_DECLSPEC void)
+  (AST_DECL f (AST_DECLFN
+    ? /* AST_DECLSPEC */)
+   (STMT_BLOCK
+    (STMT_DECLS
+     (AST_DECLSPEC int)
+     (AST_DECL x ? /* AST_DECLSPEC */))
+    (STMT_DECLS
+     (AST_DECLSPEC struct su (STMT_BLOCK
+       (STMT_DECLS
+        (AST_DECLSPEC int)
+        (AST_DECL x ? /* AST_DECLSPEC */))))
+     (AST_DECL y ? /* AST_DECLSPEC */)
+     (AST_DECL py (AST_DECLPTR ? /* AST_DECLSPEC */)))
+    (STMT_DECLS
+     (AST_DECLSPEC int)
+     (AST_DECL z (AST_DECLARR
+       (EXPR_LIT 2 D)
+       ? /* AST_DECLSPEC */)))
+    (STMT_DECLS
+     (AST_DECLSPEC int)
+     (AST_DECL p (AST_DECLPTR ? /* AST_DECLSPEC */)))
+    (EXPR_BINOP =
+     (EXPR_REF x)
+     (EXPR_LIT 0))
+    (EXPR_BINOP =
+     (EXPR_FIELD . x 0
+      (EXPR_REF y))
+     (EXPR_LIT 0))
+    (EXPR_BINOP =
+     (EXPR_FIELD -> x 0
+      (EXPR_REF py))
+     (EXPR_LIT 0))
+    (EXPR_BINOP =
+     (EXPR_BINOP [
+      (EXPR_REF z)
+      (EXPR_LIT 0))
+     (EXPR_LIT 0))
+    (EXPR_BINOP =
+     (EXPR_DEREF *
+      (EXPR_REF p))
+     (EXPR_LIT 0))
+    (EXPR_BINOP =
+     (EXPR_REF x)
+     (EXPR_LIT 0))))))

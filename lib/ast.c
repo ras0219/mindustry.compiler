@@ -14,6 +14,9 @@ int ast_kind_is_expr(enum AstKind k)
         case EXPR_CAST:
         case EXPR_BINOP:
         case EXPR_UNOP:
+        case EXPR_DEREF:
+        case EXPR_ADDRESS:
+        case EXPR_INCR:
         case EXPR_BUILTIN:
         case EXPR_TERNARY:
         case EXPR_CALL: return 1;

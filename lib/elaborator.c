@@ -598,17 +598,8 @@ static void elaborate_expr_ExprBuiltin(struct Elaborator* elab,
     }
 }
 
-static void elaborate_expr_ExprUnOp(struct Elaborator* elab,
-
-                                    struct ExprUnOp* e,
-                                    struct TypeStr* rty)
+static void elaborate_expr_ExprUnOp(struct Elaborator* elab, struct ExprUnOp* e, struct TypeStr* rty)
 {
-    if (e->tok->type == TOKEN_SYM1('&'))
-    {
-        elaborate_expr_lvalue(elab, e->lhs, rty);
-        return;
-    }
-
     elaborate_expr_decay(elab, e->lhs, rty);
     const struct TypeStr orig_lhs = *rty;
     unsigned int lhs_mask = typestr_mask(rty);
@@ -633,37 +624,6 @@ static void elaborate_expr_ExprUnOp(struct Elaborator* elab,
                                &orig_lhs);
                 *rty = s_type_int;
             }
-            break;
-        case TOKEN_SYM1('*'):
-            if (typestr_is_pointer(rty))
-            {
-                typestr_dereference(rty);
-            }
-            else
-            {
-                typestr_error1(&e->tok->rc, elab->types, "error: cannot dereference value of type '%.*s'\n", rty);
-                *rty = s_type_unknown;
-            }
-            break;
-        case TOKEN_SYM2('+', '+'):
-        case TOKEN_SYM2('-', '-'):
-            if (!(lhs_mask & TYPE_MASK_SCALAR))
-            {
-                typestr_error1(&e->tok->rc,
-                               elab->types,
-                               "error: expected scalar type in first argument but got '%.*s'\n",
-                               &orig_lhs);
-                *rty = s_type_unknown;
-            }
-            else if (lhs_mask & TYPE_FLAGS_POINTER)
-            {
-                e->sizeof_ = typestr_get_add_size(elab->types, rty, &e->tok->rc);
-            }
-            else
-            {
-                e->sizeof_ = 1;
-            }
-            rty->c = s_not_constant;
             break;
         case TOKEN_SYM1('~'):
             if (!(lhs_mask & TYPE_FLAGS_INT))
@@ -701,7 +661,6 @@ static void elaborate_expr_ExprUnOp(struct Elaborator* elab,
                 case TOKEN_SYM1('!'): rty->c.value = mp_lnot(rty->c.value); break;
                 case TOKEN_SYM1('+'): break;
                 case TOKEN_SYM1('-'): rty->c.value = mp_neg(rty->c.value); break;
-                default: rty->c = s_not_constant; break;
             }
         }
         else
@@ -709,6 +668,44 @@ static void elaborate_expr_ExprUnOp(struct Elaborator* elab,
             rty->c = s_not_constant;
         }
     }
+}
+static void elaborate_expr_ExprDeref(struct Elaborator* elab, struct ExprDeref* e, struct TypeStr* rty)
+{
+    elaborate_expr_decay(elab, e->lhs, rty);
+    if (typestr_is_pointer(rty))
+    {
+        typestr_dereference(rty);
+    }
+    else
+    {
+        typestr_error1(&e->tok->rc, elab->types, "error: cannot dereference value of type '%.*s'\n", rty);
+        *rty = s_type_unknown;
+    }
+}
+static void elaborate_expr_ExprAddress(struct Elaborator* elab, struct ExprAddress* e, struct TypeStr* rty)
+{
+    elaborate_expr_lvalue(elab, e->lhs, rty);
+}
+static void elaborate_expr_ExprIncr(struct Elaborator* elab, struct ExprIncr* e, struct TypeStr* rty)
+{
+    elaborate_expr_decay(elab, e->lhs, rty);
+    const struct TypeStr orig_lhs = *rty;
+    unsigned int lhs_mask = typestr_mask(rty);
+    if (!(lhs_mask & TYPE_MASK_SCALAR))
+    {
+        typestr_error1(
+            &e->tok->rc, elab->types, "error: expected scalar type in first argument but got '%.*s'\n", &orig_lhs);
+        *rty = s_type_unknown;
+    }
+    else if (lhs_mask & TYPE_FLAGS_POINTER)
+    {
+        e->sizeof_ = typestr_get_add_size(elab->types, rty, &e->tok->rc);
+    }
+    else
+    {
+        e->sizeof_ = 1;
+    }
+    rty->c = s_not_constant;
 }
 static void elaborate_stmts(struct Elaborator* elab, SeqView stmts)
 {
@@ -1398,19 +1395,9 @@ static void elaborate_expr_lvalue_ExprBinOp(Elaborator* elab, ExprBinOp* expr, T
         *rty = s_type_unknown;
     }
 }
-static void elaborate_expr_lvalue_ExprUnOp(Elaborator* elab, ExprUnOp* expr, TypeStr* rty)
+static void elaborate_expr_lvalue_ExprDeref(Elaborator* elab, ExprDeref* expr, TypeStr* rty)
 {
-    if (expr->tok->type == TOKEN_SYM1('*'))
-    {
-        elaborate_expr_decay(elab, expr->lhs, rty);
-    }
-    else
-    {
-        elaborate_expr(elab, &expr->expr_base, rty);
-        typestr_error1(
-            token_rc(expr->tok), elab->types, "error: expected lvalue but got expression of type %.*s\n", rty);
-        *rty = s_type_unknown;
-    }
+    elaborate_expr_decay(elab, expr->lhs, rty);
 }
 static void elaborate_expr_lvalue_ExprField(Elaborator* elab, ExprField* e, TypeStr* rty)
 {
@@ -1437,7 +1424,7 @@ static void elaborate_expr_lvalue(struct Elaborator* elab, struct Expr* expr, st
     {
         DISPATCH_EXPR_LVALUE(ExprRef);
         DISPATCH_EXPR_LVALUE(ExprBinOp);
-        DISPATCH_EXPR_LVALUE(ExprUnOp);
+        DISPATCH_EXPR_LVALUE(ExprDeref);
         DISPATCH_EXPR_LVALUE(ExprField);
         default:
             elaborate_expr(elab, expr, rty);
@@ -1514,6 +1501,9 @@ static void elaborate_expr_impl(struct Elaborator* elab, struct Expr* expr, stru
         DISPATCH_EXPR(ExprBinOp);
         DISPATCH_EXPR(ExprTernary);
         DISPATCH_EXPR(ExprUnOp);
+        DISPATCH_EXPR(ExprDeref);
+        DISPATCH_EXPR(ExprAddress);
+        DISPATCH_EXPR(ExprIncr);
         DISPATCH_EXPR(ExprBuiltin);
         default: parser_tok_error(NULL, "error: unknown expr kind: %s\n", ast_kind_to_string(expr->kind)); return;
     }

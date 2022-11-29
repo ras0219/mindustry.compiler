@@ -45,7 +45,7 @@
      (AST_DECLSPEC W W)
      (AST_DECL w ? /* AST_DECLSPEC */)
      (AST_DECL pw (AST_DECLPTR ? /* AST_DECLSPEC */)
-      (EXPR_UNOP & 0
+      (EXPR_ADDRESS &
        (EXPR_REF w))))
     (EXPR_BINOP =
      (EXPR_FIELD -> a 0
