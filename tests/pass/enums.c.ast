@@ -5,7 +5,7 @@
      (EXPR_LIT 5 D))
     (AST_DECL a2 ? /* AST_DECLSPEC */)
     (AST_DECL a3 ? /* AST_DECLSPEC */
-     (EXPR_BINOP +
+     (EXPR_ADD +
       (EXPR_REF a2)
       (EXPR_LIT 20 D))))))
  (STMT_DECLS
@@ -47,7 +47,7 @@
      (AST_DECL pw (AST_DECLPTR ? /* AST_DECLSPEC */)
       (EXPR_ADDRESS &
        (EXPR_REF w))))
-    (EXPR_BINOP =
+    (EXPR_ASSIGN =
      (EXPR_FIELD -> a 0
       (EXPR_REF pw))
      (EXPR_REF a1)))))

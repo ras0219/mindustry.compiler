@@ -15,6 +15,8 @@
     Y(EXPR_LIT)                                                                                                        \
     Y(EXPR_CAST)                                                                                                       \
     Y(EXPR_BINOP)                                                                                                      \
+    Y(EXPR_ADD)                                                                                                        \
+    Y(EXPR_ASSIGN)                                                                                                     \
     Y(EXPR_TERNARY)                                                                                                    \
     Y(EXPR_UNOP)                                                                                                       \
     Y(EXPR_DEREF)                                                                                                      \
@@ -175,13 +177,35 @@ typedef struct ExprBinOp
 
     struct Expr* lhs;
     struct Expr* rhs;
-    // additional info for certain operations
-    //  * '[','+', size of element (positive)
-    //  * '-', size of element (negative)
-    int info;
 } ExprBinOp;
 #define AST_STRUCT_EXPR_BINOP ExprBinOp
 #define AST_KIND_ExprBinOp EXPR_BINOP
+
+typedef struct ExprAdd
+{
+    INHERIT_EXPR;
+
+    struct Expr* lhs;
+    struct Expr* rhs;
+    // additional info for certain operations
+    //  * '[','+', size of element (positive)
+    //  * '-', size of element (negative)
+    int32_t mult;
+} ExprAdd;
+#define AST_STRUCT_EXPR_ADD ExprAdd
+#define AST_KIND_ExprAdd EXPR_ADD
+
+typedef struct ExprAssign
+{
+    INHERIT_EXPR;
+
+    struct Expr* lhs;
+    struct Expr* rhs;
+    // for addition and subtraction, multiplier
+    int32_t mult;
+} ExprAssign;
+#define AST_STRUCT_EXPR_ASSIGN ExprAssign
+#define AST_KIND_ExprAssign EXPR_ASSIGN
 
 typedef struct ExprTernary
 {

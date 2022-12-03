@@ -106,14 +106,16 @@ static void* parse_alloc_expr(Parser* p, const struct Token* tok, int tag, size_
         return e_;                                                                                                     \
     }
 
-DEFINE_PARSE_ALLOC2(ExprBinOp, Expr*, lhs, Expr*, rhs)
-DEFINE_PARSE_ALLOC1(ExprTernary, Expr*, cond)
-DEFINE_PARSE_ALLOC0(ExprUnOp)
-DEFINE_PARSE_ALLOC0(ExprDeref)
-DEFINE_PARSE_ALLOC0(ExprAddress)
-DEFINE_PARSE_ALLOC2(ExprIncr, Expr*, lhs, int, postfix)
-DEFINE_PARSE_ALLOC1(ExprRef, Symbol*, sym)
-DEFINE_PARSE_ALLOC0(ExprCast)
+DEFINE_PARSE_ALLOC2(ExprBinOp, Expr*, lhs, Expr*, rhs);
+DEFINE_PARSE_ALLOC2(ExprAdd, Expr*, lhs, Expr*, rhs);
+DEFINE_PARSE_ALLOC1(ExprAssign, Expr*, lhs);
+DEFINE_PARSE_ALLOC1(ExprTernary, Expr*, cond);
+DEFINE_PARSE_ALLOC0(ExprUnOp);
+DEFINE_PARSE_ALLOC0(ExprDeref);
+DEFINE_PARSE_ALLOC0(ExprAddress);
+DEFINE_PARSE_ALLOC2(ExprIncr, Expr*, lhs, int, postfix);
+DEFINE_PARSE_ALLOC1(ExprRef, Symbol*, sym);
+DEFINE_PARSE_ALLOC0(ExprCast);
 
 static struct ExprBuiltin* parse_alloc_builtin(
     Parser* p, const struct Token* tok, struct Expr* e1, struct Expr* e2, struct DeclSpecs* specs, struct Decl* decl)
@@ -233,12 +235,12 @@ top:;
     }
     if (cur_tok->type == TOKEN_SYM1('['))
     {
-        const struct Token* tok = cur_tok++;
-        struct Expr* rhs = NULL;
-        PARSER_DO(parse_expr(p, cur_tok, &rhs, PRECEDENCE_COMMA));
+        struct ExprAdd* e = parse_alloc_ExprAdd(p, cur_tok++, lhs, NULL);
+        PARSER_DO(parse_expr(p, cur_tok, &e->rhs, PRECEDENCE_COMMA));
+        struct ExprDeref* d = parse_alloc_ExprDeref(p, cur_tok);
+        d->lhs = &e->expr_base;
         PARSER_DO(token_consume_sym(p, cur_tok, ']', " in array expression"));
-        struct ExprBinOp* e = parse_alloc_ExprBinOp(p, tok, lhs, rhs);
-        lhs = &e->expr_base;
+        lhs = &d->expr_base;
         goto top;
     }
 
@@ -516,26 +518,48 @@ top:
 fail:
     return cur_tok;
 }
+
+static int precedence_is_right_associative(enum Precedence p)
+{
+    return p == PRECEDENCE_ASSIGN || p == PRECEDENCE_COMMA;
+}
+
 static const struct Token* parse_expr_continue(
     Parser* p, const struct Token* cur_tok, struct Expr* lhs, struct Expr** ppe, enum Precedence precedence)
 {
     const struct Token* tok_op = cur_tok;
     enum Precedence op_prec = op_precedence(tok_op->type);
+    enum Precedence right_prec = op_prec + precedence_is_right_associative(op_prec);
     if (op_prec != PRECEDENCE_ERROR)
     {
-        if (precedence <= op_prec && op_prec <= PRECEDENCE_ASSIGN)
+        if (precedence < right_prec)
         {
-            struct ExprBinOp* op_expr = parse_alloc_ExprBinOp(p, tok_op, lhs, NULL);
-            *ppe = &op_expr->expr_base;
-            PARSER_DO(parse_expr(p, cur_tok + 1, &op_expr->rhs, op_prec));
-            return parse_expr_continue(p, cur_tok, &op_expr->expr_base, ppe, precedence);
-        }
-        else if (precedence < op_prec)
-        {
-            struct Expr* rhs;
-            PARSER_DO(parse_expr(p, cur_tok + 1, &rhs, op_prec));
-            struct ExprBinOp* op_expr = parse_alloc_ExprBinOp(p, tok_op, lhs, rhs);
-            return parse_expr_continue(p, cur_tok, &op_expr->expr_base, ppe, precedence);
+            Expr* op_expr;
+            Expr** rhs;
+            if (op_prec == PRECEDENCE_ASSIGN)
+            {
+                ExprAssign* e = parse_alloc_ExprAssign(p, tok_op, lhs);
+                op_expr = &e->expr_base;
+                rhs = &e->rhs;
+            }
+            else if (op_prec == PRECEDENCE_ADD)
+            {
+                ExprAdd* e = parse_alloc_ExprAdd(p, tok_op, lhs, NULL);
+                op_expr = &e->expr_base;
+                rhs = &e->rhs;
+            }
+            else
+            {
+                ExprBinOp* e = parse_alloc_ExprBinOp(p, tok_op, lhs, NULL);
+                op_expr = &e->expr_base;
+                rhs = &e->rhs;
+            }
+            PARSER_DO(parse_expr(p, cur_tok + 1, rhs, op_prec));
+            if (precedence_is_right_associative(op_prec))
+            {
+                *ppe = op_expr;
+            }
+            return parse_expr_continue(p, cur_tok, op_expr, ppe, precedence);
         }
     }
     else if (precedence <= PRECEDENCE_TERNARY && tok_op->type == TOKEN_SYM1('?'))

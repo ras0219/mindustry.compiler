@@ -22,26 +22,27 @@
     (STMT_DECLS
      (AST_DECLSPEC int)
      (AST_DECL p (AST_DECLPTR ? /* AST_DECLSPEC */)))
-    (EXPR_BINOP =
+    (EXPR_ASSIGN =
      (EXPR_REF x)
      (EXPR_LIT 0))
-    (EXPR_BINOP =
+    (EXPR_ASSIGN =
      (EXPR_FIELD . x 0
       (EXPR_REF y))
      (EXPR_LIT 0))
-    (EXPR_BINOP =
+    (EXPR_ASSIGN =
      (EXPR_FIELD -> x 0
       (EXPR_REF py))
      (EXPR_LIT 0))
-    (EXPR_BINOP =
-     (EXPR_BINOP [
-      (EXPR_REF z)
-      (EXPR_LIT 0))
+    (EXPR_ASSIGN =
+     (EXPR_DEREF ]
+      (EXPR_ADD [
+       (EXPR_REF z)
+       (EXPR_LIT 0)))
      (EXPR_LIT 0))
-    (EXPR_BINOP =
+    (EXPR_ASSIGN =
      (EXPR_DEREF *
       (EXPR_REF p))
      (EXPR_LIT 0))
-    (EXPR_BINOP =
+    (EXPR_ASSIGN =
      (EXPR_REF x)
      (EXPR_LIT 0))))))

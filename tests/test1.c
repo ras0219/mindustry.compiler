@@ -1241,13 +1241,13 @@ int parse_implicit_conversion(struct TestState* state)
             {
                 REQUIRE_EQ(6, body->seq.ext);
 
-                REQUIRE_AST(ExprBinOp, e, asts[body->seq.off + 2])
+                REQUIRE_AST(ExprAdd, e, asts[body->seq.off + 2])
                 REQUIRE_SIZING_EQ(s_sizing_int, e->sizing);
 
-                REQUIRE_AST(ExprBinOp, e, asts[body->seq.off + 3])
+                REQUIRE_AST(ExprAdd, e, asts[body->seq.off + 3])
                 REQUIRE_SIZING_EQ(s_sizing_sptr, e->sizing);
 
-                REQUIRE_AST(ExprBinOp, e, asts[body->seq.off + 4])
+                REQUIRE_AST(ExprAdd, e, asts[body->seq.off + 4])
                 REQUIRE_SIZING_EQ(s_sizing_sptr, e->sizing);
             }
         }
@@ -1499,6 +1499,22 @@ static const Token* test_ast_ast_inner(AstChecker* ctx, const Token* cur_tok, co
         case EXPR_BINOP:
         {
             const ExprBinOp* a = (void*)ast;
+            if (a->tok) PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
+            PARSER_DO(test_ast_ast(ctx, cur_tok, a->lhs));
+            PARSER_DO(test_ast_ast(ctx, cur_tok, a->rhs));
+            break;
+        }
+        case EXPR_ADD:
+        {
+            const ExprAdd* a = (void*)ast;
+            if (a->tok) PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
+            PARSER_DO(test_ast_ast(ctx, cur_tok, a->lhs));
+            PARSER_DO(test_ast_ast(ctx, cur_tok, a->rhs));
+            break;
+        }
+        case EXPR_ASSIGN:
+        {
+            const ExprAssign* a = (void*)ast;
             if (a->tok) PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
             PARSER_DO(test_ast_ast(ctx, cur_tok, a->lhs));
             PARSER_DO(test_ast_ast(ctx, cur_tok, a->rhs));

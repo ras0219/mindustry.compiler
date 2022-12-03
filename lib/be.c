@@ -634,28 +634,28 @@ static int be_compile_lvalue_ExprCast(struct BackEnd* be, struct ExprCast* e, st
     return parser_tok_error(e->tok, "error: cannot get address of cast expression\n");
 }
 
-static int be_compile_arith_rhs(struct BackEnd* be, struct ExprBinOp* e, struct TACAddress* out)
+static int be_compile_arith_rhs(BackEnd* be, Expr* rhs, int32_t info, TACAddress* out)
 {
     int rc = 0;
-    if (e->info == 0)
+    if (info == 0)
     {
-        UNWRAP(parser_tok_error(e->tok, "error: unsized arithmetic op\n"));
+        UNWRAP(parser_tok_error(rhs->tok, "error: unsized arithmetic op\n"));
     }
-    else if (e->info <= 1)
+    else if (info <= 1)
     {
-        UNWRAP(be_compile_expr(be, e->rhs, out));
+        UNWRAP(be_compile_expr(be, rhs, out));
     }
     else
     {
-        /* Adding to pointer -- e->info is size of element */
-        UNWRAP(be_compile_expr(be, e->rhs, out));
-        *out = be_umultiply(be, out, e->info);
+        /* Adding to pointer -- info is size of element */
+        UNWRAP(be_compile_expr(be, rhs, out));
+        *out = be_umultiply(be, out, info);
     }
 fail:
     return rc;
 }
 
-static int be_compile_add(struct BackEnd* be, struct ExprBinOp* e, Sizing sizing, struct TACAddress* out)
+static int be_compile_add(struct BackEnd* be, struct ExprAdd* e, Sizing sizing, struct TACAddress* out)
 {
     int rc = 0;
     struct TACEntry tace = {
@@ -663,13 +663,13 @@ static int be_compile_add(struct BackEnd* be, struct ExprBinOp* e, Sizing sizing
         .op = TACO_ADD,
     };
     UNWRAP(be_compile_expr(be, e->lhs, &tace.arg1));
-    UNWRAP(be_compile_arith_rhs(be, e, &tace.arg2));
+    UNWRAP(be_compile_arith_rhs(be, e->rhs, e->mult, &tace.arg2));
     *out = be_push_tace(be, &tace, sizing);
 fail:
     return rc;
 }
 
-static int be_compile_sub(struct BackEnd* be, struct ExprBinOp* e, struct TACAddress* out)
+static int be_compile_sub(struct BackEnd* be, struct ExprAdd* e, struct TACAddress* out)
 {
     int rc = 0;
     struct TACEntry tace = {
@@ -677,19 +677,19 @@ static int be_compile_sub(struct BackEnd* be, struct ExprBinOp* e, struct TACAdd
         .op = TACO_SUB,
     };
     UNWRAP(be_compile_expr(be, e->lhs, &tace.arg1));
-    UNWRAP(be_compile_arith_rhs(be, e, &tace.arg2));
-    if (e->info < -1)
+    UNWRAP(be_compile_arith_rhs(be, e->rhs, e->mult, &tace.arg2));
+    if (e->mult < -1)
     {
         tace.arg1 = be_push_tace(be, &tace, e->sizing);
         tace.op = TACO_DIV;
-        tace.arg2 = taca_imm(-e->info);
+        tace.arg2 = taca_imm(-e->mult);
     }
     *out = be_push_tace(be, &tace, e->sizing);
 fail:
     return rc;
 }
 
-static int be_compile_lvalue_ExprBinOp(struct BackEnd* be, struct ExprBinOp* e, struct TACAddress* out)
+static int be_compile_lvalue_ExprAssign(struct BackEnd* be, struct ExprAssign* e, struct TACAddress* out)
 {
     int rc = 0;
     struct TACEntry tace = {.rc = token_rc(e->tok)};
@@ -714,16 +714,14 @@ static int be_compile_lvalue_ExprBinOp(struct BackEnd* be, struct ExprBinOp* e, 
             tace.arg2.sizing = tace.arg2.sizing;
             be_push_tace(be, &tace, e->sizing);
             goto fail;
-
-        case TOKEN_SYM1('['): return be_compile_add(be, e, s_sizing_ptr, out);
         default:
             UNWRAP(parser_tok_error(
-                e->tok, "error: be_compile_lvalue_ExprBinOp unimplemented op (%s)\n", token_str(be->parser, e->tok)));
+                e->tok, "error: be_compile_lvalue_ExprAssign unimplemented op (%s)\n", token_str(be->parser, e->tok)));
     }
 
 binary_op_assign:
     if (tace.op == TACO_ADD || tace.op == TACO_SUB)
-        UNWRAP(be_compile_arith_rhs(be, e, &tace.arg2));
+        UNWRAP(be_compile_arith_rhs(be, e->rhs, e->mult, &tace.arg2));
     else
         UNWRAP(be_compile_expr(be, e->rhs, &tace.arg2));
     UNWRAP(be_compile_lvalue(be, e->lhs, out));
@@ -1019,6 +1017,41 @@ fail:
     return rc;
 }
 
+static int be_compile_ExprAdd(BackEnd* be, ExprAdd* e, TACAddress* out)
+{
+    if (e->tok->type == TOKEN_SYM1('-'))
+        return be_compile_sub(be, e, out);
+    else
+        return be_compile_add(be, e, e->sizing, out);
+}
+
+static int be_compile_ExprAssign(struct BackEnd* be, struct ExprAssign* e, struct TACAddress* out)
+{
+    int rc = 0;
+    if (!e->lhs || !e->rhs) return parser_ice_tok(e->tok);
+
+    struct TACEntry tace = {0};
+    tace.rc = &e->tok->rc;
+    switch (e->tok->type)
+    {
+        case TOKEN_SYM2('+', '='):
+        case TOKEN_SYM2('-', '='):
+        case TOKEN_SYM2('/', '='):
+        case TOKEN_SYM2('&', '='):
+        case TOKEN_SYM2('|', '='):
+        case TOKEN_SYM2('^', '='):
+        case TOKEN_SYM2('*', '='):
+        case TOKEN_SYM2('%', '='):
+        case TOKEN_SYM3('<', '<', '='):
+        case TOKEN_SYM3('>', '>', '='):
+        case TOKEN_SYM1('='):
+            UNWRAP(be_compile_lvalue_ExprAssign(be, e, out));
+            UNWRAP(be_dereference(be, out, e->sizing, &e->tok->rc));
+            break;
+    }
+fail:
+    return rc;
+}
 static int be_compile_ExprBinOp(struct BackEnd* be, struct ExprBinOp* e, struct TACAddress* out)
 {
     int rc = 0;
@@ -1035,8 +1068,6 @@ static int be_compile_ExprBinOp(struct BackEnd* be, struct ExprBinOp* e, struct 
         case TOKEN_SYM2('=', '='): tace.op = TACO_EQ; goto basic_binary;
         case TOKEN_SYM2('!', '='): tace.op = TACO_NEQ; goto basic_binary;
         case TOKEN_SYM1('*'): tace.op = TACO_MULT; goto basic_binary;
-        case TOKEN_SYM1('+'): return be_compile_add(be, e, e->sizing, out);
-        case TOKEN_SYM1('-'): return be_compile_sub(be, e, out);
         case TOKEN_SYM1('/'): tace.op = TACO_DIV; goto basic_binary;
         case TOKEN_SYM1('%'): tace.op = TACO_MOD; goto basic_binary;
         case TOKEN_SYM1('|'): tace.op = TACO_BOR; goto basic_binary;
@@ -1055,10 +1086,6 @@ static int be_compile_ExprBinOp(struct BackEnd* be, struct ExprBinOp* e, struct 
         case TOKEN_SYM3('<', '<', '='):
         case TOKEN_SYM3('>', '>', '='):
         case TOKEN_SYM1('='):
-        case TOKEN_SYM1('['):
-            UNWRAP(be_compile_lvalue_ExprBinOp(be, e, out));
-            UNWRAP(be_dereference(be, out, e->sizing, &e->tok->rc));
-            break;
         case TOKEN_SYM1(','):
             UNWRAP(be_compile_expr(be, e->lhs, out));
             UNWRAP(be_compile_expr(be, e->rhs, out));
@@ -1564,7 +1591,7 @@ static int be_compile_lvalue(struct BackEnd* be, struct Expr* e, struct TACAddre
         DISPATCH(ExprCast);
         DISPATCH(ExprCall);
         DISPATCH(ExprLit);
-        DISPATCH(ExprBinOp);
+        DISPATCH(ExprAssign);
         DISPATCH(ExprDeref);
         DISPATCH(ExprBuiltin);
         case STMT_NONE: *out = s_taca_void; return 0;
@@ -1594,6 +1621,8 @@ static int be_compile_expr(struct BackEnd* be, struct Expr* e, struct TACAddress
         DISPATCH(ExprAddress);
         DISPATCH(ExprIncr);
         DISPATCH(ExprBuiltin);
+        DISPATCH(ExprAdd);
+        DISPATCH(ExprAssign);
         DISPATCH(ExprCast);
         DISPATCH(ExprField);
         default:
@@ -1788,13 +1817,14 @@ int be_compile(struct BackEnd* be)
     // then compile all functions
     void* const* const ast_seqs = be->parser->expr_seqs.data;
     SeqView const top = be->parser->top->seq;
-    StmtDecls* const* const top_seq = (void*)(ast_seqs + top.off);
+    Ast* const* const top_seq = (void*)(ast_seqs + top.off);
     for (size_t i = 0; i < top.ext; ++i)
     {
-        struct StmtDecls* decls = top_seq[i];
+        if (top_seq[i]->kind == STMT_NONE) continue;
 #ifndef NDEBUG
-        if (decls->kind != STMT_DECLS) abort();
+        if (top_seq[i]->kind != STMT_DECLS) abort();
 #endif
+        struct StmtDecls* decls = (void*)top_seq[i];
         if (decls->specs->is_typedef) continue;
         Decl* const* const decl_seq = (void*)(ast_seqs + decls->seq.off);
         for (size_t j = 0; j < decls->seq.ext; ++j)
