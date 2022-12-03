@@ -2044,6 +2044,10 @@ static void parser_dump_type_ast(struct Parser* p, FILE* f, AstType* ast, int de
     else
         fprintf(f, "? /* AST_DECLSPEC */");
 }
+static void parser_dump_sizing(FILE* f, int depth, Sizing sz)
+{
+    fprintf(f, " __%c%u", sz.is_signed ? 'i' : 'u', sz.width);
+}
 static void parser_dump_ast(struct Parser* p, FILE* f, void* ptr, int depth)
 {
     if (!ptr)
@@ -2053,24 +2057,22 @@ static void parser_dump_ast(struct Parser* p, FILE* f, void* ptr, int depth)
     }
     Ast* const ast = ptr;
     if (depth > 2000) abort();
+    fprintf(f, "(%s", ast_kind_to_string(ast->kind));
     switch (ast->kind)
     {
         case STMT_BLOCK:
         {
             struct StmtBlock* blk = (void*)ast;
-            fprintf(f, "(STMT_BLOCK");
             for (size_t i = 0; i < blk->seq.ext; ++i)
             {
                 nl_indent(f, depth);
                 parser_dump_ast(p, f, ((Ast**)p->expr_seqs.data)[blk->seq.off + i], depth + 1);
             }
-            fprintf(f, ")");
             break;
         }
         case STMT_DECLS:
         {
             struct StmtDecls* blk = (void*)ast;
-            fprintf(f, "(STMT_DECLS");
             if (blk->specs)
             {
                 nl_indent(f, depth);
@@ -2081,13 +2083,11 @@ static void parser_dump_ast(struct Parser* p, FILE* f, void* ptr, int depth)
                 nl_indent(f, depth);
                 parser_dump_ast(p, f, ((Ast**)p->expr_seqs.data)[blk->seq.off + i], depth + 1);
             }
-            fprintf(f, ")");
             break;
         }
         case STMT_LOOP:
         {
             struct StmtLoop* blk = (void*)ast;
-            fprintf(f, "(STMT_LOOP");
             if (blk->init)
             {
                 nl_indent(f, depth);
@@ -2112,13 +2112,11 @@ static void parser_dump_ast(struct Parser* p, FILE* f, void* ptr, int depth)
                 fprintf(f, "body=");
                 parser_dump_ast(p, f, blk->body, depth + 1);
             }
-            fprintf(f, ")");
             break;
         }
         case STMT_IF:
         {
             struct StmtIf* blk = (void*)ast;
-            fprintf(f, "(STMT_IF");
             nl_indent(f, depth);
             parser_dump_ast(p, f, blk->cond, depth + 1);
             nl_indent(f, depth);
@@ -2128,21 +2126,17 @@ static void parser_dump_ast(struct Parser* p, FILE* f, void* ptr, int depth)
                 nl_indent(f, depth);
                 parser_dump_ast(p, f, blk->else_body, depth + 1);
             }
-            fprintf(f, ")");
             break;
         }
         case STMT_RETURN:
         {
             struct StmtReturn* blk = (void*)ast;
-            fprintf(f, "(STMT_RETURN");
             if (blk->expr) parser_dump_ast(p, f, blk->expr, depth + 1);
-            fprintf(f, ")");
             break;
         }
         case AST_DECL:
         {
             struct Decl* blk = (void*)ast;
-            fprintf(f, "(AST_DECL");
             if (blk->tok)
             {
                 fprintf(f, " %s", token_str(p, blk->tok));
@@ -2154,13 +2148,11 @@ static void parser_dump_ast(struct Parser* p, FILE* f, void* ptr, int depth)
                 nl_indent(f, depth);
                 parser_dump_ast(p, f, blk->init, depth + 1);
             }
-            fprintf(f, ")");
             break;
         }
         case AST_DECLSPEC:
         {
             DeclSpecs* blk = (void*)ast;
-            fprintf(f, "(AST_DECLSPEC");
             if (blk->is_typedef) fprintf(f, " typedef");
             if (blk->tok) fprintf(f, " %s", token_str(p, blk->tok));
             if (blk->name) fprintf(f, " %s", blk->name);
@@ -2174,13 +2166,11 @@ static void parser_dump_ast(struct Parser* p, FILE* f, void* ptr, int depth)
                 fprintf(f, " enum ");
                 parser_dump_ast(p, f, &blk->enum_init->ast, depth + 1);
             }
-            fprintf(f, ")");
             break;
         }
         case AST_DECLFN:
         {
             DeclFn* blk = (void*)ast;
-            fprintf(f, "(AST_DECLFN");
             if (blk->is_param_list)
             {
                 fprintf(f, " param");
@@ -2199,13 +2189,11 @@ static void parser_dump_ast(struct Parser* p, FILE* f, void* ptr, int depth)
                 nl_indent(f, depth);
                 parser_dump_type_ast(p, f, blk->type, depth + 1);
             }
-            fprintf(f, ")");
             break;
         }
         case AST_DECLARR:
         {
             struct DeclArr* blk = (void*)ast;
-            fprintf(f, "(AST_DECLARR");
             if (blk->arity)
             {
                 nl_indent(f, depth);
@@ -2213,33 +2201,53 @@ static void parser_dump_ast(struct Parser* p, FILE* f, void* ptr, int depth)
             }
             nl_indent(f, depth);
             parser_dump_type_ast(p, f, blk->type, depth + 1);
-            fprintf(f, ")");
             break;
         }
         case AST_DECLPTR:
         {
             struct DeclPtr* blk = (void*)ast;
-            fprintf(f, "(AST_DECLPTR ");
             parser_dump_type_ast(p, f, blk->type, depth + 1);
-            fprintf(f, ")");
             break;
         }
         case EXPR_BINOP:
         {
             struct ExprBinOp* blk = (void*)ast;
-            fprintf(f, "(EXPR_BINOP");
             if (blk->tok) fprintf(f, " %s", token_str(p, blk->tok));
             nl_indent(f, depth);
             parser_dump_ast(p, f, blk->lhs, depth + 1);
             nl_indent(f, depth);
             parser_dump_ast(p, f, blk->rhs, depth + 1);
-            fprintf(f, ")");
+            break;
+        }
+        case EXPR_ADD:
+        {
+            struct ExprAdd* blk = (void*)ast;
+            if (blk->tok) fprintf(f, " %s", token_str(p, blk->tok));
+            nl_indent(f, depth);
+            parser_dump_ast(p, f, blk->lhs, depth + 1);
+            nl_indent(f, depth);
+            parser_dump_ast(p, f, blk->rhs, depth + 1);
+            if (blk->mult != 1)
+            {
+                nl_indent(f, depth);
+                fprintf(f, " %d", blk->mult);
+            }
+            if (blk->elaborated) parser_dump_sizing(f, depth, blk->sizing);
+            break;
+        }
+        case EXPR_ASSIGN:
+        {
+            struct ExprAssign* blk = (void*)ast;
+            if (blk->tok) fprintf(f, " %s", token_str(p, blk->tok));
+            nl_indent(f, depth);
+            parser_dump_ast(p, f, blk->lhs, depth + 1);
+            nl_indent(f, depth);
+            parser_dump_ast(p, f, blk->rhs, depth + 1);
             break;
         }
         case EXPR_LIT:
         {
             struct ExprLit* blk = (void*)ast;
-            fprintf(f, "(EXPR_LIT");
             if (!blk->sym)
             {
                 fprintf(f, " %" PRId64, blk->numeric);
@@ -2248,89 +2256,73 @@ static void parser_dump_ast(struct Parser* p, FILE* f, void* ptr, int depth)
             {
                 fprintf(f, " %s", suffix_to_string(blk->suffix));
             }
-            fprintf(f, ")");
             break;
         }
         case EXPR_UNOP:
         {
             struct ExprUnOp* blk = (void*)ast;
-            fprintf(f, "(EXPR_UNOP");
             if (blk->tok) fprintf(f, " %s", token_str(p, blk->tok));
             fprintf(f, " %u", blk->sizeof_);
             nl_indent(f, depth);
             parser_dump_ast(p, f, &blk->lhs->ast, depth + 1);
-            fprintf(f, ")");
             break;
         }
         case EXPR_INCR:
         {
             struct ExprIncr* blk = (void*)ast;
-            fprintf(f, "(EXPR_INCR");
             if (blk->tok) fprintf(f, " %s", token_str(p, blk->tok));
             if (blk->postfix) fprintf(f, " postfix");
             fprintf(f, " %u", blk->sizeof_);
             nl_indent(f, depth);
             parser_dump_ast(p, f, &blk->lhs->ast, depth + 1);
-            fprintf(f, ")");
             break;
         }
         case EXPR_DEREF:
         {
             struct ExprDeref* blk = (void*)ast;
-            fprintf(f, "(EXPR_DEREF");
             if (blk->tok) fprintf(f, " %s", token_str(p, blk->tok));
             nl_indent(f, depth);
             parser_dump_ast(p, f, &blk->lhs->ast, depth + 1);
-            fprintf(f, ")");
             break;
         }
         case EXPR_ADDRESS:
         {
             struct ExprDeref* blk = (void*)ast;
-            fprintf(f, "(EXPR_ADDRESS");
             if (blk->tok) fprintf(f, " %s", token_str(p, blk->tok));
             nl_indent(f, depth);
             parser_dump_ast(p, f, &blk->lhs->ast, depth + 1);
-            fprintf(f, ")");
             break;
         }
         case EXPR_FIELD:
         {
             struct ExprField* blk = (void*)ast;
-            fprintf(f, "(EXPR_FIELD");
             if (blk->tok) fprintf(f, " %s", token_str(p, blk->tok));
             if (blk->fieldname) fprintf(f, " %s", blk->fieldname);
             fprintf(f, " %zu", blk->field_offset);
             nl_indent(f, depth);
             parser_dump_ast(p, f, &blk->lhs->ast, depth + 1);
-            fprintf(f, ")");
             break;
         }
         case EXPR_CAST:
         {
             struct ExprCast* blk = (void*)ast;
-            fprintf(f, "(EXPR_CAST");
             nl_indent(f, depth);
             parser_dump_ast(p, f, blk->specs, depth + 1);
             nl_indent(f, depth);
             parser_dump_ast(p, f, blk->type, depth + 1);
             nl_indent(f, depth);
             parser_dump_ast(p, f, blk->expr, depth + 1);
-            fprintf(f, ")");
             break;
         }
         case EXPR_REF:
         {
             struct ExprRef* blk = (void*)ast;
-            fprintf(f, "(EXPR_REF");
             if (blk->tok) fprintf(f, " %s", token_str(p, blk->tok));
-            fprintf(f, ")");
             break;
         }
         case EXPR_CALL:
         {
             struct ExprCall* blk = (void*)ast;
-            fprintf(f, "(EXPR_CALL");
             if (blk->fn)
             {
                 nl_indent(f, depth);
@@ -2341,13 +2333,11 @@ static void parser_dump_ast(struct Parser* p, FILE* f, void* ptr, int depth)
                 nl_indent(f, depth);
                 parser_dump_ast(p, f, &((CallParam*)p->callparams.data)[blk->param_offset + i].expr->ast, depth + 1);
             }
-            fprintf(f, ")");
             break;
         }
         case EXPR_BUILTIN:
         {
             struct ExprBuiltin* blk = (void*)ast;
-            fprintf(f, "(EXPR_BUILTIN");
             if (blk->tok) fprintf(f, " %s", token_str(p, blk->tok));
             nl_indent(f, depth);
             parser_dump_ast(p, f, blk->specs, depth + 1);
@@ -2358,13 +2348,11 @@ static void parser_dump_ast(struct Parser* p, FILE* f, void* ptr, int depth)
             nl_indent(f, depth);
             parser_dump_ast(p, f, blk->expr2, depth + 1);
             fprintf(f, " %zu", blk->sizeof_size);
-            fprintf(f, ")");
             break;
         }
         case AST_INIT:
         {
             struct AstInit* a = (void*)ast;
-            fprintf(f, "(AST_INIT");
             while (a->init != NULL)
             {
                 nl_indent(f, depth);
@@ -2372,11 +2360,11 @@ static void parser_dump_ast(struct Parser* p, FILE* f, void* ptr, int depth)
                 parser_dump_ast(p, f, a->init, depth + 1);
                 a = a->next;
             }
-            fprintf(f, ")");
             break;
         }
         default: fprintf(f, "/* %s */", ast_kind_to_string(ast->kind)); break;
     }
+    fprintf(f, ")");
 }
 
 #if 0

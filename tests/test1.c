@@ -1213,50 +1213,6 @@ fail:
     return rc;
 }
 
-int parse_implicit_conversion(struct TestState* state)
-{
-    int rc = 1;
-    StandardTest test = {0};
-    SUBTEST(stdtest_run(state,
-                        &test,
-                        "int main(char c, unsigned char hu, unsigned int u, long long ll, unsigned long long ull) {\n"
-                        "int*x = 0;\n"
-                        "x = 1-1;\n"
-
-                        "c + hu;\n"
-                        "ll + 10;\n"
-                        "10 + ll;\n"
-                        "c + hu;\n"
-                        "}\n"));
-    rc = 0;
-
-    struct Ast** const asts = test.parser->expr_seqs.data;
-    REQUIRE_EQ(1, test.parser->top->seq.ext);
-    REQUIRE_AST(StmtDecls, decls, asts[test.parser->top->seq.off])
-    {
-        REQUIRE_EQ(1, decls->seq.ext);
-        REQUIRE_AST(Decl, w, asts[decls->seq.off])
-        {
-            REQUIRE_AST(StmtBlock, body, w->init)
-            {
-                REQUIRE_EQ(6, body->seq.ext);
-
-                REQUIRE_AST(ExprAdd, e, asts[body->seq.off + 2])
-                REQUIRE_SIZING_EQ(s_sizing_int, e->sizing);
-
-                REQUIRE_AST(ExprAdd, e, asts[body->seq.off + 3])
-                REQUIRE_SIZING_EQ(s_sizing_sptr, e->sizing);
-
-                REQUIRE_AST(ExprAdd, e, asts[body->seq.off + 4])
-                REQUIRE_SIZING_EQ(s_sizing_sptr, e->sizing);
-            }
-        }
-    }
-fail:
-    stdtest_destroy(&test);
-    return rc;
-}
-
 int parse_expr1(struct TestState* state)
 {
     int rc = 1;
@@ -1351,6 +1307,12 @@ static const Token* expect_str(AstChecker* ctx, const Token* cur_tok, const char
         PARSER_FAIL("error: expected token '%s' but got '%s'\n", id, tokstr);
 fail:
     return cur_tok;
+}
+static const Token* expect_sizing(AstChecker* ctx, const Token* cur_tok, Sizing sz)
+{
+    char buf[32] = {0};
+    snprintf(buf, 31, "__%c%u", sz.is_signed ? 'i' : 'u', sz.width);
+    return expect_str(ctx, cur_tok, buf);
 }
 static const Token* expect_number(AstChecker* ctx, const Token* cur_tok, unsigned long long n)
 {
@@ -1510,6 +1472,7 @@ static const Token* test_ast_ast_inner(AstChecker* ctx, const Token* cur_tok, co
             if (a->tok) PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
             PARSER_DO(test_ast_ast(ctx, cur_tok, a->lhs));
             PARSER_DO(test_ast_ast(ctx, cur_tok, a->rhs));
+            if (a->mult != 1) PARSER_DO(expect_number(ctx, cur_tok, a->mult));
             break;
         }
         case EXPR_ASSIGN:
@@ -1603,8 +1566,13 @@ static const Token* test_ast_ast(AstChecker* ctx, const Token* cur_tok, const vo
         }
         else
         {
-            PARSER_DO(expect_str(ctx, cur_tok, ast_kind_to_string(((Ast*)ast)->kind)));
-            PARSER_DO(test_ast_ast_inner(ctx, cur_tok, ast));
+            const Ast* a = ast;
+            PARSER_DO(expect_str(ctx, cur_tok, ast_kind_to_string(a->kind)));
+            PARSER_DO(test_ast_ast_inner(ctx, cur_tok, a));
+            if (cur_tok->type == LEX_IDENT && ast_kind_is_expr(a->kind))
+            {
+                PARSER_DO(expect_sizing(ctx, cur_tok, ((const Expr*)a)->sizing));
+            }
         }
         if (cur_tok->type != TOKEN_SYM1(')'))
         {
@@ -4446,7 +4414,6 @@ int main(int argc, char** argv)
     RUN_TEST(parse_anon_decls);
     RUN_TEST(parse_decls_and_defs);
     RUN_TEST(parse_uuva_list);
-    RUN_TEST(parse_implicit_conversion);
     RUN_TEST(parse_params);
     RUN_TEST(parse_enums);
 

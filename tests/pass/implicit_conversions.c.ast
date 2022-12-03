@@ -1,0 +1,45 @@
+(STMT_BLOCK
+ (STMT_DECLS
+  (AST_DECLSPEC int)
+  (AST_DECL main (AST_DECLFN
+    (STMT_DECLS
+     (AST_DECLSPEC char)
+     (AST_DECL c ? /* AST_DECLSPEC */))
+    (STMT_DECLS
+     (AST_DECLSPEC char)
+     (AST_DECL hu ? /* AST_DECLSPEC */))
+    (STMT_DECLS
+     (AST_DECLSPEC int)
+     (AST_DECL u ? /* AST_DECLSPEC */))
+    (STMT_DECLS
+     (AST_DECLSPEC long)
+     (AST_DECL ll ? /* AST_DECLSPEC */))
+    (STMT_DECLS
+     (AST_DECLSPEC unsigned)
+     (AST_DECL ull ? /* AST_DECLSPEC */))
+    ? /* AST_DECLSPEC */)
+   (STMT_BLOCK
+    (STMT_DECLS
+     (AST_DECLSPEC int)
+     (AST_DECL x (AST_DECLPTR? /* AST_DECLSPEC */)
+      (EXPR_LIT 0)))
+    (EXPR_ASSIGN =
+     (EXPR_REF x __u8)
+     (EXPR_ADD -
+      (EXPR_LIT 1 D __i4)
+      (EXPR_LIT 1 D __i4) __i4) __u8)
+    (EXPR_ADD +
+     (EXPR_REF c __i1)
+     (EXPR_REF hu __u1) __i4)
+    (EXPR_ADD +
+     (EXPR_REF ll __i8)
+     (EXPR_LIT 10 D __i4) __i8)
+    (EXPR_ADD +
+     (EXPR_LIT 10 D __i4)
+     (EXPR_REF ll __i8) __i8)
+    (EXPR_ADD +
+     (EXPR_REF c __i1)
+     (EXPR_REF hu __u1) __i4)
+    (EXPR_ADD +
+     (EXPR_REF ull __u8)
+     (EXPR_REF ll __i8) __u8)))))

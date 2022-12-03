@@ -37,7 +37,7 @@
      (EXPR_DEREF ]
       (EXPR_ADD [
        (EXPR_REF z)
-       (EXPR_LIT 0)))
+       (EXPR_LIT 0) 4))
      (EXPR_LIT 0))
     (EXPR_ASSIGN =
      (EXPR_DEREF *
