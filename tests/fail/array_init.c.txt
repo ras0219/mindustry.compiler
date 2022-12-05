@@ -1,0 +1,1 @@
+array_init.c:1:23: error: too many initializers

@@ -1,0 +1,7 @@
+(STMT_BLOCK
+ (STMT_DECLS
+  (AST_DECLSPEC typedef unsigned $ unsigned long)
+  (AST_DECL size_t ?))
+ (STMT_DECLS
+  (AST_DECLSPEC typedef unsigned $ unsigned long)
+  (AST_DECL size_t ?)))

@@ -1,0 +1,1 @@
+union_init.c:7:19: error: too many initializers

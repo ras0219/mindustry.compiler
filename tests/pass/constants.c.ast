@@ -1,11 +1,11 @@
 (STMT_BLOCK
  (STMT_DECLS
-  (AST_DECLSPEC char)
+  (AST_DECLSPEC char $)
   (AST_DECL d1 (AST_DECLARR
     (EXPR_LIT 92)
     ? /* AST_DECLSPEC */)))
  (STMT_DECLS
-  (AST_DECLSPEC void)
+  (AST_DECLSPEC void $)
   (AST_DECL f (AST_DECLFN
     ? /* AST_DECLSPEC */)
    (STMT_BLOCK

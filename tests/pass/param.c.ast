@@ -1,54 +1,54 @@
 (STMT_BLOCK
  (STMT_DECLS
-  (AST_DECLSPEC int)
+  (AST_DECLSPEC int $)
   (AST_DECL arr (AST_DECLFN
     (STMT_DECLS
-     (AST_DECLSPEC int)
+     (AST_DECLSPEC int $)
      (AST_DECL i (AST_DECLARR
        (EXPR_LIT 1 D)
        ? /* AST_DECLSPEC */)))
     ? /* AST_DECLSPEC */)))
  (STMT_DECLS
-  (AST_DECLSPEC int)
+  (AST_DECLSPEC int $)
   (AST_DECL arru (AST_DECLFN
     (STMT_DECLS
-     (AST_DECLSPEC int)
+     (AST_DECLSPEC int $)
      (AST_DECL i (AST_DECLARR
        ? /* AST_DECLSPEC */)))
     ? /* AST_DECLSPEC */)))
  (STMT_DECLS
-  (AST_DECLSPEC int)
+  (AST_DECLSPEC int $)
   (AST_DECL valist (AST_DECLFN
     (STMT_DECLS
-     (AST_DECLSPEC __builtin_va_list)
+     (AST_DECLSPEC __builtin_va_list $)
      (AST_DECL v ? /* AST_DECLSPEC */))
     ? /* AST_DECLSPEC */)))
  (STMT_DECLS
-  (AST_DECLSPEC int)
+  (AST_DECLSPEC int $)
   (AST_DECL ptr (AST_DECLFN
     (STMT_DECLS
-     (AST_DECLSPEC int)
+     (AST_DECLSPEC int $)
      (AST_DECL i (AST_DECLPTR ? /* AST_DECLSPEC */)))
     ? /* AST_DECLSPEC */)))
  (STMT_DECLS
-  (AST_DECLSPEC int)
+  (AST_DECLSPEC int $)
   (AST_DECL m (AST_DECLFN
     (STMT_DECLS
-     (AST_DECLSPEC int)
+     (AST_DECLSPEC int $)
      (AST_DECL i (AST_DECLARR
        (EXPR_LIT 1 D)
        ? /* AST_DECLSPEC */)))
     ? /* AST_DECLSPEC */)
    (STMT_BLOCK
     (STMT_DECLS
-     (AST_DECLSPEC int)
+     (AST_DECLSPEC int $)
      (AST_DECL x (AST_DECLARR
        ? /* AST_DECLSPEC */)
       (AST_INIT
        0 0 (EXPR_LIT 1 D)
        0 0 (EXPR_LIT 2 D))))
     (STMT_DECLS
-     (AST_DECLSPEC int)
+     (AST_DECLSPEC int $)
      (AST_DECL p (AST_DECLPTR ? /* AST_DECLSPEC */)
       (EXPR_REF x)))
     (EXPR_CALL

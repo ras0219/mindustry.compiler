@@ -104,3 +104,13 @@ void parser_print_msgs(FILE* f)
     parser_print_errors(f);
     parser_print_warns(f);
 }
+
+size_t parser_print_msgs_mem(void* buf, size_t sz)
+{
+    FILE* f = fmemopen(buf, sz, "wb");
+    if (!f) abort();
+    parser_print_msgs(f);
+    size_t r = ftello(f);
+    fclose(f);
+    return r;
+}

@@ -555,7 +555,7 @@ int main(int argc, const char* const* argv)
             memset(&fe, 0, sizeof(fe));
         }
 
-        if (asm_file && obj_file)
+        if (asm_file && obj_file && !args.fAssembleOnly)
         {
             // #ifdef _WIN32
             //     buf, sizeof(buf), "ml64 /Zd /Zi /Sa %s /link /OPT:REF /OPT:ICF /out:%s",

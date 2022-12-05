@@ -1,26 +1,26 @@
 (STMT_BLOCK
  (STMT_DECLS
-  (AST_DECLSPEC void)
+  (AST_DECLSPEC void $)
   (AST_DECL f (AST_DECLFN
     ? /* AST_DECLSPEC */)
    (STMT_BLOCK
     (STMT_DECLS
-     (AST_DECLSPEC int)
+     (AST_DECLSPEC int $)
      (AST_DECL x ? /* AST_DECLSPEC */))
     (STMT_DECLS
-     (AST_DECLSPEC struct su (STMT_BLOCK
+     (AST_DECLSPEC struct $ su (STMT_BLOCK
        (STMT_DECLS
-        (AST_DECLSPEC int)
+        (AST_DECLSPEC int $)
         (AST_DECL x ? /* AST_DECLSPEC */))))
      (AST_DECL y ? /* AST_DECLSPEC */)
      (AST_DECL py (AST_DECLPTR ? /* AST_DECLSPEC */)))
     (STMT_DECLS
-     (AST_DECLSPEC int)
+     (AST_DECLSPEC int $)
      (AST_DECL z (AST_DECLARR
        (EXPR_LIT 2 D)
        ? /* AST_DECLSPEC */)))
     (STMT_DECLS
-     (AST_DECLSPEC int)
+     (AST_DECLSPEC int $)
      (AST_DECL p (AST_DECLPTR ? /* AST_DECLSPEC */)))
     (EXPR_ASSIGN =
      (EXPR_REF x)
@@ -45,4 +45,6 @@
      (EXPR_LIT 0))
     (EXPR_ASSIGN =
      (EXPR_REF x)
-     (EXPR_LIT 0))))))
+     (EXPR_LIT 0))
+    (EXPR_ADDRESS &
+     (EXPR_REF z __i4) __u8)))))

@@ -1387,10 +1387,10 @@ static void expr_addressof(Expr* e, TypeStr* ty)
     typestr_addressof(ty);
 }
 
-static void elaborate_expr_lvalue_ExprRef(Elaborator* elab, ExprRef* expr, TypeStr* rty)
+static void elaborate_expr_lvalue_ExprRef(Elaborator* elab, ExprRef* e, TypeStr* rty)
 {
-    elaborate_expr_impl(elab, &expr->expr_base, rty);
-    expr_addressof(&expr->expr_base, rty);
+    *rty = e->sym->type;
+    expr_addressof(&e->expr_base, rty);
 }
 #if 0
 static void elaborate_expr_lvalue_ExprBinOp(Elaborator* elab, ExprBinOp* expr, TypeStr* rty)

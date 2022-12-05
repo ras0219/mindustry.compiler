@@ -1,0 +1,1 @@
+const_arrow.c:8:9: error: assignment to const object of type 'const int'

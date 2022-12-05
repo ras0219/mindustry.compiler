@@ -29,3 +29,5 @@ void parser_print_errors(FILE* f);
 void parser_print_warns(FILE* f);
 void parser_print_msgs(FILE* f);
 void parser_clear_errors();
+
+size_t parser_print_msgs_mem(void* buf, size_t sz);

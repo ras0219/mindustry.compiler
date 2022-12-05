@@ -2156,6 +2156,13 @@ static void parser_dump_ast(struct Parser* p, FILE* f, void* ptr, int depth)
             if (blk->is_typedef) fprintf(f, " typedef");
             if (blk->tok) fprintf(f, " %s", token_str(p, blk->tok));
             if (blk->name) fprintf(f, " %s", blk->name);
+             fprintf(f, " $");
+            if (blk->is_signed) fprintf(f, " signed");
+            if (blk->is_unsigned) fprintf(f, " unsigned");
+            if (blk->is_longlong) fprintf(f, " llong");
+            if (blk->is_long) fprintf(f, " long");
+            if (blk->is_short) fprintf(f, " short");
+            if (blk->is_const) fprintf(f, " const");
             if (blk->suinit)
             {
                 fprintf(f, " su ");
@@ -2287,7 +2294,7 @@ static void parser_dump_ast(struct Parser* p, FILE* f, void* ptr, int depth)
         }
         case EXPR_ADDRESS:
         {
-            struct ExprDeref* blk = (void*)ast;
+            struct ExprAddress* blk = (void*)ast;
             if (blk->tok) fprintf(f, " %s", token_str(p, blk->tok));
             nl_indent(f, depth);
             parser_dump_ast(p, f, &blk->lhs->ast, depth + 1);

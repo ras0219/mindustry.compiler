@@ -1,25 +1,25 @@
 (STMT_BLOCK
  (STMT_DECLS
-  (AST_DECLSPEC A A su (STMT_BLOCK
+  (AST_DECLSPEC A A $ su (STMT_BLOCK
     (STMT_DECLS
-     (AST_DECLSPEC int)
+     (AST_DECLSPEC int $)
      (AST_DECL y ? /* AST_DECLSPEC */))
     (STMT_DECLS
-     (AST_DECLSPEC struct su (STMT_BLOCK
+     (AST_DECLSPEC struct $ su (STMT_BLOCK
        (STMT_DECLS
-        (AST_DECLSPEC int)
+        (AST_DECLSPEC int $)
         (AST_DECL l ? /* AST_DECLSPEC */))
        (STMT_DECLS
-        (AST_DECLSPEC char)
+        (AST_DECLSPEC char $)
         (AST_DECL c ? /* AST_DECLSPEC */))))
      (AST_DECL ? /* AST_DECLSPEC */)))))
  (STMT_DECLS
-  (AST_DECLSPEC int)
+  (AST_DECLSPEC int $)
   (AST_DECL foo (AST_DECLFN
     ? /* AST_DECLSPEC */)
    (STMT_BLOCK
     (STMT_DECLS
-     (AST_DECLSPEC A A)
+     (AST_DECLSPEC A A $)
      (AST_DECL a ? /* AST_DECLSPEC */
       (AST_INIT
        0 1 (EXPR_LIT 1 D)

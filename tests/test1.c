@@ -1366,6 +1366,13 @@ static const Token* test_ast_ast_inner(AstChecker* ctx, const Token* cur_tok, co
             if (a->is_typedef) PARSER_DO(expect_str(ctx, cur_tok, "typedef"));
             if (a->tok) PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
             if (a->name) PARSER_DO(expect_str(ctx, cur_tok, a->name));
+            PARSER_DO(expect_str(ctx, cur_tok, "$"));
+            if (a->is_signed) PARSER_DO(expect_str(ctx, cur_tok, "signed"));
+            if (a->is_unsigned) PARSER_DO(expect_str(ctx, cur_tok, "unsigned"));
+            if (a->is_longlong) PARSER_DO(expect_str(ctx, cur_tok, "llong"));
+            if (a->is_long) PARSER_DO(expect_str(ctx, cur_tok, "long"));
+            if (a->is_short) PARSER_DO(expect_str(ctx, cur_tok, "short"));
+            if (a->is_const) PARSER_DO(expect_str(ctx, cur_tok, "const"));
             if (a->suinit)
             {
                 PARSER_DO(expect_str(ctx, cur_tok, "su"));
@@ -1673,41 +1680,113 @@ fail:
     return rc;
 }
 
+static int is_trimchar(char ch) { return ch == '\n' || ch == '\r'; }
+
+static void trimmed_lines(const char* buf, size_t buf_sz, Array* out)
+{
+    size_t s = 0;
+    for (;;)
+    {
+        while (s < buf_sz && is_trimchar(buf[s]))
+            ++s;
+        if (s == buf_sz) return;
+        size_t j = s + 1;
+        while (j < buf_sz && !is_trimchar(buf[j]))
+            ++j;
+        arrsz_push(out, s);
+        arrsz_push(out, j);
+        if (j == buf_sz) return;
+        s = j + 1;
+    }
+}
+
+static int require_lines_eq(
+    struct TestState* state, const char* ebuf1, size_t ebuf1sz, const char* ebuf2, size_t ebuf2sz, const char* filename)
+{
+    int rc = 0;
+    Array lines1 = {0}, lines2 = {0};
+
+    trimmed_lines(ebuf1, ebuf1sz, &lines1);
+    trimmed_lines(ebuf2, ebuf2sz, &lines2);
+
+    size_t n1 = arrsz_size(&lines1), n2 = arrsz_size(&lines2);
+    const size_t n = n1 < n2 ? n1 : n2;
+
+    const size_t* l1 = lines1.data;
+    const size_t* l2 = lines2.data;
+
+    size_t i;
+    for (i = 0; i < n; i += 2)
+    {
+        REQUIRE_MEM_EQ_IMPL(
+            filename, 0, "expected", ebuf1 + l1[i], l1[i + 1] - l1[i], "actual", ebuf2 + l2[i], l2[i + 1] - l2[i]);
+    }
+    for (; i < n1; i += 2)
+    {
+        REQUIRE_MEM_EQ_IMPL(filename, 0, "expected", ebuf1 + l1[i], l1[i + 1] - l1[i], "actual", "", 0);
+    }
+    for (; i < n2; i += 2)
+    {
+        REQUIRE_MEM_EQ_IMPL(filename, 0, "expected", "", 0, "actual", ebuf2 + l2[i], l2[i + 1] - l2[i]);
+    }
+
+fail:
+    array_clear(&lines1);
+    array_clear(&lines2);
+    return rc;
+}
+
 static int test_file_fail(struct TestState* state, const char* path)
 {
     int rc = 1;
+    Array msgpath = {0};
     Preprocessor* pp = NULL;
     Parser parser = {0};
     Elaborator elab = {0};
+    FILE *msgfile = NULL, *memfile = NULL;
     FILE* f = fopen(path, "r");
     if (!f) REQUIRE_FAIL("failed to open test file %s", path);
 
     parser_clear_errors();
     pp = preproc_alloc();
-    if (preproc_file(pp, f, path))
+    if (preproc_file(pp, f, last_path_element(path)))
     {
         rc = 0;
-        goto fail;
+        goto failed;
     }
     if (parser_parse(&parser, preproc_tokens(pp), preproc_stringpool(pp)))
     {
         rc = 0;
-        goto fail;
+        goto failed;
     }
     parser_debug_check(&parser);
     if (parser_has_errors())
     {
         rc = 0;
-        goto fail;
+        goto failed;
     }
 
     elaborator_init(&elab, &parser);
     if (elaborate(&elab))
     {
         rc = 0;
-        goto fail;
+        goto failed;
     }
     REQUIRE_FAIL_IMPL(path, 1, "was expected to fail, but passed");
+
+failed:
+    array_appends(&msgpath, path);
+    array_push(&msgpath, ".txt", 5);
+    if (msgfile = fopen(msgpath.data, "rb"))
+    {
+        char msgbuf[1024], membuf[1024];
+
+        const size_t membuf_sz = parser_print_msgs_mem(membuf, sizeof(membuf));
+        const size_t msgbuf_sz = fread(msgbuf, 1, sizeof(msgbuf), msgfile);
+
+        if (rc = require_lines_eq(state, msgbuf, msgbuf_sz, membuf, membuf_sz, msgpath.data)) goto fail;
+    }
+    rc = 0;
 
 fail:
     parser_clear_errors();
@@ -1715,6 +1794,8 @@ fail:
     parser_destroy(&parser);
     if (pp) preproc_free(pp);
     if (f) fclose(f);
+    if (msgfile) fclose(msgfile);
+    if (memfile) fclose(memfile);
     return rc;
 }
 

@@ -11,7 +11,8 @@ typedef struct
 int main()
 {
     enum A x = a3;
-    int y = (x == a2);
+    unsigned y = (x == a2);
+    if (y & a1);
     if ((unsigned int)y == a1) sizeof(enum A);
     W w, *pw = &w;
     pw->a = a1;

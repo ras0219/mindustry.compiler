@@ -1,26 +1,26 @@
 (STMT_BLOCK
  (STMT_DECLS
-  (AST_DECLSPEC int)
+  (AST_DECLSPEC int $)
   (AST_DECL main (AST_DECLFN
     (STMT_DECLS
-     (AST_DECLSPEC char)
+     (AST_DECLSPEC char $)
      (AST_DECL c ? /* AST_DECLSPEC */))
     (STMT_DECLS
-     (AST_DECLSPEC char)
+     (AST_DECLSPEC char $ unsigned)
      (AST_DECL hu ? /* AST_DECLSPEC */))
     (STMT_DECLS
-     (AST_DECLSPEC int)
+     (AST_DECLSPEC int $ unsigned)
      (AST_DECL u ? /* AST_DECLSPEC */))
     (STMT_DECLS
-     (AST_DECLSPEC long)
+     (AST_DECLSPEC long $ llong long)
      (AST_DECL ll ? /* AST_DECLSPEC */))
     (STMT_DECLS
-     (AST_DECLSPEC unsigned)
+     (AST_DECLSPEC unsigned $ unsigned llong long)
      (AST_DECL ull ? /* AST_DECLSPEC */))
     ? /* AST_DECLSPEC */)
    (STMT_BLOCK
     (STMT_DECLS
-     (AST_DECLSPEC int)
+     (AST_DECLSPEC int $)
      (AST_DECL x (AST_DECLPTR? /* AST_DECLSPEC */)
       (EXPR_LIT 0)))
     (EXPR_ASSIGN =
