@@ -355,15 +355,6 @@ enum MacroIfOp
 #undef Y_COMMA
 };
 
-// static enum MacroIfOp lex_to_if_op(struct Lexer* l)
-// {
-// #define Y_STREQ(E, LIT, ...) \
-//     if (STREQ_LIT(l->tok, l->sz, LIT)) return E;
-//     X_MACRO_IF_OP(Y_STREQ)
-// #undef Y_STREQ
-//     return 0;
-// }
-
 static int lit_to_mp(const char* s, Constant128* out, const struct RowCol* rc)
 {
     uint64_t u;

@@ -14,7 +14,7 @@ enum CGTarget
     CG_TARGET_MACOS_GAS,
 };
 
-struct CodeGen
+typedef struct CodeGen
 {
     FILE* fdebug;
 
@@ -29,7 +29,7 @@ struct CodeGen
     size_t next_label;
 
     size_t cur_fn_lbl_prefix;
-};
+} CodeGen;
 
 struct TACEntry;
 

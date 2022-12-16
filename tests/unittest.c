@@ -53,6 +53,29 @@ fail:
     return 1;
 }
 
+int unittest_require_str_eq_impl(struct TestState* state,
+                                 const char* file,
+                                 int line,
+                                 const char* expected_str,
+                                 const char* actual_str,
+                                 const char* a,
+                                 const char* b)
+{
+    ++state->assertions;
+
+    if (strcmp(a, b) != 0)
+    {
+        if (expected_str && actual_str)
+            REQUIRE_FAIL_IMPL(file, line, "'%s eq %s' was \"%s\" eq \"%s\"", expected_str, actual_str, a, b);
+        else
+            REQUIRE_FAIL_IMPL(file, line, "\"%s\" <> \"%s\"", a, b);
+    }
+
+    return 0;
+fail:
+    return 1;
+}
+
 int unittest_require_mem_eq_impl(struct TestState* state,
                                  const char* file,
                                  int line,

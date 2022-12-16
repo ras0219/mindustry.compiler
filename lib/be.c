@@ -13,7 +13,6 @@
 #include "token.h"
 #include "unwrap.h"
 
-
 static const struct TACAddress s_taca_void = {};
 
 static const int s_sysv_arg_reg[] = {REG_RDI, REG_RSI, REG_RDX, REG_RCX, REG_R8, REG_R9};
@@ -1681,18 +1680,13 @@ int be_compile_toplevel_decl(struct BackEnd* be, Decl* decl)
 
             size_t arg_offset = 0;
 
+            const Token* const* const toks = be->parser->token_seqs.data;
             Ast** const asts = be->parser->expr_seqs.data;
-            if (declfn->is_param_list) abort();
-            for (size_t i = 0; i < declfn->seq.ext; ++i)
+            FOREACH_SEQ(i, declfn->seq)
             {
-                Ast* ast = asts[declfn->seq.off + i];
-                if (ast->kind != STMT_DECLS) abort();
-                StmtDecls* decls = (void*)ast;
-                if (decls->seq.ext != 1) abort();
-                Ast* arg_ast = asts[decls->seq.off];
-                if (arg_ast->kind != AST_DECL) abort();
-                Decl* arg_decl = (void*)arg_ast;
-
+                Decl* arg_decl = declfn->is_param_list ? decl_for_param(be->parser, decl, toks[i])
+                                                       : (Decl*)asts[((StmtDecls*)asts[i])->seq.off];
+                if (!arg_decl) abort();
                 if (arg_decl->sym->size.width > 8 || arg_decl->sym->align > 8 || j >= 6)
                 {
                     // class MEMORY
@@ -1745,6 +1739,7 @@ fail:
 
 int be_compile(struct BackEnd* be)
 {
+    if (!be->parser->expr_seqs.data) return 0;
     int rc = 0;
 
     // then compile all functions

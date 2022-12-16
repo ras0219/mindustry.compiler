@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -13,6 +14,7 @@
 #include "path.h"
 #include "preproc.h"
 #include "stdlibe.h"
+#include "stream.h"
 #include "symbol.h"
 #include "tac.h"
 #include "token.h"
@@ -882,48 +884,6 @@ fail:
     return rc;
 }
 
-int parse_unk_array(struct TestState* state, StandardTest* test)
-{
-    int rc = 1;
-    SUBTEST(stdtest_run(state,
-                        test,
-                        "char txt6[] = \"hello\";\n"
-                        "struct Point { int x, y; } points5[] = {[3] = 1,2,3};\n"
-                        "char txt7[] = {\"hello\"};\n"
-                        "static const char mode[][5] = { \"EPRT\", \"PORT\" };\n"
-                        "struct Foo { int a; int last[]; };\n"));
-    Parser* const parser = test->parser;
-
-    // from https://en.cppreference.com/w/c/language/initialization
-    struct Expr** const exprs = (struct Expr**)parser->expr_seqs.data;
-    REQUIRE_EQ(5, parser->top->seq.ext);
-    REQUIRE_EXPR(StmtDecls, decls, exprs[parser->top->seq.off])
-    {
-        REQUIRE_EQ(1, decls->seq.ext);
-        REQUIRE_EXPR(Decl, w, exprs[decls->seq.off]) { REQUIRE_EQ(6, w->sym->size.width); }
-    }
-    REQUIRE_EXPR(StmtDecls, decls, exprs[parser->top->seq.off + 1])
-    {
-        REQUIRE_EQ(1, decls->seq.ext);
-        REQUIRE_EXPR(Decl, w, exprs[decls->seq.off])
-        {
-            REQUIRE_EQ(5 * 8, w->sym->size.width);
-            REQUIRE_AST(AstInit, i, w->init)
-            {
-                REQUIRE_EQ(24, i->offset);
-                REQUIRE(i->next);
-                REQUIRE_EQ(28, i->next->offset);
-                REQUIRE(i->next->next);
-                REQUIRE_EQ(32, i->next->next->offset);
-            }
-        }
-    }
-
-    rc = 0;
-fail:
-    return rc;
-}
-
 int parse_anon_decls(struct TestState* state)
 {
     int rc = 1;
@@ -1327,6 +1287,17 @@ fail:
 
 static const Token* test_ast_ast(AstChecker* ctx, const Token* cur_tok, const void* ast);
 
+static const Token* test_ast_ast_seq(AstChecker* ctx, const Token* cur_tok, SeqView seq)
+{
+    const Ast* const* const asts = (const Ast**)ctx->p->expr_seqs.data + seq.off;
+    for (size_t i = 0; i < seq.ext; ++i)
+    {
+        PARSER_DO(test_ast_ast(ctx, cur_tok, asts[i]));
+    }
+fail:
+    return cur_tok;
+}
+
 static const Token* test_ast_ast_inner(AstChecker* ctx, const Token* cur_tok, const Ast* ast)
 {
     switch (ast->kind)
@@ -1334,22 +1305,14 @@ static const Token* test_ast_ast_inner(AstChecker* ctx, const Token* cur_tok, co
         case STMT_BLOCK:
         {
             const struct StmtBlock* a = (void*)ast;
-            const Ast* const* const asts = (const Ast**)ctx->p->expr_seqs.data + a->seq.off;
-            for (size_t i = 0; i < a->seq.ext; ++i)
-            {
-                PARSER_DO(test_ast_ast(ctx, cur_tok, asts[i]));
-            }
+            PARSER_DO(test_ast_ast_seq(ctx, cur_tok, a->seq));
             break;
         }
         case STMT_DECLS:
         {
             const StmtDecls* a = (void*)ast;
             if (a->specs) PARSER_DO(test_ast_ast(ctx, cur_tok, &a->specs->ast));
-            const Ast* const* const asts = (const Ast**)ctx->p->expr_seqs.data + a->seq.off;
-            for (size_t i = 0; i < a->seq.ext; ++i)
-            {
-                PARSER_DO(test_ast_ast(ctx, cur_tok, asts[i]));
-            }
+            PARSER_DO(test_ast_ast_seq(ctx, cur_tok, a->seq));
             break;
         }
         case STMT_IF:
@@ -1358,6 +1321,12 @@ static const Token* test_ast_ast_inner(AstChecker* ctx, const Token* cur_tok, co
             PARSER_DO(test_ast_ast(ctx, cur_tok, a->cond));
             PARSER_DO(test_ast_ast(ctx, cur_tok, a->if_body));
             if (a->else_body) PARSER_DO(test_ast_ast(ctx, cur_tok, a->else_body));
+            break;
+        }
+        case STMT_RETURN:
+        {
+            const StmtReturn* a = (void*)ast;
+            if (a->expr) PARSER_DO(test_ast_ast(ctx, cur_tok, a->expr));
             break;
         }
         case AST_DECLSPEC:
@@ -1390,6 +1359,7 @@ static const Token* test_ast_ast_inner(AstChecker* ctx, const Token* cur_tok, co
             const Decl* a = (void*)ast;
             if (a->tok) PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
             if (a->type) PARSER_DO(test_ast_ast(ctx, cur_tok, &a->type->ast));
+            PARSER_DO(test_ast_ast_seq(ctx, cur_tok, a->decl_list));
             if (a->init) PARSER_DO(test_ast_ast(ctx, cur_tok, a->init));
             break;
         }
@@ -1625,6 +1595,170 @@ fail:
     return 1;
 }
 
+static void format_sizing(Array* buf, Sizing sz) { array_appendf(buf, "%c%u", sz.is_signed ? 'i' : 'u', sz.width); }
+
+static void format_taca(Array* buf, TACAddress addr)
+{
+    if (addr.kind == TACA_VOID)
+    {
+        array_appends(buf, "TACA_VOID");
+        return;
+    }
+    array_appendf(buf, "%s ", taca_to_string(addr.kind));
+    format_sizing(buf, addr.sizing);
+    if (addr.is_addr) array_appends(buf, " is_addr");
+    switch (addr.kind)
+    {
+        case TACA_REG: array_appendf(buf, " %s", register_to_string(addr.reg)); break;
+        case TACA_FRAME: array_appendf(buf, " %zu", addr.frame_offset); break;
+        case TACA_REF: array_appendf(buf, " %zu", addr.ref); break;
+        default: array_appends(buf, " unknown"); break;
+    }
+}
+
+static void format_all_tac(Array* out, const BackEnd* be)
+{
+    const TACEntry* e = be->code.data;
+    const size_t n = array_size(&be->code, sizeof(struct TACEntry));
+
+    for (size_t i = 0; i < n; ++i)
+    {
+        array_appendf(out, "%s\n  ", taco_to_string(e[i].op));
+        format_taca(out, e[i].arg1);
+        array_appends(out, "\n  ");
+        format_taca(out, e[i].arg2);
+        array_push_byte(out, '\n');
+    }
+}
+
+static int read_contents(Array* out, const char* path)
+{
+    errno = 0;
+    FILE* f = fopen(path, "r");
+    if (!f) return errno;
+    (void)fseek(f, 0L, SEEK_END);
+    off_t len = ftello(f);
+    if (errno) goto fail;
+    (void)fseek(f, 0L, SEEK_SET);
+    array_reserve(out, out->sz + len);
+    out->sz += fread(out->data + out->sz, 1, len, f);
+fail:
+    fclose(f);
+    return errno;
+}
+
+static int is_trimchar(char ch) { return ch == '\n' || ch == '\r'; }
+
+static void trimmed_lines(const char* buf, size_t buf_sz, Array* out)
+{
+    size_t s = 0;
+    for (;;)
+    {
+        while (s < buf_sz && is_trimchar(buf[s]))
+            ++s;
+        if (s == buf_sz) return;
+        size_t j = s + 1;
+        while (j < buf_sz && !is_trimchar(buf[j]))
+            ++j;
+        arrsz_push(out, s);
+        arrsz_push(out, j);
+        if (j == buf_sz) return;
+        s = j + 1;
+    }
+}
+
+static int require_lines_eq(
+    struct TestState* state, const char* ebuf1, size_t ebuf1sz, const char* ebuf2, size_t ebuf2sz, const char* filename)
+{
+    int rc = 1;
+    Array lines1 = {0}, lines2 = {0};
+
+    trimmed_lines(ebuf1, ebuf1sz, &lines1);
+    trimmed_lines(ebuf2, ebuf2sz, &lines2);
+
+    size_t n1 = arrsz_size(&lines1), n2 = arrsz_size(&lines2);
+    const size_t n = n1 < n2 ? n1 : n2;
+
+    const size_t* l1 = lines1.data;
+    const size_t* l2 = lines2.data;
+
+    size_t i;
+    for (i = 0; i < n; i += 2)
+    {
+        REQUIRE_MEM_EQ_IMPL(filename,
+                            i / 2 + 1,
+                            "expected",
+                            ebuf1 + l1[i],
+                            l1[i + 1] - l1[i],
+                            "actual",
+                            ebuf2 + l2[i],
+                            l2[i + 1] - l2[i]);
+    }
+    for (; i < n1; i += 2)
+    {
+        REQUIRE_MEM_EQ_IMPL(filename, i / 2 + 1, "expected", ebuf1 + l1[i], l1[i + 1] - l1[i], "actual", "", 0);
+    }
+    for (; i < n2; i += 2)
+    {
+        REQUIRE_MEM_EQ_IMPL(filename, i / 2 + 1, "expected", "", 0, "actual", ebuf2 + l2[i], l2[i + 1] - l2[i]);
+    }
+    rc = 0;
+fail:
+    if (rc)
+    {
+        fprintf(stderr, "%.*s", (int)ebuf2sz, (char*)ebuf2);
+    }
+    array_clear(&lines1);
+    array_clear(&lines2);
+    return rc;
+}
+
+static int test_tac(struct TestState* state, BackEnd* be, const char* base)
+{
+    int rc = 0;
+    Array lines = {0};
+    Array path = {0}, buf = {0}, buf2 = {0};
+    array_appends(&path, base);
+    array_push(&path, ".tac", 5);
+    if (read_contents(&buf2, path.data) != ENOENT)
+    {
+        format_all_tac(&buf, be);
+
+        if (rc = require_lines_eq(state, buf2.data, buf2.sz, buf.data, buf.sz, path.data)) goto fail;
+        array_clear(&buf);
+    }
+    array_clear(&buf2);
+
+    array_pop(&path, 5);
+    array_push(&path, ".s", 3);
+    if (read_contents(&buf2, path.data) != ENOENT)
+    {
+        trimmed_lines(be->cg->code.data, be->cg->code.sz, &lines);
+        const size_t n = arrsz_size(&lines);
+        const size_t* l = lines.data;
+        for (size_t i = 0; i < n; i += 2)
+        {
+            size_t len = l[i + 1] - l[i];
+            if (!len) continue;
+            const char* line = (const char*)be->cg->code.data + l[i];
+            size_t s = 0;
+            while (s < len && line[s] == ' ')
+                ++s;
+            if (s < len && (line[s] == '.' || line[s] == '#')) continue;
+            array_push(&buf, line, len);
+            array_push_byte(&buf, '\n');
+        }
+        if (rc = require_lines_eq(state, buf2.data, buf2.sz, buf.data, buf.sz, path.data)) goto fail;
+        array_clear(&buf);
+    }
+fail:
+    array_destroy(&buf2);
+    array_destroy(&buf);
+    array_destroy(&path);
+    array_destroy(&lines);
+    return rc;
+}
+
 static int test_file(struct TestState* state, const char* path)
 {
     int rc = 1;
@@ -1632,6 +1766,8 @@ static int test_file(struct TestState* state, const char* path)
     Preprocessor *pp = NULL, *ast_pp = NULL;
     Parser parser = {0};
     Elaborator elab = {0};
+    BackEnd be = {0};
+    CodeGen cg = {0};
     FILE* f = fopen(path, "r");
     FILE* f2 = NULL;
     if (!f) REQUIRE_FAIL("failed to open test file %s", path);
@@ -1666,9 +1802,21 @@ static int test_file(struct TestState* state, const char* path)
         }
         if (test_ast(state, ast_pp, &parser, &elab, astfile.data)) goto fail;
     }
+
+    cg_init(&cg);
+    be_init(&be, &parser, &elab, &cg);
+    if (be_compile(&be))
+    {
+        REQUIRE_FAIL_IMPL(path, 1, "%s", "failed to compile");
+    }
+
+    if (test_tac(state, &be, path)) goto fail;
+
     rc = 0;
 fail:
     if (parser_has_errors()) parser_print_msgs(stderr), parser_clear_errors();
+    cg_destroy(&cg);
+    be_destroy(&be);
     elaborator_destroy(&elab);
     parser_destroy(&parser);
     if (ast_pp) preproc_free(ast_pp);
@@ -1677,62 +1825,6 @@ fail:
     if (f) fclose(f);
     array_destroy(&buf);
     array_destroy(&astfile);
-    return rc;
-}
-
-static int is_trimchar(char ch) { return ch == '\n' || ch == '\r'; }
-
-static void trimmed_lines(const char* buf, size_t buf_sz, Array* out)
-{
-    size_t s = 0;
-    for (;;)
-    {
-        while (s < buf_sz && is_trimchar(buf[s]))
-            ++s;
-        if (s == buf_sz) return;
-        size_t j = s + 1;
-        while (j < buf_sz && !is_trimchar(buf[j]))
-            ++j;
-        arrsz_push(out, s);
-        arrsz_push(out, j);
-        if (j == buf_sz) return;
-        s = j + 1;
-    }
-}
-
-static int require_lines_eq(
-    struct TestState* state, const char* ebuf1, size_t ebuf1sz, const char* ebuf2, size_t ebuf2sz, const char* filename)
-{
-    int rc = 0;
-    Array lines1 = {0}, lines2 = {0};
-
-    trimmed_lines(ebuf1, ebuf1sz, &lines1);
-    trimmed_lines(ebuf2, ebuf2sz, &lines2);
-
-    size_t n1 = arrsz_size(&lines1), n2 = arrsz_size(&lines2);
-    const size_t n = n1 < n2 ? n1 : n2;
-
-    const size_t* l1 = lines1.data;
-    const size_t* l2 = lines2.data;
-
-    size_t i;
-    for (i = 0; i < n; i += 2)
-    {
-        REQUIRE_MEM_EQ_IMPL(
-            filename, 0, "expected", ebuf1 + l1[i], l1[i + 1] - l1[i], "actual", ebuf2 + l2[i], l2[i + 1] - l2[i]);
-    }
-    for (; i < n1; i += 2)
-    {
-        REQUIRE_MEM_EQ_IMPL(filename, 0, "expected", ebuf1 + l1[i], l1[i + 1] - l1[i], "actual", "", 0);
-    }
-    for (; i < n2; i += 2)
-    {
-        REQUIRE_MEM_EQ_IMPL(filename, 0, "expected", "", 0, "actual", ebuf2 + l2[i], l2[i + 1] - l2[i]);
-    }
-
-fail:
-    array_clear(&lines1);
-    array_clear(&lines2);
     return rc;
 }
 
@@ -2135,260 +2227,71 @@ fail:
 int test_be_simple2(TestState* state, StandardTest* test)
 {
     int rc = 1;
+    Array buf = {0}, buf2 = {0};
     SUBTEST(betest_run_cg(state, test, "int main(int argc, char** argv) { return argc; }"));
 
-    size_t index = 0;
+    const TACEntry* e = test->be->code.data;
+    const size_t n = array_size(&test->be->code, sizeof(struct TACEntry));
 
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = s_sizing_int, .frame_offset = 0},
-        {TACA_REG, .sizing = s_sizing_int, .reg = REG_RDI},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = s_sizing_ptr, .frame_offset = 8},
-        {TACA_REG, .sizing = s_sizing_ptr, .reg = REG_RSI},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_REG, .is_addr = 1, .sizing = s_sizing_int, .reg = REG_RAX},
-        {TACA_FRAME, .sizing = s_sizing_int, .frame_offset = 0},
-    });
-    REQUIRE_NEXT_TACE({TACO_RETURN});
+    const char* filename = "/opt/src/mindustry.compiler/tests/pass/be_simple2.c.tac";
+    FILE* f = fopen(filename, "r");
+    if (!f) abort();
+    do
+    {
+        if (buf2.sz == buf2.cap) array_reserve(&buf2, buf2.sz + 1024);
+        buf2.sz += fread(buf2.data + buf2.sz, 1, buf2.cap - buf2.sz, f);
+    } while (!feof(f) && !ferror(f));
+    fclose(f);
 
-    REQUIRE_END_TACE();
+    array_clear(&buf);
+    for (size_t i = 0; i < n; ++i)
+    {
+        array_appendf(&buf, "%s\n  ", taco_to_string(e[i].op));
+        format_taca(&buf, e[i].arg1);
+        array_appends(&buf, "\n  ");
+        format_taca(&buf, e[i].arg2);
+        array_push_byte(&buf, '\n');
+    }
 
-    index = 0;
-    REQUIRE_NEXT_TEXT("_main:");
-    REQUIRE_NEXT_TEXT("subq $24, %rsp");
-    REQUIRE_NEXT_TEXT("mov %edi, 0(%rsp)");
-    REQUIRE_NEXT_TEXT("mov %rsi, 8(%rsp)");
-    REQUIRE_NEXT_TEXT("movsl 0(%rsp), %rax");
-    REQUIRE_NEXT_TEXT("addq $24, %rsp");
-    REQUIRE_NEXT_TEXT("ret");
-    REQUIRE_NEXT_TEXT("addq $24, %rsp");
-    REQUIRE_NEXT_TEXT("ret");
-    REQUIRE_END_TEXT();
+    if (rc = require_lines_eq(state, buf2.data, buf2.sz, buf.data, buf.sz, filename)) goto fail;
 
-    rc = 0;
-fail:
-    return rc;
-}
+    filename = "/opt/src/mindustry.compiler/tests/pass/be_simple2.c.s";
+    f = fopen(filename, "r");
+    array_clear(&buf2);
+    if (!f) abort();
+    do
+    {
+        if (buf2.sz == buf2.cap) array_reserve(&buf2, buf2.sz + 1024);
+        buf2.sz += fread(buf2.data + buf2.sz, 1, buf2.cap - buf2.sz, f);
+    } while (!feof(f) && !ferror(f));
+    fclose(f);
 
-int test_be_simple3(TestState* state, StandardTest* test)
-{
-    int rc = 1;
-    SUBTEST(betest_run_cg(state, test, "void main() { }"));
+    struct Array reduced_code = {0};
+    {
+        struct Array lines = {0};
+        trimmed_lines(test->cg->code.data, test->cg->code.sz, &lines);
+        const size_t n = arrsz_size(&lines);
+        const size_t* l = lines.data;
+        for (size_t i = 0; i < n; i += 2)
+        {
+            size_t len = l[i + 1] - l[i];
+            if (!len) continue;
+            const char* line = (const char*)test->cg->code.data + l[i];
+            size_t s = 0;
+            while (s < len && line[s] == ' ')
+                ++s;
+            if (s < len && (line[s] == '.' || line[s] == '#')) continue;
+            array_push(&reduced_code, line, len);
+            array_push_byte(&reduced_code, '\n');
+        }
+    }
 
-    size_t index = 0;
-    REQUIRE_NEXT_TACE({TACO_RETURN});
-    REQUIRE_END_TACE();
-
-    index = 0;
-    REQUIRE_NEXT_TEXT("_main:");
-    REQUIRE_NEXT_TEXT("subq $24, %rsp");
-    REQUIRE_NEXT_TEXT("addq $24, %rsp");
-    REQUIRE_NEXT_TEXT("ret");
-    REQUIRE_NEXT_TEXT("addq $24, %rsp");
-    REQUIRE_NEXT_TEXT("ret");
-    REQUIRE_END_TEXT();
-
-    rc = 0;
-fail:
-    return rc;
-}
-
-int test_be_relations(TestState* state, StandardTest* test)
-{
-    int rc = 1;
-    SUBTEST(betest_run_cg(state,
-                          test,
-                          "int is_ascii_alphu(int ch) { return ('a' <= ch && 'z' >= ch) || ('A' < ch && 'Z' > ch) || "
-                          "ch == '_' || ch != ' '; }"));
-
-    size_t index = 0;
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = 1, 4, .frame_offset = 0},
-        {TACA_REG, .sizing = 1, 4, .reg = REG_RDI},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_LTEQ,
-        {TACA_IMM, .sizing = 1, 4, .imm = 97},
-        {TACA_FRAME, .sizing = 1, 4, .frame_offset = 0},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = 1, 4, .frame_offset = 16},
-        {TACA_REF, .sizing = 1, 4, .ref = index - 1},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_BRZ,
-        {TACA_REF, .sizing = 1, 4, .ref = 1},
-        {TACA_ALABEL, .alabel = 1},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_LTEQ,
-        {TACA_FRAME, .sizing = 1, 4, .frame_offset = 0},
-        {TACA_IMM, .sizing = 1, 4, .imm = 122},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = 1, 4, .frame_offset = 16},
-        {TACA_REF, .sizing = 1, 4, .ref = index - 1},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_LABEL,
-        {TACA_ALABEL, .alabel = 1},
-        {TACA_VOID},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_NEQ,
-        {TACA_FRAME, .sizing = 1, 4, .frame_offset = 16},
-        {TACA_IMM, .sizing = 1, 4, .imm = 0},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = 1, 4, .frame_offset = 12},
-        {TACA_REF, .sizing = 1, 4, .ref = index - 1},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_BRNZ,
-        {TACA_REF, .sizing = 1, 4, .ref = index - 2},
-        {TACA_ALABEL, .alabel = 2},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_LT,
-        {TACA_IMM, .sizing = 1, 4, .imm = 65},
-        {TACA_FRAME, .sizing = 1, 4, .frame_offset = 0},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = 1, 4, .frame_offset = 20},
-        {TACA_REF, .sizing = 1, 4, .ref = index - 1},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_BRZ,
-        {TACA_REF, .sizing = 1, 4, .ref = index - 2},
-        {TACA_ALABEL, .alabel = 3},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_LT,
-        {TACA_FRAME, .sizing = 1, 4, .frame_offset = 0},
-        {TACA_IMM, .sizing = 1, 4, .imm = 90},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = 1, 4, .frame_offset = 20},
-        {TACA_REF, .sizing = 1, 4, .ref = index - 1},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_LABEL,
-        {TACA_ALABEL, .alabel = 3},
-        {TACA_VOID},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_NEQ,
-        {TACA_FRAME, .sizing = 1, 4, .frame_offset = 20},
-        {TACA_IMM, .sizing = 1, 4, .imm = 0},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = 1, 4, .frame_offset = 12},
-        {TACA_REF, .sizing = 1, 4, .ref = index - 1},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_LABEL,
-        {TACA_ALABEL, .alabel = 2},
-        {TACA_VOID},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_NEQ,
-        {TACA_FRAME, .sizing = 1, 4, .frame_offset = 12},
-        {TACA_IMM, .sizing = 1, 4, .imm = 0},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = 1, 4, .frame_offset = 8},
-        {TACA_REF, .sizing = 1, 4, .ref = index - 1},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_BRNZ,
-        {TACA_REF, .sizing = 1, 4, .ref = index - 2},
-        {TACA_ALABEL, .alabel = 4},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_EQ,
-        {TACA_FRAME, .sizing = 1, 4, .frame_offset = 0},
-        {TACA_IMM, .sizing = 1, 4, .imm = 95},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = 1, 4, .frame_offset = 8},
-        {TACA_REF, .sizing = 1, 4, .ref = index - 1},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_LABEL,
-        {TACA_ALABEL, .alabel = 4},
-        {TACA_VOID},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_NEQ,
-        {TACA_FRAME, .sizing = 1, 4, .frame_offset = 8},
-        {TACA_IMM, .sizing = 1, 4, .imm = 0},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = 1, 4, .frame_offset = 4},
-        {TACA_REF, .sizing = 1, 4, .ref = index - 1},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_BRNZ,
-        {TACA_REF, .sizing = 1, 4, .ref = index - 2},
-        {TACA_ALABEL, .alabel = 5},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_NEQ,
-        {TACA_FRAME, .sizing = 1, 4, .frame_offset = 0},
-        {TACA_IMM, .sizing = 1, 4, .imm = 32},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = 1, 4, .frame_offset = 4},
-        {TACA_REF, .sizing = 1, 4, .ref = index - 1},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_LABEL,
-        {TACA_ALABEL, .alabel = 5},
-        {TACA_VOID},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_NEQ,
-        {TACA_FRAME, .sizing = 1, 4, .frame_offset = 4},
-        {TACA_IMM, .sizing = 1, 4, .imm = 0},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_REG, .is_addr = 1, .sizing = 1, 4, .reg = REG_RAX},
-        {TACA_REF, .sizing = 1, 4, .ref = index - 1},
-    });
-    REQUIRE_NEXT_TACE({TACO_RETURN});
-
-    REQUIRE_END_TACE();
-
-    // index = 0;
-    // REQUIRE_NEXT_TEXT("_main:");
-    // REQUIRE_NEXT_TEXT("subq $24, %rsp");
-    // REQUIRE_NEXT_TEXT("mov $42, %rax");
-    // REQUIRE_NEXT_TEXT("addq $24, %rsp");
-    // REQUIRE_NEXT_TEXT("ret");
-    // REQUIRE_NEXT_TEXT("addq $24, %rsp");
-    // REQUIRE_NEXT_TEXT("ret");
-    // REQUIRE_END_TEXT();
+    if (rc = require_lines_eq(state, buf2.data, buf2.sz, reduced_code.data, reduced_code.sz, filename)) goto fail;
 
     rc = 0;
 fail:
-
+    array_destroy(&buf);
+    array_destroy(&buf2);
     return rc;
 }
 
@@ -4448,12 +4351,11 @@ int main(int argc, char** argv)
     typedef int (*stdtest_t)(struct TestState*, struct StandardTest*);
 
     static const stdtest_t stdtests[] = {
-        parse_unk_array,   test_be_static_init, test_be_simple,      test_be_simple2,    test_be_simple3,
-        test_be_relations, test_be_arithmetic,  test_be_bitmath,     test_be_memory_ret, test_be_nested_array,
-        test_be_cast,      test_be_call,        test_be_call2,       test_be_call3,      test_be_got,
-        test_be_va_args,   test_be_va_args2,    test_be_conversions, test_be_init,       test_be_switch,
-        test_be_ternary,   test_be_fnstatic,    test_cg_assign,      test_cg_call,       test_cg_add,
-        test_cg_bitmath,   test_cg_refs,        test_cg_regalloc,
+        test_be_static_init, test_be_simple,       test_be_simple2, test_be_arithmetic, test_be_bitmath,
+        test_be_memory_ret,  test_be_nested_array, test_be_cast,    test_be_call,       test_be_call2,
+        test_be_call3,       test_be_got,          test_be_va_args, test_be_va_args2,   test_be_conversions,
+        test_be_init,        test_be_switch,       test_be_ternary, test_be_fnstatic,   test_cg_assign,
+        test_cg_call,        test_cg_add,          test_cg_bitmath, test_cg_refs,       test_cg_regalloc,
     };
 
     static int (*const othertests[])(struct TestState*) = {

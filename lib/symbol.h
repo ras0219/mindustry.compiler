@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ast.h"
+#include "fwd.h"
 #include "tac.h"
 #include "typestr.h"
 
@@ -129,6 +130,8 @@ typedef struct Decl
 
 #define AST_STRUCT_AST_DECL Decl
 #define AST_KIND_Decl AST_DECL
+
+Decl* decl_for_param(const struct Parser* p, const Decl* decl, const struct Token* id);
 
 typedef struct Symbol
 {

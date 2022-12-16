@@ -107,15 +107,22 @@ int unittest_require_zu_eq_impl(struct TestState* state,
         if (_expr_a != _expr_b) REQUIRE_FAIL("'%s == %s' was false", #expected, #actual);                              \
     } while (0)
 
-#define REQUIRE_STR_EQ(expected, actual)                                                                               \
+int unittest_require_str_eq_impl(struct TestState* state,
+                                 const char* file,
+                                 int line,
+                                 const char* expected_str,
+                                 const char* actual_str,
+                                 const char* a,
+                                 const char* b);
+
+#define REQUIRE_STR_EQ_IMPL(file, line, expected, expected_str, actual, actual_str)                                    \
     do                                                                                                                 \
     {                                                                                                                  \
-        state->assertions++;                                                                                           \
-        const char* _expr_a = (expected);                                                                              \
-        const char* _expr_b = (actual);                                                                                \
-        if (strcmp(_expr_a, _expr_b) != 0)                                                                             \
-            REQUIRE_FAIL("'%s eq %s' was '\"%s\" eq \"%s\"'", #expected, #actual, _expr_a, _expr_b);                   \
+        if (unittest_require_str_eq_impl(state, file, line, expected_str, actual_str, (expected), (actual)))           \
+            goto fail;                                                                                                 \
     } while (0)
+
+#define REQUIRE_STR_EQ(expected, actual) REQUIRE_STR_EQ_IMPL(__FILE__, __LINE__, expected, #expected, actual, #actual)
 
 int unittest_require_mem_eq_impl(struct TestState* state,
                                  const char* file,

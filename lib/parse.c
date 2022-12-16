@@ -1497,28 +1497,24 @@ static const struct Token* parse_fnbody(Parser* p, const struct Token* cur_tok, 
         {
             PARSER_DO(parse_decl_list(p, cur_tok, pdecl));
         }
-        const Token* const* toks = (const Token* const*)p->token_seqs.data + fn->seq.off;
-
-        size_t n = 0;
-        void* const* const decls = (void**)p->expr_seqs.data + pdecl->decl_list.off;
-        for (size_t i = 0; i < pdecl->decl_list.ext; ++i)
+        const Token* const* const toks = p->token_seqs.data;
+        FOREACH_SEQ(k, fn->seq)
         {
-            StmtDecls* argdecl = decls[i];
-            Decl* const* const decls2 = (Decl**)p->expr_seqs.data + argdecl->seq.off;
-            for (size_t j = 0; j < argdecl->seq.ext; ++j)
+            if (!decl_for_param(p, pdecl, toks[k]))
             {
-                for (size_t k = 0; k < fn->seq.ext; ++k)
-                {
-                    if (toks[k]->sp_offset == decls2[j]->tok->sp_offset) goto found_param;
-                }
-                PARSER_FAIL_TOK(decls2[j]->tok, "declaration does not match any parameters\n");
-            found_param:
-                ++n;
+                PARSER_FAIL_TOK(toks[k], "parameter must be declared\n");
             }
+        }
+        StmtDecls* const* const sdecls = p->expr_seqs.data;
+        size_t n = 0;
+        FOREACH_SEQ(i, pdecl->decl_list)
+        {
+            StmtDecls* argdecl = sdecls[i];
+            n += argdecl->seq.ext;
         }
         if (n != fn->seq.ext)
         {
-            PARSER_FAIL("expected all parameters to be declared\n");
+            PARSER_FAIL("only parameters may be declared\n");
         }
     }
     else if (fn->seq.ext > 0)
@@ -2048,6 +2044,14 @@ static void parser_dump_sizing(FILE* f, int depth, Sizing sz)
 {
     fprintf(f, " __%c%u", sz.is_signed ? 'i' : 'u', sz.width);
 }
+static void parser_dump_expr_seq(Parser* p, FILE* f, SeqView seq, int depth)
+{
+    for (size_t i = 0; i < seq.ext; ++i)
+    {
+        nl_indent(f, depth);
+        parser_dump_ast(p, f, ((Ast**)p->expr_seqs.data)[seq.off + i], depth + 1);
+    }
+}
 static void parser_dump_ast(struct Parser* p, FILE* f, void* ptr, int depth)
 {
     if (!ptr)
@@ -2063,11 +2067,7 @@ static void parser_dump_ast(struct Parser* p, FILE* f, void* ptr, int depth)
         case STMT_BLOCK:
         {
             struct StmtBlock* blk = (void*)ast;
-            for (size_t i = 0; i < blk->seq.ext; ++i)
-            {
-                nl_indent(f, depth);
-                parser_dump_ast(p, f, ((Ast**)p->expr_seqs.data)[blk->seq.off + i], depth + 1);
-            }
+            parser_dump_expr_seq(p, f, blk->seq, depth);
             break;
         }
         case STMT_DECLS:
@@ -2078,11 +2078,7 @@ static void parser_dump_ast(struct Parser* p, FILE* f, void* ptr, int depth)
                 nl_indent(f, depth);
                 parser_dump_ast(p, f, &blk->specs->ast, depth + 1);
             }
-            for (size_t i = 0; i < blk->seq.ext; ++i)
-            {
-                nl_indent(f, depth);
-                parser_dump_ast(p, f, ((Ast**)p->expr_seqs.data)[blk->seq.off + i], depth + 1);
-            }
+            parser_dump_expr_seq(p, f, blk->seq, depth);
             break;
         }
         case STMT_LOOP:
@@ -2131,7 +2127,11 @@ static void parser_dump_ast(struct Parser* p, FILE* f, void* ptr, int depth)
         case STMT_RETURN:
         {
             struct StmtReturn* blk = (void*)ast;
-            if (blk->expr) parser_dump_ast(p, f, blk->expr, depth + 1);
+            if (blk->expr)
+            {
+                fputc(' ', f);
+                parser_dump_ast(p, f, blk->expr, depth + 1);
+            }
             break;
         }
         case AST_DECL:
@@ -2141,8 +2141,9 @@ static void parser_dump_ast(struct Parser* p, FILE* f, void* ptr, int depth)
             {
                 fprintf(f, " %s", token_str(p, blk->tok));
             }
-            fprintf(f, " ");
+            fputc(' ', f);
             parser_dump_type_ast(p, f, blk->type, depth + 1);
+            parser_dump_expr_seq(p, f, blk->decl_list, depth);
             if (blk->init)
             {
                 nl_indent(f, depth);
@@ -2156,7 +2157,7 @@ static void parser_dump_ast(struct Parser* p, FILE* f, void* ptr, int depth)
             if (blk->is_typedef) fprintf(f, " typedef");
             if (blk->tok) fprintf(f, " %s", token_str(p, blk->tok));
             if (blk->name) fprintf(f, " %s", blk->name);
-             fprintf(f, " $");
+            fprintf(f, " $");
             if (blk->is_signed) fprintf(f, " signed");
             if (blk->is_unsigned) fprintf(f, " unsigned");
             if (blk->is_longlong) fprintf(f, " llong");
@@ -2184,11 +2185,7 @@ static void parser_dump_ast(struct Parser* p, FILE* f, void* ptr, int depth)
             }
             else
             {
-                for (size_t i = 0; i < blk->seq.ext; ++i)
-                {
-                    nl_indent(f, depth);
-                    parser_dump_ast(p, f, ((Ast**)p->expr_seqs.data)[blk->seq.off + i], depth + 1);
-                }
+                parser_dump_expr_seq(p, f, blk->seq, depth);
             }
             if (blk->is_varargs) fprintf(f, " ...");
             if (blk->type)

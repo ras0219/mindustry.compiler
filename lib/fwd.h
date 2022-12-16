@@ -7,3 +7,5 @@ typedef struct BStringMap BStringMap;
 typedef struct StrStrMap StrStrMap;
 typedef Array StrList;
 typedef struct StringSet StringSet;
+struct Parser;
+struct Token;

@@ -1678,6 +1678,7 @@ static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
     int rc = 0;
     decl->elaborated = 1;
     elaborate_decltype(elab, decl->type);
+
     Symbol* const sym = decl->sym;
     if (!sym)
     {

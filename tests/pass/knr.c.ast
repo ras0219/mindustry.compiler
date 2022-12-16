@@ -1,0 +1,46 @@
+(STMT_BLOCK
+ (STMT_DECLS
+  (AST_DECLSPEC int $)
+  (AST_DECL compress2 (AST_DECLFN param
+    ? /* AST_DECLSPEC */)
+   (STMT_DECLS
+    (AST_DECLSPEC char $)
+    (AST_DECL dest (AST_DECLPTR? /* AST_DECLSPEC */)))
+   (STMT_DECLS
+    (AST_DECLSPEC long $ long)
+    (AST_DECL destLen (AST_DECLPTR? /* AST_DECLSPEC */)))
+   (STMT_DECLS
+    (AST_DECLSPEC char $ const)
+    (AST_DECL source (AST_DECLPTR? /* AST_DECLSPEC */)))
+   (STMT_DECLS
+    (AST_DECLSPEC long $ long)
+    (AST_DECL sourceLen ? /* AST_DECLSPEC */))
+   (STMT_DECLS
+    (AST_DECLSPEC int $)
+    (AST_DECL level ? /* AST_DECLSPEC */))
+   (STMT_BLOCK
+    (STMT_RETURN (EXPR_REF level)))))
+ (STMT_DECLS
+  (AST_DECLSPEC long $ long)
+  (AST_DECL compress3 (AST_DECLFN param
+    ? /* AST_DECLSPEC */)
+   (STMT_DECLS
+    (AST_DECLSPEC char $)
+    (AST_DECL b (AST_DECLPTR? /* AST_DECLSPEC */)))
+   (STMT_DECLS
+    (AST_DECLSPEC long $ long)
+    (AST_DECL a ? /* AST_DECLSPEC */))
+   (STMT_BLOCK
+    (STMT_RETURN (EXPR_REF a)))))
+ (STMT_DECLS
+  (AST_DECLSPEC long $ long)
+  (AST_DECL compress4 (AST_DECLFN param
+    ? /* AST_DECLSPEC */)
+   (STMT_DECLS
+    (AST_DECLSPEC int $)
+    (AST_DECL a ? /* AST_DECLSPEC */)
+    (AST_DECL b ? /* AST_DECLSPEC */))
+   (STMT_BLOCK
+    (STMT_RETURN (EXPR_ADD +
+      (EXPR_REF b)
+      (EXPR_REF a) __i4))))))
