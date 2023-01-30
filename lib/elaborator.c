@@ -506,10 +506,7 @@ static void elaborate_expr_ExprAdd(Elaborator* elab, ExprAdd* e, TypeStr* rty)
     }
 }
 
-static void elaborate_expr_ExprBinOp(struct Elaborator* elab,
-
-                                     struct ExprBinOp* e,
-                                     struct TypeStr* rty)
+static void elaborate_expr_ExprBinOp(struct Elaborator* elab, struct ExprBinOp* e, struct TypeStr* rty)
 {
 #if defined(TRACING_ELAB)
     fprintf(stderr, "elaborate_expr_ExprBinOp\n");
@@ -558,10 +555,7 @@ static void elaborate_expr_ExprBinOp(struct Elaborator* elab,
 
 static const TypeStr s_valist_ptr = {.buf = {2, TYPE_BYTE_UUVALIST, TYPE_BYTE_POINTER}};
 
-static void elaborate_expr_ExprBuiltin(struct Elaborator* elab,
-
-                                       struct ExprBuiltin* e,
-                                       struct TypeStr* rty)
+static void elaborate_expr_ExprBuiltin(struct Elaborator* elab, struct ExprBuiltin* e, struct TypeStr* rty)
 {
     switch (e->tok->type)
     {
@@ -1377,7 +1371,10 @@ static void elaborate_expr_impl(struct Elaborator* elab, struct Expr* top_expr, 
 static void elaborate_expr(struct Elaborator* elab, struct Expr* top_expr, struct TypeStr* rty)
 {
     elaborate_expr_impl(elab, top_expr, rty);
-    top_expr->sizing = typestr_calc_sizing_zero_void(elab->types, rty, top_expr->tok);
+    if (rty->buf.buf[0])
+    {
+        top_expr->sizing = typestr_calc_sizing_zero_void(elab->types, rty, top_expr->tok);
+    }
     top_expr->elaborated = 1;
 }
 
@@ -1392,41 +1389,6 @@ static void elaborate_expr_lvalue_ExprRef(Elaborator* elab, ExprRef* e, TypeStr*
     *rty = e->sym->type;
     expr_addressof(&e->expr_base, rty);
 }
-#if 0
-static void elaborate_expr_lvalue_ExprBinOp(Elaborator* elab, ExprBinOp* expr, TypeStr* rty)
-{
-    if (expr->tok->type == TOKEN_SYM1('['))
-    {
-        struct TypeStr rhs_ty;
-        elaborate_expr_decay(elab, expr->lhs, rty);
-        elaborate_expr_decay(elab, expr->rhs, &rhs_ty);
-        if (typestr_mask(&rhs_ty) & TYPE_FLAGS_POINTER)
-        {
-            elaborate_expr_ExprBinOp_impl(elab, &expr->tok->rc, &rhs_ty, rty, TOKEN_SYM1('+'), &expr->info);
-            *rty = rhs_ty;
-            Expr* e = expr->lhs;
-            expr->lhs = expr->rhs;
-            expr->rhs = e;
-        }
-        else
-        {
-            elaborate_expr_ExprBinOp_impl(elab, &expr->tok->rc, rty, &rhs_ty, TOKEN_SYM1('+'), &expr->info);
-        }
-    }
-    else if (binop_mask(expr->tok->type) & BINOP_FLAGS_ASSIGN)
-    {
-        elaborate_expr_ExprBinOp_assign(elab, expr, rty, expr->tok->type);
-        expr_addressof(&expr->expr_base, rty);
-    }
-    else
-    {
-        elaborate_expr(elab, &expr->expr_base, rty);
-        typestr_error1(
-            token_rc(expr->tok), elab->types, "error: expected lvalue but got expression of type %.*s\n", rty);
-        *rty = s_type_unknown;
-    }
-}
-#endif
 static void elaborate_expr_lvalue_ExprAssign(Elaborator* elab, ExprAssign* expr, TypeStr* rty)
 {
     elaborate_expr_ExprAssign(elab, expr, rty);
@@ -1436,9 +1398,9 @@ static void elaborate_expr_lvalue_ExprDeref(Elaborator* elab, ExprDeref* expr, T
 {
     elaborate_expr_decay(elab, expr->lhs, rty);
 }
+
 static void elaborate_expr_lvalue_ExprField(Elaborator* elab, ExprField* e, TypeStr* rty)
 {
-    // TODO: THIS IS WRONG
     if (e->is_arrow)
     {
         elaborate_expr_decay(elab, e->lhs, rty);
@@ -1465,7 +1427,8 @@ static void elaborate_expr_lvalue(struct Elaborator* elab, struct Expr* expr, st
         DISPATCH_EXPR_LVALUE(ExprField);
         default:
             elaborate_expr(elab, expr, rty);
-            typestr_error1(token_rc(expr->tok), elab->types, "error: expr but got expression of type %.*s\n", rty);
+            typestr_error1(
+                token_rc(expr->tok), elab->types, "error: expected lvalue but got expression of type %.*s\n", rty);
             *rty = s_type_unknown;
             break;
     }
@@ -1480,6 +1443,15 @@ static void elaborate_expr_decay(struct Elaborator* elab, struct Expr* expr, str
     expr->sizing = typestr_calc_sizing_zero_void(elab->types, rty, expr->tok);
     expr->elaborated = 1;
 }
+
+// static void elaborate_complete_sym(Elaborator* elab, Symbol* sym)
+// {
+//     if (!sym->is_complete)
+//     {
+//         sym->is_complete = 1;
+//     }
+// }
+
 static void elaborate_expr_ExprRef(Elaborator* elab, ExprRef* e, TypeStr* rty) { *rty = e->sym->type; }
 static void elaborate_expr_ExprCast(Elaborator* elab, ExprCast* e, TypeStr* rty)
 {
@@ -1817,6 +1789,10 @@ static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
                     elab, sym->constinit_offset, 0, sym->size.width, decl->init, sym->is_aggregate));
             }
         }
+    }
+    else
+    {
+        sym->size = typestr_calc_sizing(elab->types, &sym->type, decl->tok);
     }
     UNWRAP(parser_has_errors());
 

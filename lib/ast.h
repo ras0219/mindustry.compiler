@@ -201,7 +201,7 @@ typedef struct ExprAssign
 
     struct Expr* lhs;
     struct Expr* rhs;
-    // for addition and subtraction, multiplier
+    // for addition and subtraction, multiplier (positive) or divisor (negative)
     int32_t mult;
 } ExprAssign;
 #define AST_STRUCT_EXPR_ASSIGN ExprAssign

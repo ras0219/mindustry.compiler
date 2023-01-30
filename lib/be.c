@@ -223,6 +223,13 @@ static const Sizing s_sizing_zero = {0};
 
 static int sizing_is_pointer(Sizing s) { return s.width == 8 && s.is_signed == 0; }
 
+static void be_take_address(BackEnd* be, TACAddress* addr)
+{
+    if (addr->is_addr) abort();
+    addr->is_addr = 1;
+    addr->sizing = s_sizing_zero;
+}
+
 static TACAddress be_increment(struct BackEnd* be, const TACAddress* addr, int offset)
 {
     if (offset == 0) return *addr;
@@ -484,10 +491,8 @@ static int be_compile_lvalue_ExprLit(struct BackEnd* be, struct ExprLit* e, stru
 
 static int be_compile_lvalue_ExprRef(struct BackEnd* be, struct ExprRef* e, struct TACAddress* out)
 {
-    Symbol* sym = e->sym;
-    *out = sym->addr;
-    out->is_addr = 1;
-    out->sizing = s_sizing_zero;
+    *out = e->sym->addr;
+    be_take_address(be, out);
     return 0;
 }
 
@@ -502,13 +507,13 @@ static int be_compile_ExprRef(struct BackEnd* be, struct ExprRef* esym, struct T
     }
     else
     {
-        UNWRAP(be_compile_lvalue_ExprRef(be, esym, out));
-        if (!esym->take_address)
+        *out = esym->sym->addr;
+        if (esym->take_address)
         {
-            UNWRAP(be_dereference(be, out, esym->sizing, &esym->tok->rc));
+            be_take_address(be, out);
         }
     }
-fail:
+    // fail:
     return rc;
 }
 static int be_compile_ExprCall(struct BackEnd* be, struct ExprCall* e, struct TACAddress* out)
@@ -599,7 +604,11 @@ fail:
 }
 static int be_compile_lvalue_ExprCall(struct BackEnd* be, struct ExprCall* e, struct TACAddress* out)
 {
-    return be_compile_ExprCall(be, e, out);
+    int rc = 0;
+    UNWRAP(be_compile_ExprCall(be, e, out));
+    be_take_address(be, out);
+fail:
+    return rc;
 }
 static int be_compile_lvalue_ExprCast(struct BackEnd* be, struct ExprCast* e, struct TACAddress* out)
 {
@@ -1424,6 +1433,7 @@ static void be_compile_global(struct BackEnd* be, Decl* decl)
         {
             name = sym->name;
         }
+        sym->addr.sizing = decl->sym->size;
         struct Decl* def = sym->def ? sym->def : decl;
         if ((decl->type->kind == AST_DECLFN && !def->init) || def->specs->is_extern)
         {
@@ -1520,10 +1530,7 @@ static int be_compile_ExprField(struct BackEnd* be, struct ExprField* e, struct 
 {
     int rc = 0;
     UNWRAP(be_compile_lvalue_ExprField(be, e, out));
-    if (!e->sym->is_array_or_fn)
-    {
-        UNWRAP(be_dereference(be, out, e->sizing, &e->tok->rc));
-    }
+    UNWRAP(be_dereference(be, out, e->sizing, &e->tok->rc));
 
 fail:
     return rc;

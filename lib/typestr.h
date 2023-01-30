@@ -129,6 +129,7 @@ unsigned long long typestr_get_add_size(const struct TypeTable* types,
                                         const struct TypeStr* ts,
                                         const struct RowCol* rc);
 
+struct Sizing typestr_try_calc_sizing(const struct TypeTable* types, const struct TypeStr* ts, const struct Token* rc);
 struct Sizing typestr_calc_sizing(const struct TypeTable* types, const struct TypeStr* ts, const struct Token* rc);
 struct Sizing typestr_calc_sizing_zero_void(const struct TypeTable* types,
                                             const struct TypeStr* ts,
@@ -200,12 +201,7 @@ static const struct TypeStr s_type_ulong = {.buf = {1, TYPE_BYTE_ULONG}};
 static const struct TypeStr s_type_ptrdiff = {.buf = {1, TYPE_BYTE_LLONG}};
 static const struct TypeStr s_type_char = {.buf = {1, TYPE_BYTE_CHAR}};
 
-unsigned int typestr_get_offset_i(const struct TypeStr* ts, int i);
-
-__forceinline static unsigned int typestr_get_offset(const struct TypeStr* ts)
-{
-    return typestr_get_offset_i(ts, ts->buf.buf[0]);
-}
+unsigned int typestr_get_offset(const struct TypeStr* ts);
 
 void typestr_fmt(const struct TypeTable* tt, const struct TypeStr* ts, struct Array* buf);
 

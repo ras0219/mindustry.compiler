@@ -18,13 +18,23 @@ typedef struct TypeTable
     struct Array fn_args;
 } TypeTable;
 
-static __forceinline unsigned int typestr_skip_cvr_i(const TypeStr* ts, int* p_i)
+static __forceinline uint32_t tsb_get_offset_i(const TypeStrBuf* ts, int i)
+{
+    uint32_t ret = UINT32_MAX;
+    if (i >= 1 + sizeof(ret))
+    {
+        memcpy(&ret, ts->buf + i - sizeof(ret), sizeof(ret));
+    }
+    return ret;
+}
+
+static __forceinline unsigned int tsb_skip_cvr_i(const TypeStrBuf* ts, int* p_i)
 {
     int i = *p_i;
     unsigned int m = 0;
-    if (ts->buf.buf[i] == TYPE_BYTE_RESTRICT) --i, m |= TYPESTR_CVR_R;
-    if (ts->buf.buf[i] == TYPE_BYTE_VOLATILE) --i, m |= TYPESTR_CVR_V;
-    if (ts->buf.buf[i] == TYPE_BYTE_CONST) --i, m |= TYPESTR_CVR_C;
+    if (ts->buf[i] == TYPE_BYTE_RESTRICT) --i, m |= TYPESTR_CVR_R;
+    if (ts->buf[i] == TYPE_BYTE_VOLATILE) --i, m |= TYPESTR_CVR_V;
+    if (ts->buf[i] == TYPE_BYTE_CONST) --i, m |= TYPESTR_CVR_C;
     *p_i = i;
     return m;
 }
@@ -131,7 +141,7 @@ void typestr_addressof(struct TypeStr* s)
 {
     int i = s->buf.buf[0];
     if (i == 0) return;
-    typestr_skip_cvr_i(s, &i);
+    tsb_skip_cvr_i(&s->buf, &i);
     const unsigned char byte = s->buf.buf[i];
     if (byte == TYPE_BYTE_ARRAY)
     {
@@ -378,22 +388,12 @@ void typestr_from_decltype_Decl(const void* const* expr_seqs, TypeTable* tt, Typ
     }
 }
 
-unsigned long long typestr_get_size_i(const TypeTable* types, const TypeStr* ts, int i, const RowCol* rc)
+static __forceinline size_t typestr_get_size_i_inner(const TypeTable* types, const TypeStrBuf* buf, int i)
 {
-    typestr_skip_cvr_i(ts, &i);
-    switch (ts->buf.buf[i])
+    switch (buf->buf[i])
     {
         case TYPE_BYTE_STRUCT:
-        case TYPE_BYTE_UNION:
-        {
-            TypeSymbol* sym = tt_get(types, typestr_get_offset_i(ts, i));
-            if (!sym->size.width)
-            {
-                typestr_error1(rc, types, "error: unable to get size of incomplete type: %.*s\n", ts);
-                return 1;
-            }
-            return sym->size.width;
-        }
+        case TYPE_BYTE_UNION: return tt_get(types, tsb_get_offset_i(buf, i))->size.width;
         case TYPE_BYTE_ENUM: return 4;
         case TYPE_BYTE_POINTER: return 8;
         case TYPE_BYTE_UUVALIST: return 24;
@@ -410,30 +410,59 @@ unsigned long long typestr_get_size_i(const TypeTable* types, const TypeStr* ts,
         case TYPE_BYTE_SCHAR:
         case TYPE_BYTE_CHAR: return 1;
         case TYPE_BYTE_FUNCTION: return 1;
-        case TYPE_BYTE_ARRAY:
+        default: return 0;
+    }
+}
+
+unsigned long long typestr_get_size_i(const TypeTable* types, const TypeStr* ts, int i, const RowCol* rc)
+{
+    size_t multiplier = 1;
+    const TypeStrBuf* const buf = &ts->buf;
+    for (tsb_skip_cvr_i(buf, &i); buf->buf[i] == TYPE_BYTE_ARRAY; tsb_skip_cvr_i(buf, &i))
+    {
+        multiplier *= tsb_get_offset_i(buf, i);
+        if (multiplier > UINT32_MAX)
         {
-            uint32_t offset = typestr_get_offset_i(ts, i);
-            size_t elem_size = typestr_get_size_i(types, ts, i - sizeof(uint32_t) - 1, rc);
-            if (elem_size > UINT32_MAX) abort();
-            return offset * elem_size;
-        }
-        default:
-        {
-            typestr_error1(rc, types, "error: unable to get size of type: %.*s\n", ts);
+            typestr_error1(rc, types, "error: type too large: %.*s\n", ts);
             return 1;
         }
+        i -= sizeof(uint32_t) + 1;
     }
+    multiplier *= typestr_get_size_i_inner(types, buf, i);
+    if (multiplier == 0)
+    {
+        typestr_error1(rc, types, "error: unable to get size of incomplete type: %.*s\n", ts);
+        return 1;
+    }
+    else if (multiplier > UINT32_MAX)
+    {
+        typestr_error1(rc, types, "error: type too large: %.*s\n", ts);
+        return 1;
+    }
+    return multiplier;
 }
 
 unsigned long long typestr_get_align_i(const TypeTable* types, const struct TypeStr* ts, int i)
 {
-    typestr_skip_cvr_i(ts, &i);
+    const TypeStrBuf* buf = &ts->buf;
+top:
+    tsb_skip_cvr_i(buf, &i);
     switch (ts->buf.buf[i])
     {
+        case TYPE_BYTE_UNK_ARRAY:
+        {
+            --i;
+            goto top;
+        }
+        case TYPE_BYTE_ARRAY:
+        {
+            i -= 1 + sizeof(uint32_t);
+            goto top;
+        }
         case TYPE_BYTE_STRUCT:
         case TYPE_BYTE_UNION:
         {
-            TypeSymbol* sym = tt_get(types, typestr_get_offset_i(ts, i));
+            TypeSymbol* sym = tt_get(types, tsb_get_offset_i(buf, i));
             if (!sym->align)
             {
                 typestr_error1(NULL, types, "error: unable to get align of incomplete type: %.*s\n", ts);
@@ -457,14 +486,6 @@ unsigned long long typestr_get_align_i(const TypeTable* types, const struct Type
         case TYPE_BYTE_SCHAR:
         case TYPE_BYTE_CHAR: return 1;
         case TYPE_BYTE_FUNCTION: return 1;
-        case TYPE_BYTE_UNK_ARRAY:
-        {
-            return typestr_get_align_i(types, ts, i - 1);
-        }
-        case TYPE_BYTE_ARRAY:
-        {
-            return typestr_get_align_i(types, ts, i - sizeof(uint32_t) - 1);
-        }
         default:
         {
             typestr_error1(NULL, types, "error: unable to get align of type: %.*s\n", ts);
@@ -473,21 +494,19 @@ unsigned long long typestr_get_align_i(const TypeTable* types, const struct Type
     }
 }
 
-unsigned long long typestr_get_add_size(const TypeTable* types, const struct TypeStr* ts, const RowCol* rc)
+unsigned long long typestr_get_add_size(const TypeTable* types, const TypeStr* ts, const RowCol* rc)
 {
     int i = ts->buf.buf[0];
-    if (ts->buf.buf[i] == 'r') --i;
-    if (ts->buf.buf[i] == 'v') --i;
-    if (ts->buf.buf[i] == 'c') --i;
+    tsb_skip_cvr_i(&ts->buf, &i);
     return ts->buf.buf[i] == TYPE_BYTE_POINTER ? typestr_get_size_i(types, ts, i - 1, rc) : 1;
 }
 
 static const Sizing s_sizing_zero = {0};
-static const Sizing s_sizing_one = {.width = 1};
+// static const Sizing s_sizing_one = {.width = 1};
 
 static Sizing typestr_calc_sizing_i(const TypeTable* types, const TypeStr* ts, int i, const Token* tok)
 {
-    typestr_skip_cvr_i(ts, &i);
+    tsb_skip_cvr_i(&ts->buf, &i);
     const size_t sz = typestr_get_size_i(types, ts, i, tok ? &tok->rc : NULL);
     if (sz > INT32_MAX) abort();
     const Sizing ret = {.width = sz, .is_signed = !!(s_typestr_mask_data[ts->buf.buf[i]] & TYPE_FLAGS_SIGNED)};
@@ -497,9 +516,9 @@ static Sizing typestr_calc_sizing_i(const TypeTable* types, const TypeStr* ts, i
 Sizing typestr_calc_elem_sizing(const TypeTable* types, const TypeStr* ts, const Token* tok)
 {
     int i = ts->buf.buf[0];
-    if (i == 0) return s_sizing_one;
+    if (i == 0) return s_sizing_zero;
 
-    typestr_skip_cvr_i(ts, &i);
+    tsb_skip_cvr_i(&ts->buf, &i);
     if (ts->buf.buf[i] == TYPE_BYTE_POINTER)
     {
         --i;
@@ -515,7 +534,7 @@ Sizing typestr_calc_elem_sizing(const TypeTable* types, const TypeStr* ts, const
 Sizing typestr_calc_sizing_zero_void(const TypeTable* types, const TypeStr* ts, const Token* tok)
 {
     int i = ts->buf.buf[0];
-    typestr_skip_cvr_i(ts, &i);
+    tsb_skip_cvr_i(&ts->buf, &i);
     if ((i == 1 && ts->buf.buf[1] == TYPE_BYTE_VOID) || ts->buf.buf[i] == TYPE_BYTE_UNK_ARRAY)
     {
         return s_sizing_zero;
@@ -562,19 +581,11 @@ const unsigned int s_typestr_mask_data[256] = {
 unsigned char typestr_byte(const struct TypeStr* ts)
 {
     int i = ts->buf.buf[0];
-    typestr_skip_cvr_i(ts, &i);
+    tsb_skip_cvr_i(&ts->buf, &i);
     return ts->buf.buf[i];
 }
 
-uint32_t typestr_get_offset_i(const struct TypeStr* ts, int i)
-{
-    uint32_t ret = UINT32_MAX;
-    if (i >= 1 + sizeof(ret))
-    {
-        memcpy(&ret, ts->buf.buf + i - sizeof(ret), sizeof(ret));
-    }
-    return ret;
-}
+unsigned int typestr_get_offset(const struct TypeStr* ts) { return tsb_get_offset_i(&ts->buf, ts->buf.buf[0]); }
 
 static const char* const s_typestr_fmt_strs[128] = {
     [TYPE_BYTE_INVALID] = "invalid type",
@@ -659,7 +670,7 @@ static void typestr_fmt_i(const struct TypeTable* tt, const struct TypeStr* ts, 
         {
             continue;
         }
-        const uint32_t u = typestr_get_offset_i(ts, i + 1);
+        const uint32_t u = tsb_get_offset_i(&ts->buf, i + 1);
         i -= sizeof(u);
         if (ctrl == TYPESTR_FMT_ARR)
         {
@@ -713,7 +724,7 @@ void typestr_fmt(const struct TypeTable* tt, const struct TypeStr* ts, struct Ar
 int typestr_is_char_array(const TypeStr* ts)
 {
     int i = ts->buf.buf[0];
-    typestr_skip_cvr_i(ts, &i);
+    tsb_skip_cvr_i(&ts->buf, &i);
     if (ts->buf.buf[i] == TYPE_BYTE_ARRAY)
     {
         i -= 5;
@@ -723,7 +734,7 @@ int typestr_is_char_array(const TypeStr* ts)
     {
         --i;
     then:
-        typestr_skip_cvr_i(ts, &i);
+        tsb_skip_cvr_i(&ts->buf, &i);
         return !!(s_typestr_mask_data[ts->buf.buf[i]] & TYPE_FLAGS_CHAR);
     }
     return 0;
@@ -731,12 +742,12 @@ int typestr_is_char_array(const TypeStr* ts)
 unsigned int typestr_get_cvr(const TypeStr* ts)
 {
     int i = ts->buf.buf[0];
-    return typestr_skip_cvr_i(ts, &i);
+    return tsb_skip_cvr_i(&ts->buf, &i);
 }
 unsigned int typestr_strip_cvr(struct TypeStr* ts)
 {
     int i = ts->buf.buf[0];
-    unsigned int m = typestr_skip_cvr_i(ts, &i);
+    unsigned int m = tsb_skip_cvr_i(&ts->buf, &i);
     ts->buf.buf[0] = i;
     return m;
 }

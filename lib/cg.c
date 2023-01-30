@@ -434,14 +434,6 @@ skip:
     if (offset != addr.sizing.width) abort();
 }
 
-#if 0
-static int cg_gen_memcpy(struct CodeGen* cg, struct TACAddress addr, struct TACAddress addr2, size_t sz)
-{
-    array_appends(&cg->code, "    memcpy ...\n");
-    return 0;
-}
-#endif
-
 struct FreeFrameSlots
 {
     // interpret value as (pos + v) % 256

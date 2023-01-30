@@ -1,0 +1,1 @@
+rvalue.c:8:23: error: expected lvalue but got expression of type struct abc

@@ -140,12 +140,13 @@ typedef struct Symbol
     Decl* def;
     struct TypeSymbol* parent_su;
     struct Symbol* next_field;
-    unsigned char is_enum_constant : 1;
     struct ExprLit* string_constant;
 
     // elaboration information
+    unsigned char is_enum_constant : 1;
     unsigned char is_aggregate : 1;
     unsigned char is_array_or_fn : 1;
+    unsigned char is_complete : 1;
     TypeStr type;
 
     Sizing fn_ret_sizing;
