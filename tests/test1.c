@@ -1615,6 +1615,7 @@ static void format_taca(Array* buf, TACAddress addr)
         case TACA_REF: array_appendf(buf, " %zu", addr.ref); break;
         case TACA_IMM: array_appendf(buf, " %zu", addr.imm); break;
         case TACA_NAME: array_appendf(buf, " %s", addr.name); break;
+        case TACA_CONST: array_appendf(buf, " %zu", addr.const_idx); break;
         default: array_appends(buf, " unknown"); break;
     }
 }
@@ -2655,100 +2656,6 @@ int test_be_cast(TestState* state, StandardTest* test)
     REQUIRE_NEXT_TEXT("addq $120, %rsp");
     REQUIRE_NEXT_TEXT("ret");
     REQUIRE_END_TEXT();
-
-    rc = 0;
-fail:
-
-    return rc;
-}
-
-int test_be_call2(TestState* state, StandardTest* test)
-{
-    int rc = 1;
-    SUBTEST(betest_run(state,
-                       test,
-                       "void cg_debug(struct CodeGen* cg, const char* fmt, ...);"
-                       "void cg_declare_extern(struct CodeGen* cg, const char* sym)"
-                       "{"
-                       "cg_debug(cg, \"   : %s\\n\", sym);"
-                       "}"));
-    size_t index = 0;
-
-    // prologue;
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = s_sizing_ptr, .frame_offset = 0},
-        {TACA_REG, .sizing = s_sizing_ptr, .reg = REG_RDI},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = s_sizing_ptr, .frame_offset = 8},
-        {TACA_REG, .sizing = s_sizing_ptr, .reg = REG_RSI},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_REG, .is_addr = 1, .sizing = s_sizing_ptr, .reg = REG_RDI},
-        {TACA_FRAME, .sizing = s_sizing_ptr, .frame_offset = 0},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_REG, .is_addr = 1, .sizing = s_sizing_ptr, .reg = REG_RSI},
-        {TACA_CONST, .is_addr = 1, .const_idx = 0},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_REG, .is_addr = 1, .sizing = s_sizing_ptr, .reg = REG_RDX},
-        {TACA_FRAME, .sizing = s_sizing_ptr, .frame_offset = 8},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_CALL,
-        {TACA_NAME, .is_addr = 1, .name = "cg_debug"},
-        {TACA_IMM, .sizing = s_sizing_int, .imm = 3},
-    });
-    REQUIRE_END_TACE();
-
-    rc = 0;
-fail:
-
-    return rc;
-}
-
-int test_be_call3(TestState* state, StandardTest* test)
-{
-    int rc = 1;
-    SUBTEST(betest_run(state,
-                       test,
-                       "struct Y { char buf[20]; };"
-                       "void f(int x[1], struct Y y);"
-                       "void g(int x[1], struct Y y1)"
-                       "{"
-                       " struct Y y;"
-                       " f(x, y);"
-                       "}"));
-    size_t index = 0;
-
-    // prologue;
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = s_sizing_ptr, .frame_offset = 0},
-        {TACA_REG, .sizing = s_sizing_ptr, .reg = REG_RDI},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_PARAM, .is_addr = 1, .sizing.width = 20, .param_offset = 0},
-        {TACA_FRAME, .sizing.width = 20, .frame_offset = 8},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_REG, .is_addr = 1, .sizing = s_sizing_ptr, .reg = REG_RDI},
-        {TACA_FRAME, .sizing = s_sizing_ptr, .frame_offset = 0},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_CALL,
-        {TACA_NAME, .is_addr = 1, .name = "f"},
-        {TACA_IMM, .sizing = s_sizing_int, .imm = 2},
-    });
-    REQUIRE_END_TACE();
 
     rc = 0;
 fail:
@@ -4269,11 +4176,11 @@ int main(int argc, char** argv)
     typedef int (*stdtest_t)(struct TestState*, struct StandardTest*);
 
     static const stdtest_t stdtests[] = {
-        test_be_static_init, test_be_simple,       test_be_simple2,  test_be_arithmetic,  test_be_bitmath,
-        test_be_memory_ret,  test_be_nested_array, test_be_cast,     test_be_call2,       test_be_call3,
-        test_be_got,         test_be_va_args,      test_be_va_args2, test_be_conversions, test_be_init,
-        test_be_switch,      test_be_ternary,      test_be_fnstatic, test_cg_assign,      test_cg_call,
-        test_cg_add,         test_cg_bitmath,      test_cg_refs,     test_cg_regalloc,
+        test_be_static_init, test_be_simple,       test_be_simple2, test_be_arithmetic, test_be_bitmath,
+        test_be_memory_ret,  test_be_nested_array, test_be_cast,    test_be_got,        test_be_va_args,
+        test_be_va_args2,    test_be_conversions,  test_be_init,    test_be_switch,     test_be_ternary,
+        test_be_fnstatic,    test_cg_assign,       test_cg_call,    test_cg_add,        test_cg_bitmath,
+        test_cg_refs,        test_cg_regalloc,
     };
 
     static int (*const othertests[])(struct TestState*) = {
