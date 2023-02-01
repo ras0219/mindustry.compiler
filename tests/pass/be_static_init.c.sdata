@@ -1,0 +1,15 @@
+.p2align 3
+_data:
+.byte 1, 0, 0, 0, 2, 0, 0, 0
+.byte 3, 0, 0, 0
+
+.p2align 3
+_s_reg_names:
+.quad L_.S0 + 0
+.quad L_.S1 + 0
+
+.p2align 3
+_ptrs:
+.quad _foo + 0
+.quad _bar + 0
+

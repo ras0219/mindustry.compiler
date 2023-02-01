@@ -1731,12 +1731,13 @@ static int test_tac(struct TestState* state, BackEnd* be, const char* base)
         if (rc = require_lines_eq(state, buf2.data, buf2.sz, buf.data, buf.sz, path.data)) goto fail;
         array_clear(&buf);
     }
-    array_clear(&buf2);
 
     array_pop(&path, 5);
     array_push(&path, ".s", 3);
+    array_clear(&buf2);
     if (read_contents(&buf2, path.data) != ENOENT)
     {
+        array_clear(&lines);
         trimmed_lines(be->cg->code.data, be->cg->code.sz, &lines);
         const size_t n = arrsz_size(&lines);
         const size_t* l = lines.data;
@@ -1749,6 +1750,31 @@ static int test_tac(struct TestState* state, BackEnd* be, const char* base)
             while (s < len && line[s] == ' ')
                 ++s;
             if (s < len && (line[s] == '.' || line[s] == '#')) continue;
+            array_push(&buf, line, len);
+            array_push_byte(&buf, '\n');
+        }
+        if (rc = require_lines_eq(state, buf2.data, buf2.sz, buf.data, buf.sz, path.data)) goto fail;
+        array_clear(&buf);
+    }
+
+    array_pop(&path, 1);
+    array_push(&path, "data", 5);
+    array_clear(&buf2);
+    if (read_contents(&buf2, path.data) != ENOENT)
+    {
+        array_clear(&lines);
+        trimmed_lines(be->cg->data.data, be->cg->data.sz, &lines);
+        const size_t n = arrsz_size(&lines);
+        const size_t* l = lines.data;
+        for (size_t i = 0; i < n; i += 2)
+        {
+            size_t len = l[i + 1] - l[i];
+            if (!len) continue;
+            const char* line = (const char*)be->cg->data.data + l[i];
+            size_t s = 0;
+            while (s < len && line[s] == ' ')
+                ++s;
+            if (s < len && line[s] == '#') continue;
             array_push(&buf, line, len);
             array_push_byte(&buf, '\n');
         }
@@ -2198,274 +2224,6 @@ fail:
         }                                                                                                              \
     } while (0)
 
-int test_be_simple(TestState* state, StandardTest* test)
-{
-    int rc = 1;
-    SUBTEST(betest_run_cg(state, test, "int main() { return 42; }"));
-
-    size_t index = 0;
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_REG, .is_addr = 1, .sizing = s_sizing_int, .reg = REG_RAX},
-        {TACA_IMM, .sizing = s_sizing_int, .imm = 42},
-    });
-    REQUIRE_NEXT_TACE({TACO_RETURN});
-
-    REQUIRE_END_TACE();
-
-    index = 0;
-    REQUIRE_NEXT_TEXT("_main:");
-    REQUIRE_NEXT_TEXT("subq $24, %rsp");
-    REQUIRE_NEXT_TEXT("mov $42, %rax");
-    REQUIRE_NEXT_TEXT("addq $24, %rsp");
-    REQUIRE_NEXT_TEXT("ret");
-    REQUIRE_NEXT_TEXT("addq $24, %rsp");
-    REQUIRE_NEXT_TEXT("ret");
-    REQUIRE_END_TEXT();
-
-    rc = 0;
-fail:
-    return rc;
-}
-
-int test_be_simple2(TestState* state, StandardTest* test)
-{
-    int rc = 1;
-    Array buf = {0}, buf2 = {0};
-    SUBTEST(betest_run_cg(state, test, "int main(int argc, char** argv) { return argc; }"));
-
-    const TACEntry* e = test->be->code.data;
-    const size_t n = array_size(&test->be->code, sizeof(struct TACEntry));
-
-    const char* filename = "/opt/src/mindustry.compiler/tests/pass/be_simple2.c.tac";
-    FILE* f = fopen(filename, "r");
-    if (!f) abort();
-    do
-    {
-        if (buf2.sz == buf2.cap) array_reserve(&buf2, buf2.sz + 1024);
-        buf2.sz += fread(buf2.data + buf2.sz, 1, buf2.cap - buf2.sz, f);
-    } while (!feof(f) && !ferror(f));
-    fclose(f);
-
-    array_clear(&buf);
-    for (size_t i = 0; i < n; ++i)
-    {
-        array_appendf(&buf, "%s\n  ", taco_to_string(e[i].op));
-        format_taca(&buf, e[i].arg1);
-        array_appends(&buf, "\n  ");
-        format_taca(&buf, e[i].arg2);
-        array_push_byte(&buf, '\n');
-    }
-
-    if (rc = require_lines_eq(state, buf2.data, buf2.sz, buf.data, buf.sz, filename)) goto fail;
-
-    filename = "/opt/src/mindustry.compiler/tests/pass/be_simple2.c.s";
-    f = fopen(filename, "r");
-    array_clear(&buf2);
-    if (!f) abort();
-    do
-    {
-        if (buf2.sz == buf2.cap) array_reserve(&buf2, buf2.sz + 1024);
-        buf2.sz += fread(buf2.data + buf2.sz, 1, buf2.cap - buf2.sz, f);
-    } while (!feof(f) && !ferror(f));
-    fclose(f);
-
-    struct Array reduced_code = {0};
-    {
-        struct Array lines = {0};
-        trimmed_lines(test->cg->code.data, test->cg->code.sz, &lines);
-        const size_t n = arrsz_size(&lines);
-        const size_t* l = lines.data;
-        for (size_t i = 0; i < n; i += 2)
-        {
-            size_t len = l[i + 1] - l[i];
-            if (!len) continue;
-            const char* line = (const char*)test->cg->code.data + l[i];
-            size_t s = 0;
-            while (s < len && line[s] == ' ')
-                ++s;
-            if (s < len && (line[s] == '.' || line[s] == '#')) continue;
-            array_push(&reduced_code, line, len);
-            array_push_byte(&reduced_code, '\n');
-        }
-    }
-
-    if (rc = require_lines_eq(state, buf2.data, buf2.sz, reduced_code.data, reduced_code.sz, filename)) goto fail;
-
-    rc = 0;
-fail:
-    array_destroy(&buf);
-    array_destroy(&buf2);
-    return rc;
-}
-
-int test_be_arithmetic(TestState* state, StandardTest* test)
-{
-    int rc = 1;
-    SUBTEST(betest_run_cg(state,
-                          test,
-                          "void f(int* ch, int i) {\n"
-                          " ch += 1;\n"
-                          " ch -= 1;\n"
-                          " int* z = ++ch; int* w = ch++;\n"
-                          " --ch; ch--;\n"
-                          " i - 1; i -= 1;\n"
-                          " i + 1; i += 1;\n"
-                          " i % 1; i %= 1;\n"
-                          " i / 1; i /= 1;\n"
-                          "}"));
-
-    size_t index = 0;
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = 0, 8, .frame_offset = 0},
-        {TACA_REG, .sizing = 0, 8, .reg = REG_RDI},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = 1, 4, .frame_offset = 8},
-        {TACA_REG, .sizing = 1, 4, .reg = REG_RSI},
-    });
-    // ch += 1;
-    REQUIRE_NEXT_TACE({
-        TACO_ADD,
-        {TACA_FRAME, .sizing = 0, 8, .frame_offset = 0},
-        {TACA_IMM, .sizing = s_sizing_int, .imm = 4},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = 0, 8, .frame_offset = 0},
-        {TACA_REF, .sizing = 0, 8, .ref = index - 1},
-    });
-    // ch -= 1;
-    REQUIRE_NEXT_TACE({
-        TACO_SUB,
-        {TACA_FRAME, .sizing = 0, 8, .frame_offset = 0},
-        {TACA_IMM, .sizing = s_sizing_int, .imm = 4},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = 0, 8, .frame_offset = 0},
-        {TACA_REF, .sizing = 0, 8, .ref = index - 1},
-    });
-    // int* z = ++ch;
-    REQUIRE_NEXT_TACE({
-        TACO_ADD,
-        {TACA_FRAME, .sizing = 0, 8, .frame_offset = 0},
-        {TACA_IMM, .sizing = s_sizing_int, .imm = 4},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = 0, 8, .frame_offset = 0},
-        {TACA_REF, .sizing = 0, 8, .ref = index - 1},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = 0, 8, .frame_offset = 16},
-        {TACA_REF, .sizing = 0, 8, .ref = index - 2},
-    });
-    // int* w = ch++;
-    REQUIRE_NEXT_TACE({
-        TACO_ADD,
-        {TACA_FRAME, .sizing = 0, 8, .frame_offset = 0},
-        {TACA_IMM, .sizing = s_sizing_int, .imm = 0},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ADD,
-        {TACA_FRAME, .sizing = 0, 8, .frame_offset = 0},
-        {TACA_IMM, .sizing = s_sizing_int, .imm = 4},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = 0, 8, .frame_offset = 0},
-        {TACA_REF, .sizing = 0, 8, .ref = index - 1},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = 0, 8, .frame_offset = 24},
-        {TACA_REF, .sizing = 0, 8, .ref = index - 3},
-    });
-
-    rc = 0;
-fail:
-
-    return rc;
-}
-int test_be_bitmath(TestState* state, StandardTest* test)
-{
-    int rc = 1;
-    SUBTEST(betest_run_cg(state,
-                          test,
-                          "void f(int i, int j) {\n"
-                          " int k = i & j;\n"
-                          " int l = i | j;\n"
-                          " int m = i ^ j;\n"
-                          " int n = ~i;\n"
-                          "}"));
-
-    size_t index = 0;
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = 1, 4, .frame_offset = 0},
-        {TACA_REG, .sizing = 1, 4, .reg = REG_RDI},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = 1, 4, .frame_offset = 4},
-        {TACA_REG, .sizing = 1, 4, .reg = REG_RSI},
-    });
-    // i & j
-    REQUIRE_NEXT_TACE({
-        TACO_BAND,
-        {TACA_FRAME, .sizing = 1, 4, .frame_offset = 0},
-        {TACA_FRAME, .sizing = 1, 4, .frame_offset = 4},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = 1, 4, .frame_offset = 8},
-        {TACA_REF, .sizing = 1, 4, .ref = index - 1},
-    });
-    // i | j
-    REQUIRE_NEXT_TACE({
-        TACO_BOR,
-        {TACA_FRAME, .sizing = 1, 4, .frame_offset = 0},
-        {TACA_FRAME, .sizing = 1, 4, .frame_offset = 4},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = 1, 4, .frame_offset = 12},
-        {TACA_REF, .sizing = 1, 4, .ref = index - 1},
-    });
-    // i ^ j
-    REQUIRE_NEXT_TACE({
-        TACO_BXOR,
-        {TACA_FRAME, .sizing = 1, 4, .frame_offset = 0},
-        {TACA_FRAME, .sizing = 1, 4, .frame_offset = 4},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = 1, 4, .frame_offset = 16},
-        {TACA_REF, .sizing = 1, 4, .ref = index - 1},
-    });
-    // ~i
-    REQUIRE_NEXT_TACE({
-        TACO_BNOT,
-        {TACA_FRAME, .sizing = 1, 4, .frame_offset = 0},
-        0,
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = 1, 4, .frame_offset = 20},
-        {TACA_REF, .sizing = 1, 4, .ref = index - 1},
-    });
-    REQUIRE_END_TACE();
-
-    rc = 0;
-fail:
-
-    return rc;
-}
-
 int test_be_memory_ret(TestState* state, StandardTest* test)
 {
     int rc = 1;
@@ -2539,123 +2297,6 @@ int test_be_nested_array(TestState* state, StandardTest* test)
     REQUIRE_NEXT_TACE({TACO_RETURN});
 
     REQUIRE_END_TACE();
-
-    rc = 0;
-fail:
-
-    return rc;
-}
-
-int test_be_cast(TestState* state, StandardTest* test)
-{
-    int rc = 1;
-    SUBTEST(betest_run(state,
-                       test,
-                       "void main() {"
-                       " char ch;"
-                       " int x = (int)ch++;"
-                       " int y = 2 + (int)ch;"
-                       " unsigned z = (unsigned char)(char)-1;"
-                       "}"));
-    size_t index = 0;
-    REQUIRE_NEXT_TACE({
-        TACO_ADD,
-        {TACA_FRAME, .sizing = s_sizing_schar, .frame_offset = 0},
-        {TACA_IMM, .sizing = s_sizing_int, .imm = 0},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ADD,
-        {TACA_FRAME, .sizing = s_sizing_schar, .frame_offset = 0},
-        {TACA_IMM, .sizing = s_sizing_int, .imm = 1},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = s_sizing_schar, .param_offset = 0},
-        {TACA_REF, .sizing = s_sizing_schar, .ref = index - 1},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ADD,
-        {TACA_REF, .sizing = s_sizing_schar, .ref = 0},
-        {TACA_IMM, .sizing = s_sizing_int, .imm = 0},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = s_sizing_int, .param_offset = 4},
-        {TACA_REF, .sizing = s_sizing_int, .ref = index - 1},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ADD,
-        {TACA_FRAME, .sizing = s_sizing_schar, .frame_offset = 0},
-        {TACA_IMM, .sizing = s_sizing_int, .imm = 0},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ADD,
-        {TACA_IMM, .sizing = s_sizing_int, .imm = 2},
-        {TACA_REF, .sizing = s_sizing_int, .ref = index - 1},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = s_sizing_int, .param_offset = 8},
-        {TACA_REF, .sizing = s_sizing_int, .ref = index - 1},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_SUB,
-        {TACA_IMM, .sizing = s_sizing_int, .imm = 0},
-        {TACA_IMM, .sizing = s_sizing_int, .imm = 1},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = s_sizing_uint, .param_offset = 12},
-        {TACA_REF, .sizing = s_sizing_uchar, .ref = index - 1},
-    });
-    REQUIRE_END_TACE();
-
-    rc = cg_gen_taces(test->cg, test->be->code.data, array_size(&test->be->code, sizeof(TACEntry)), 100);
-    if (rc)
-    {
-        parser_print_errors(stderr);
-    }
-    REQUIRE_EQ(0, rc);
-
-    index = 0;
-    REQUIRE_NEXT_TEXT("_main:");
-    REQUIRE_NEXT_TEXT("subq $120, %rsp");
-    REQUIRE_NEXT_TEXT("movsb 0(%rsp), %r11");
-    REQUIRE_NEXT_TEXT("mov %r11, 104(%rsp)");
-
-    REQUIRE_NEXT_TEXT("movsb 0(%rsp), %r11");
-    REQUIRE_NEXT_TEXT("add $1, %r11");
-    REQUIRE_NEXT_TEXT("mov %r11, 112(%rsp)");
-
-    REQUIRE_NEXT_TEXT("movsb 112(%rsp), %r11");
-    REQUIRE_NEXT_TEXT("mov %r11b, 0(%rsp)");
-
-    REQUIRE_NEXT_TEXT("movsb 104(%rsp), %r11");
-    REQUIRE_NEXT_TEXT("mov %r11, 104(%rsp)");
-
-    REQUIRE_NEXT_TEXT("movsl 104(%rsp), %r11");
-    REQUIRE_NEXT_TEXT("mov %r11d, 4(%rsp)");
-
-    REQUIRE_NEXT_TEXT("movsb 0(%rsp), %r11");
-    REQUIRE_NEXT_TEXT("mov %r11, 104(%rsp)");
-
-    REQUIRE_NEXT_TEXT("movsl 104(%rsp), %r11");
-    REQUIRE_NEXT_TEXT("add $2, %r11");
-    REQUIRE_NEXT_TEXT("mov %r11, 104(%rsp)");
-
-    REQUIRE_NEXT_TEXT("movsl 104(%rsp), %r11");
-    REQUIRE_NEXT_TEXT("mov %r11d, 8(%rsp)");
-
-    REQUIRE_NEXT_TEXT("mov $0, %r11");
-    REQUIRE_NEXT_TEXT("subq $1, %r11");
-    REQUIRE_NEXT_TEXT("mov %r11, 104(%rsp)");
-
-    REQUIRE_NEXT_TEXT("movzb 104(%rsp), %r11");
-    REQUIRE_NEXT_TEXT("mov %r11d, 12(%rsp)");
-
-    REQUIRE_NEXT_TEXT("addq $120, %rsp");
-    REQUIRE_NEXT_TEXT("ret");
-    REQUIRE_END_TEXT();
 
     rc = 0;
 fail:
@@ -3365,170 +3006,6 @@ fail:
     return rc;
 }
 
-int test_be_switch(TestState* state, StandardTest* test)
-{
-    int rc = 1;
-    SUBTEST(betest_run(state,
-                       test,
-                       "int f(int x) {\n"
-                       "switch (x) {"
-                       "case 1: return 10;"
-                       "case 2: return 20;"
-                       "default: return 30;"
-                       "}}"));
-    size_t index = 0;
-
-    // prelude
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = s_sizing_int, .frame_offset = 0},
-        {TACA_REG, .sizing = s_sizing_int, .reg = REG_RDI},
-    });
-    // switch (x)
-    REQUIRE_NEXT_TACE({
-        TACO_JUMP,
-        {TACA_ALABEL, .alabel = 2},
-    });
-    // case 1:
-    REQUIRE_NEXT_TACE({
-        TACO_LABEL,
-        {TACA_ALABEL, .alabel = 3},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_REG, .is_addr = 1, .sizing = s_sizing_int, .reg = REG_RAX},
-        {TACA_IMM, .sizing = s_sizing_int, .imm = 10},
-    });
-    REQUIRE_NEXT_TACE({TACO_RETURN});
-    // case 2:
-    REQUIRE_NEXT_TACE({
-        TACO_LABEL,
-        {TACA_ALABEL, .alabel = 4},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_REG, .is_addr = 1, .sizing = s_sizing_int, .reg = REG_RAX},
-        {TACA_IMM, .sizing = s_sizing_int, .imm = 20},
-    });
-    REQUIRE_NEXT_TACE({TACO_RETURN});
-    // default:
-    REQUIRE_NEXT_TACE({
-        TACO_LABEL,
-        {TACA_ALABEL, .alabel = 5},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_REG, .is_addr = 1, .sizing = s_sizing_int, .reg = REG_RAX},
-        {TACA_IMM, .sizing = s_sizing_int, .imm = 30},
-    });
-    REQUIRE_NEXT_TACE({TACO_RETURN});
-    // implicit jump to end
-    REQUIRE_NEXT_TACE({
-        TACO_JUMP,
-        {TACA_ALABEL, .alabel = 1},
-    });
-
-    // jump table
-    REQUIRE_NEXT_TACE({
-        TACO_LABEL,
-        {TACA_ALABEL, .alabel = 2},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_REG, .is_addr = 1, .sizing = s_sizing_ptr, .reg = REG_RCX},
-        {TACA_FRAME, .sizing = s_sizing_int, .frame_offset = 0},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_CTBZ,
-        {TACA_IMM, .sizing = s_sizing_int, .imm = 1},
-        {TACA_ALABEL, .alabel = 3},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_CTBZ,
-        {TACA_IMM, .sizing = s_sizing_int, .imm = 2},
-        {TACA_ALABEL, .alabel = 4},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_JUMP,
-        {TACA_ALABEL, .alabel = 5},
-    });
-
-    REQUIRE_NEXT_TACE({
-        TACO_LABEL,
-        {TACA_ALABEL, .alabel = 1},
-    });
-
-    REQUIRE_END_TACE();
-
-    rc = 0;
-fail:
-
-    return rc;
-}
-
-int test_be_ternary(TestState* state, StandardTest* test)
-{
-    int rc = 1;
-    SUBTEST(betest_run(state,
-                       test,
-                       "int f(int x) {\n"
-                       "return x == 1 ? 10 : 20;"
-                       "}"));
-    size_t index = 0;
-
-    // prelude
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = s_sizing_int, .frame_offset = 0},
-        {TACA_REG, .sizing = s_sizing_int, .reg = REG_RDI},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_EQ,
-        {TACA_FRAME, .sizing = s_sizing_int, .frame_offset = 0},
-        {TACA_IMM, .sizing = s_sizing_int, .imm = 1},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_BRZ,
-        {TACA_REF, .sizing = s_sizing_int, .ref = index - 1},
-        {TACA_ALABEL, .alabel = 1},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = s_sizing_int, .frame_offset = 4},
-        {TACA_IMM, .sizing = s_sizing_int, .imm = 10},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_JUMP,
-        {TACA_ALABEL, .alabel = 2},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_LABEL,
-        {TACA_ALABEL, .alabel = 1},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_FRAME, .is_addr = 1, .sizing = s_sizing_int, .frame_offset = 4},
-        {TACA_IMM, .sizing = s_sizing_int, .imm = 20},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_LABEL,
-        {TACA_ALABEL, .alabel = 2},
-    });
-    REQUIRE_NEXT_TACE({
-        TACO_ASSIGN,
-        {TACA_REG, .is_addr = 1, .sizing = s_sizing_int, .reg = REG_RAX},
-        {TACA_FRAME, .sizing = s_sizing_int, .frame_offset = 4},
-    });
-    REQUIRE_NEXT_TACE({TACO_RETURN});
-
-    REQUIRE_END_TACE();
-
-    rc = 0;
-fail:
-
-    return rc;
-}
-
 int test_be_fnstatic(TestState* state, StandardTest* test)
 {
     int rc = 1;
@@ -3909,72 +3386,6 @@ fail:
     return rc;
 }
 
-int test_be_static_init(TestState* state, StandardTest* test)
-{
-    int rc = 1;
-    SUBTEST(betest_run(state,
-                       test,
-                       "enum {v1 = 2};"
-                       "static int data[] = {1,v1,3};\n"
-                       "static const char* const s_reg_names[] = {\"%rax\", \"%rbx\"};\n"
-                       "extern void bar() {}\n"
-                       "static void foo() {}\n"
-                       "static void* ptrs[] = { foo, bar };\n"));
-
-    struct Expr** const exprs = (struct Expr**)test->parser->expr_seqs.data;
-    REQUIRE_EQ(6, test->parser->top->seq.ext);
-    REQUIRE_EXPR(StmtDecls, decls, exprs[test->parser->top->seq.off + 1])
-    {
-        REQUIRE_EQ(1, decls->seq.ext);
-        REQUIRE_EXPR(Decl, w, exprs[decls->seq.off])
-        {
-            REQUIRE_AST(AstInit, w_init, w->init)
-            {
-                REQUIRE_SIZING_EQ(s_sizing_int, w_init->sizing);
-                REQUIRE_EQ(0, w_init->offset);
-
-                REQUIRE(w_init->next);
-                REQUIRE_SIZING_EQ(s_sizing_int, w_init->next->sizing);
-                REQUIRE_EQ(4, w_init->next->offset);
-
-                REQUIRE(w_init->next->next);
-                REQUIRE_SIZING_EQ(s_sizing_int, w_init->next->next->sizing);
-                REQUIRE_EQ(8, w_init->next->next->offset);
-
-                REQUIRE(w_init->next->next->next);
-                REQUIRE_NULL(w_init->next->next->next->init);
-            }
-            REQUIRE_EQ(12, w->sym->size.width);
-        }
-    }
-
-    array_push_byte(&test->cg->data, '\0');
-
-    REQUIRE_LINES(test->cg->data.data)
-    {
-        REQUIRE_LINE(".p2align 3");
-        REQUIRE_LINE("_data:");
-        REQUIRE_LINE(".byte 1, 0, 0, 0, 2, 0, 0, 0");
-        REQUIRE_LINE(".byte 3, 0, 0, 0");
-        REQUIRE_LINE("");
-        REQUIRE_LINE(".p2align 3");
-        REQUIRE_LINE("_s_reg_names:");
-        REQUIRE_LINE(".quad L_.S0 + 0");
-        REQUIRE_LINE(".quad L_.S1 + 0");
-        REQUIRE_LINE("");
-        REQUIRE_LINE(".p2align 3");
-        REQUIRE_LINE("_ptrs:");
-        REQUIRE_LINE(".quad _foo + 0");
-        REQUIRE_LINE(".quad _bar + 0");
-        REQUIRE_LINE("");
-    }
-
-    rc = 0;
-fail:
-
-    return rc;
-}
-
 int test_cg_call(TestState* state, StandardTest* test)
 {
     int rc = 1;
@@ -4176,11 +3587,20 @@ int main(int argc, char** argv)
     typedef int (*stdtest_t)(struct TestState*, struct StandardTest*);
 
     static const stdtest_t stdtests[] = {
-        test_be_static_init, test_be_simple,       test_be_simple2, test_be_arithmetic, test_be_bitmath,
-        test_be_memory_ret,  test_be_nested_array, test_be_cast,    test_be_got,        test_be_va_args,
-        test_be_va_args2,    test_be_conversions,  test_be_init,    test_be_switch,     test_be_ternary,
-        test_be_fnstatic,    test_cg_assign,       test_cg_call,    test_cg_add,        test_cg_bitmath,
-        test_cg_refs,        test_cg_regalloc,
+        test_be_memory_ret,
+        test_be_nested_array,
+        test_be_got,
+        test_be_va_args,
+        test_be_va_args2,
+        test_be_conversions,
+        test_be_init,
+        test_be_fnstatic,
+        test_cg_assign,
+        test_cg_call,
+        test_cg_add,
+        test_cg_bitmath,
+        test_cg_refs,
+        test_cg_regalloc,
     };
 
     static int (*const othertests[])(struct TestState*) = {

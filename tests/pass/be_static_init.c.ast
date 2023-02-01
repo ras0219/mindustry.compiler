@@ -1,0 +1,37 @@
+(STMT_BLOCK
+ (STMT_DECLS
+  (AST_DECLSPEC enum $ enum (STMT_DECLS
+    (AST_DECL v1 ? /* AST_DECLSPEC */
+     (EXPR_LIT 2 D)))))
+ (STMT_DECLS
+  (AST_DECLSPEC int $)
+  (AST_DECL data (AST_DECLARR
+    ? /* AST_DECLSPEC */)
+   (AST_INIT
+    0 0 (EXPR_LIT 1 D)
+    0 0 (EXPR_REF v1)
+    0 0 (EXPR_LIT 3 D))))
+ (STMT_DECLS
+  (AST_DECLSPEC char $ const)
+  (AST_DECL s_reg_names (AST_DECLARR
+    (AST_DECLPTR? /* AST_DECLSPEC */))
+   (AST_INIT
+    0 0 (EXPR_LIT)
+    0 0 (EXPR_LIT))))
+ (STMT_DECLS
+  (AST_DECLSPEC void $)
+  (AST_DECL bar (AST_DECLFN
+    ? /* AST_DECLSPEC */)
+   (STMT_BLOCK)))
+ (STMT_DECLS
+  (AST_DECLSPEC void $)
+  (AST_DECL foo (AST_DECLFN
+    ? /* AST_DECLSPEC */)
+   (STMT_BLOCK)))
+ (STMT_DECLS
+  (AST_DECLSPEC void $)
+  (AST_DECL ptrs (AST_DECLARR
+    (AST_DECLPTR? /* AST_DECLSPEC */))
+   (AST_INIT
+    0 0 (EXPR_REF foo)
+    0 0 (EXPR_REF bar)))))
