@@ -1,0 +1,68 @@
+(STMT_BLOCK
+ (STMT_DECLS
+  (AST_DECLSPEC typedef __builtin_va_list $)
+  (AST_DECL __gnu_va_list ? /* AST_DECLSPEC */))
+ (STMT_DECLS
+  (AST_DECLSPEC typedef __gnu_va_list __gnu_va_list $)
+  (AST_DECL va_list ? /* AST_DECLSPEC */))
+ (STMT_DECLS
+  (AST_DECLSPEC void $)
+  (AST_DECL g (AST_DECLFN
+    (STMT_DECLS
+     (AST_DECLSPEC char $ const)
+     (AST_DECL fmt (AST_DECLPTR? /* AST_DECLSPEC */)))
+    (STMT_DECLS
+     (AST_DECLSPEC __builtin_va_list $)
+     (AST_DECL w ? /* AST_DECLSPEC */))
+    ? /* AST_DECLSPEC */)
+   (STMT_BLOCK
+    (STMT_DECLS
+     (AST_DECLSPEC int $)
+     (AST_DECL x ? /* AST_DECLSPEC */
+      (EXPR_BUILTIN __builtin_va_arg
+       (AST_DECLSPEC int $)
+       (AST_DECL ? /* AST_DECLSPEC */)
+       (EXPR_REF w)
+       (null) 0))))))
+ (STMT_DECLS
+  (AST_DECLSPEC void $)
+  (AST_DECL f (AST_DECLFN
+    (STMT_DECLS
+     (AST_DECLSPEC char $ const)
+     (AST_DECL fmt (AST_DECLPTR? /* AST_DECLSPEC */))) ...
+    ? /* AST_DECLSPEC */)
+   (STMT_BLOCK
+    (STMT_DECLS
+     (AST_DECLSPEC va_list va_list $)
+     (AST_DECL v ? /* AST_DECLSPEC */))
+    (EXPR_BUILTIN __builtin_va_start
+     (null)
+     (null)
+     (EXPR_REF v)
+     (EXPR_REF fmt) 0)
+    (EXPR_CALL
+     (EXPR_REF g)
+     (EXPR_REF fmt)
+     (EXPR_REF v))
+    (STMT_DECLS
+     (AST_DECLSPEC int $)
+     (AST_DECL x ? /* AST_DECLSPEC */
+      (EXPR_BUILTIN __builtin_va_arg
+       (AST_DECLSPEC int $)
+       (AST_DECL ? /* AST_DECLSPEC */)
+       (EXPR_REF v)
+       (null) 0)))
+    (EXPR_BUILTIN __builtin_va_end
+     (null)
+     (null)
+     (EXPR_REF v)
+     (null) 0)
+    (EXPR_CALL
+     (EXPR_REF f)
+     (EXPR_LIT 0)
+     (EXPR_LIT 1 D)
+     (EXPR_LIT 2 D)
+     (EXPR_LIT 2 D)
+     (EXPR_LIT 2 D)
+     (EXPR_LIT 2 D)
+     (EXPR_LIT 2 D))))))
