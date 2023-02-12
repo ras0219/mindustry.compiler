@@ -1,0 +1,44 @@
+(STMT_BLOCK
+ (STMT_DECLS
+  (AST_DECLSPEC S S $ su (STMT_BLOCK
+    (STMT_DECLS
+     (AST_DECLSPEC int $)
+     (AST_DECL x ? /* AST_DECLSPEC */)
+     (AST_DECL y ? /* AST_DECLSPEC */)
+     (AST_DECL z ? /* AST_DECLSPEC */)
+     (AST_DECL w ? /* AST_DECLSPEC */)))))
+ (STMT_DECLS
+  (AST_DECLSPEC A A $ su (STMT_BLOCK
+    (STMT_DECLS
+     (AST_DECLSPEC S S $)
+     (AST_DECL s1 ? /* AST_DECLSPEC */)
+     (AST_DECL s2 ? /* AST_DECLSPEC */)))))
+ (STMT_DECLS
+  (AST_DECLSPEC W W $ su (STMT_BLOCK
+    (STMT_DECLS
+     (AST_DECLSPEC char $ const)
+     (AST_DECL s (AST_DECLPTR? /* AST_DECLSPEC */)))
+    (STMT_DECLS
+     (AST_DECLSPEC char $)
+     (AST_DECL buf (AST_DECLARR
+       (EXPR_LIT 128 D)
+       ? /* AST_DECLSPEC */))))))
+ (STMT_DECLS
+  (AST_DECLSPEC void $)
+  (AST_DECL foo (AST_DECLFN
+    (STMT_DECLS
+     (AST_DECLSPEC W W $)
+     (AST_DECL p (AST_DECLPTR? /* AST_DECLSPEC */)))
+    ? /* AST_DECLSPEC */)
+   (STMT_BLOCK
+    (STMT_DECLS
+     (AST_DECLSPEC A A $)
+     (AST_DECL s1 ? /* AST_DECLSPEC */
+      (AST_INIT
+       0 0 (EXPR_LIT 0))))
+    (STMT_DECLS
+     (AST_DECLSPEC W W $)
+     (AST_DECL w ? /* AST_DECLSPEC */
+      (AST_INIT
+       0 1 (EXPR_FIELD -> buf 8
+        (EXPR_REF p)))))))))

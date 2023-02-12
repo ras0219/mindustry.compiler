@@ -2217,6 +2217,7 @@ static void parser_dump_ast(struct Parser* p, FILE* f, void* ptr, int depth)
         {
             struct ExprBinOp* blk = (void*)ast;
             if (blk->tok) fprintf(f, " %s", token_str(p, blk->tok));
+            if (blk->take_address) fprintf(f, " take_addr");
             nl_indent(f, depth);
             parser_dump_ast(p, f, blk->lhs, depth + 1);
             nl_indent(f, depth);
@@ -2227,6 +2228,7 @@ static void parser_dump_ast(struct Parser* p, FILE* f, void* ptr, int depth)
         {
             struct ExprAdd* blk = (void*)ast;
             if (blk->tok) fprintf(f, " %s", token_str(p, blk->tok));
+            if (blk->take_address) fprintf(f, " take_addr");
             nl_indent(f, depth);
             parser_dump_ast(p, f, blk->lhs, depth + 1);
             nl_indent(f, depth);
@@ -2236,7 +2238,7 @@ static void parser_dump_ast(struct Parser* p, FILE* f, void* ptr, int depth)
                 nl_indent(f, depth);
                 fprintf(f, " %d", blk->mult);
             }
-            if (blk->elaborated) parser_dump_sizing(f, depth, blk->sizing);
+            parser_dump_sizing(f, depth, blk->sizing);
             break;
         }
         case EXPR_ASSIGN:
@@ -2260,6 +2262,7 @@ static void parser_dump_ast(struct Parser* p, FILE* f, void* ptr, int depth)
             {
                 fprintf(f, " %s", suffix_to_string(blk->suffix));
             }
+            if (blk->take_address) fprintf(f, " take_addr");
             break;
         }
         case EXPR_UNOP:
@@ -2285,6 +2288,11 @@ static void parser_dump_ast(struct Parser* p, FILE* f, void* ptr, int depth)
         {
             struct ExprDeref* blk = (void*)ast;
             if (blk->tok) fprintf(f, " %s", token_str(p, blk->tok));
+            if (blk->take_address)
+            {
+                nl_indent(f, depth);
+                fprintf(f, " take_addr");
+            }
             nl_indent(f, depth);
             parser_dump_ast(p, f, &blk->lhs->ast, depth + 1);
             break;
@@ -2293,6 +2301,11 @@ static void parser_dump_ast(struct Parser* p, FILE* f, void* ptr, int depth)
         {
             struct ExprAddress* blk = (void*)ast;
             if (blk->tok) fprintf(f, " %s", token_str(p, blk->tok));
+            if (blk->take_address)
+            {
+                nl_indent(f, depth);
+                fprintf(f, " take_addr");
+            }
             nl_indent(f, depth);
             parser_dump_ast(p, f, &blk->lhs->ast, depth + 1);
             break;
@@ -2303,6 +2316,7 @@ static void parser_dump_ast(struct Parser* p, FILE* f, void* ptr, int depth)
             if (blk->tok) fprintf(f, " %s", token_str(p, blk->tok));
             if (blk->fieldname) fprintf(f, " %s", blk->fieldname);
             fprintf(f, " %zu", blk->field_offset);
+            if (blk->take_address) fprintf(f, " take_addr");
             nl_indent(f, depth);
             parser_dump_ast(p, f, &blk->lhs->ast, depth + 1);
             break;
@@ -2322,6 +2336,7 @@ static void parser_dump_ast(struct Parser* p, FILE* f, void* ptr, int depth)
         {
             struct ExprRef* blk = (void*)ast;
             if (blk->tok) fprintf(f, " %s", token_str(p, blk->tok));
+            if (blk->take_address) fprintf(f, " take_addr");
             break;
         }
         case EXPR_CALL:
@@ -2370,24 +2385,6 @@ static void parser_dump_ast(struct Parser* p, FILE* f, void* ptr, int depth)
     }
     fprintf(f, ")");
 }
-
-#if 0
-static void* dump_sym_pool(void* f, void* bucket, size_t n)
-{
-    Symbol* syms = bucket;
-    for (size_t i = 0; i < n; ++i)
-    {
-        fprintf((FILE*)f, "(Symbol '%s'", syms[i].name ? syms[i].name : "");
-        if (syms[i].def)
-        {
-            if (syms[i].def->tok) fprintf((FILE*)f, "\n  %s:%d", syms[i].def->tok->rc.file, syms[i].def->tok->rc.row);
-        }
-        fprintf((FILE*)f, ")\n");
-    }
-
-    return NULL;
-}
-#endif
 
 void parser_dump(struct Parser* p, FILE* f)
 {

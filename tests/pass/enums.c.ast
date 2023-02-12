@@ -15,7 +15,7 @@
      (AST_DECL a ? /* AST_DECLSPEC */))))
   (AST_DECL W ? /* AST_DECLSPEC */))
  (STMT_DECLS
-  (AST_DECLSPEC int $)
+  (AST_DECLSPEC void $)
   (AST_DECL main (AST_DECLFN
     ? /* AST_DECLSPEC */)
    (STMT_BLOCK

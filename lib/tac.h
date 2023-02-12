@@ -34,13 +34,10 @@
     Y(TACO_BRNZ)                                                                                                       \
     Y(TACO_CTBZ)                                                                                                       \
     Y(TACO_JUMP)                                                                                                       \
-    Y(TACO_PARAM)                                                                                                      \
     Y(TACO_CALL)                                                                                                       \
     Y(TACO_RETURN)                                                                                                     \
     Y(TACO_LEA)                                                                                                        \
-    Y(TACO_STORE)                                                                                                      \
-    Y(TACO_LOAD)                                                                                                       \
-    Y(TACO_ARG)
+    Y(TACO_LOAD)
 
 #define X_TACA_KIND(Y)                                                                                                 \
     Y(TACA_VOID)                                                                                                       \

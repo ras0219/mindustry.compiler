@@ -8,6 +8,7 @@
 #include "litsuffix.h"
 #include "seqview.h"
 #include "sizing.h"
+#include "typestr.h"
 
 #define X_FOREACH_EXPR(Y)                                                                                              \
     Y(EXPR_REF)                                                                                                        \
@@ -93,7 +94,8 @@ typedef struct Ast
     INHERIT_AST;                                                                                                       \
     /* filled by elaboration */                                                                                        \
     unsigned char take_address;                                                                                        \
-    Sizing sizing
+    Sizing sizing;                                                                                                     \
+    struct Constant c
 
 typedef struct Expr
 {

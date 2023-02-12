@@ -196,6 +196,79 @@ static struct TACAddress be_push_tace(struct BackEnd* be, const struct TACEntry*
     return ret;
 }
 
+static int taco_has_side_effect(enum TACOKind k)
+{
+    static char data[TACO_KIND_COUNT] = {
+        [TACO_ASSIGN] = 1,
+        [TACO_GOTO] = 1,
+        [TACO_BRZ] = 1,
+        [TACO_BRNZ] = 1,
+        [TACO_CTBZ] = 1,
+        [TACO_JUMP] = 1,
+        [TACO_LOAD] = 1,
+        [TACO_RETURN] = 1,
+        [TACO_CALL] = 1,
+    };
+    return data[k];
+}
+
+static void be_eliminate_unused_tacs(struct BackEnd* be)
+{
+    const size_t n = array_size(&be->code, sizeof(struct TACEntry));
+    if (n == 0) return;
+    Array used_buf = {0}, used_labels_buf = {0};
+    array_push_zeroes(&used_buf, n * sizeof(size_t));
+    array_push_zeroes(&used_labels_buf, be->next_label - be->fn_start_label);
+    TACEntry* const code = be->code.data;
+    size_t* const used = used_buf.data;
+    unsigned char* const used_labels = used_labels_buf.data;
+    size_t i = n;
+    do
+    {
+        --i;
+        if (used[i] |= taco_has_side_effect(code[i].op))
+        {
+            if (code[i].arg1.kind == TACA_REF)
+                used[code[i].arg1.ref] = 1;
+            else if (code[i].arg1.kind == TACA_ALABEL)
+                used_labels[code[i].arg1.alabel - be->fn_start_label] = 1;
+
+            if (code[i].arg2.kind == TACA_REF)
+                used[code[i].arg2.ref] = 1;
+            else if (code[i].arg2.kind == TACA_ALABEL)
+                used_labels[code[i].arg2.alabel - be->fn_start_label] = 1;
+        }
+    } while (i > 0);
+
+    for (i = 0; i < n; ++i)
+    {
+        if (code[i].op == TACO_LABEL)
+        {
+            used[i] |= used_labels[code[i].arg1.alabel - be->fn_start_label];
+        }
+    }
+
+    for (i = 0; i < n; ++i)
+    {
+        if (used[i] == 0) break;
+    }
+    size_t j = i++;
+    for (; i < n; ++i)
+    {
+        if (used[i] == 1)
+        {
+            if (code[i].arg1.kind == TACA_REF) code[i].arg1.ref = used[code[i].arg1.ref];
+            if (code[i].arg2.kind == TACA_REF) code[i].arg2.ref = used[code[i].arg2.ref];
+            code[j++] = code[i];
+        }
+        used[i] = j;
+    }
+    array_shrink(&be->code, j, sizeof(struct TACEntry));
+
+    array_destroy(&used_labels_buf);
+    array_destroy(&used_buf);
+}
+
 static void be_push_label(struct BackEnd* be, size_t n)
 {
     struct TACEntry* entry = array_push_zeroes(&be->code, sizeof(struct TACEntry));
@@ -339,7 +412,6 @@ static int be_dereference(struct BackEnd* be, struct TACAddress* out, Sizing siz
 
 static int be_compile_stmt(struct BackEnd* be, struct Ast* e);
 static int be_compile_expr(struct BackEnd* be, struct Expr* e, struct TACAddress* out);
-static int be_compile_lvalue(struct BackEnd* be, struct Expr* e, struct TACAddress* out);
 static int be_compile_init(
     struct BackEnd* be, struct Ast* e, size_t frame_base, size_t offset, Sizing sizing, uint8_t is_aggregate_init)
 {
@@ -371,6 +443,7 @@ static int be_compile_init(
     else
     {
     expr_init:;
+        Expr* expr = (Expr*)e;
         struct TACEntry assign = {
             .op = TACO_ASSIGN,
             .arg1 =
@@ -382,7 +455,7 @@ static int be_compile_init(
                 },
             .rc = e->tok ? &e->tok->rc : NULL,
         };
-        UNWRAP(be_compile_expr(be, (struct Expr*)e, &assign.arg2));
+        UNWRAP(be_compile_expr(be, expr, &assign.arg2));
         if (e->kind == EXPR_LIT)
         {
             ExprLit* lit = (void*)e;
@@ -391,6 +464,10 @@ static int be_compile_init(
                 assign.arg2.is_addr = 0;
                 assign.arg2.sizing.width = assign.arg1.sizing.width;
             }
+        }
+        else if (expr->c.is_const && !expr->c.sym)
+        {
+            assign.arg2 = taca_imm(expr->c.value.lower);
         }
         be_push_tace(be, &assign, s_sizing_zero);
     }
@@ -440,6 +517,8 @@ static void be_compile_ExprLit_Sym(BackEnd* be, Symbol* sym)
         const ExprLit* lit = sym->string_constant;
         cg_string_constant(be->cg, be->next_constant, lit->text, lit->tok->tok_len);
         sym->addr = taca_const_addr(be->next_constant);
+        sym->addr.is_addr = 0;
+        sym->addr.sizing.width = lit->tok->tok_len + 1;
         ++be->next_constant;
     }
 }
@@ -467,35 +546,6 @@ static int be_compile_ExprLit(struct BackEnd* be, struct ExprLit* e, struct TACA
     return rc;
 }
 
-static int be_compile_lvalue_ExprLit(struct BackEnd* be, struct ExprLit* e, struct TACAddress* out)
-{
-    int rc = 0;
-
-    if (e->tok->type == LEX_NUMBER || e->tok->type == LEX_CHARLIT)
-    {
-        rc = parser_tok_error(e->tok, "error: cannot take address of numeric literals\n");
-    }
-    else if (e->tok->type == LEX_STRING)
-    {
-        be_compile_ExprLit_Sym(be, e->sym);
-        *out = e->sym->addr;
-    }
-    else
-    {
-        rc = 1;
-        parser_tok_error(e->tok, "error: unimplemented literal type (%d)\n", e->tok->type);
-    }
-
-    return rc;
-}
-
-static int be_compile_lvalue_ExprRef(struct BackEnd* be, struct ExprRef* e, struct TACAddress* out)
-{
-    *out = e->sym->addr;
-    be_take_address(be, out);
-    return 0;
-}
-
 static int be_compile_ExprRef(struct BackEnd* be, struct ExprRef* esym, struct TACAddress* out)
 {
     int rc = 0;
@@ -508,14 +558,11 @@ static int be_compile_ExprRef(struct BackEnd* be, struct ExprRef* esym, struct T
     else
     {
         *out = esym->sym->addr;
-        if (esym->take_address)
-        {
-            be_take_address(be, out);
-        }
     }
     // fail:
     return rc;
 }
+
 static int be_compile_ExprCall(struct BackEnd* be, struct ExprCall* e, struct TACAddress* out)
 {
     if (!e->fn) return parser_ice_tok(e->tok);
@@ -602,18 +649,6 @@ fail:
     array_destroy(&param_addr);
     return rc;
 }
-static int be_compile_lvalue_ExprCall(struct BackEnd* be, struct ExprCall* e, struct TACAddress* out)
-{
-    int rc = 0;
-    UNWRAP(be_compile_ExprCall(be, e, out));
-    be_take_address(be, out);
-fail:
-    return rc;
-}
-static int be_compile_lvalue_ExprCast(struct BackEnd* be, struct ExprCast* e, struct TACAddress* out)
-{
-    return parser_tok_error(e->tok, "error: cannot get address of cast expression\n");
-}
 
 static int be_compile_arith_rhs(BackEnd* be, Expr* rhs, int32_t info, TACAddress* out)
 {
@@ -689,7 +724,7 @@ static int be_compile_lvalue_ExprAssign(struct BackEnd* be, struct ExprAssign* e
         case TOKEN_SYM1('='):
             tace.op = TACO_ASSIGN;
             UNWRAP(be_compile_expr(be, e->rhs, &tace.arg2));
-            UNWRAP(be_compile_lvalue(be, e->lhs, out));
+            UNWRAP(be_compile_expr(be, e->lhs, out));
             tace.arg1 = *out;
             tace.arg1.sizing = e->sizing;
             tace.arg2.sizing = tace.arg2.sizing;
@@ -705,7 +740,7 @@ binary_op_assign:
         UNWRAP(be_compile_arith_rhs(be, e->rhs, e->mult, &tace.arg2));
     else
         UNWRAP(be_compile_expr(be, e->rhs, &tace.arg2));
-    UNWRAP(be_compile_lvalue(be, e->lhs, out));
+    UNWRAP(be_compile_expr(be, e->lhs, out));
     tace.arg1 = be_deref(be, out, e->lhs->sizing, &e->tok->rc);
     tace.arg2 = be_push_tace(be, &tace, e->sizing);
     tace.arg1 = *out;
@@ -718,11 +753,6 @@ fail:
     return rc;
 }
 
-static int be_compile_lvalue_ExprDeref(struct BackEnd* be, struct ExprDeref* e, struct TACAddress* out)
-{
-    return be_compile_expr(be, e->lhs, out);
-}
-
 static int be_compile_ExprBuiltin(struct BackEnd* be, struct ExprBuiltin* e, struct TACAddress* out)
 {
     int rc = 0;
@@ -732,7 +762,7 @@ static int be_compile_ExprBuiltin(struct BackEnd* be, struct ExprBuiltin* e, str
         case LEX_UUVA_START:
             // see https://uclibc.org/docs/psABI-x86_64.pdf
             tace.op = TACO_ASSIGN;
-            UNWRAP(be_compile_lvalue(be, e->expr1, &tace.arg1));
+            UNWRAP(be_compile_expr(be, e->expr1, &tace.arg1));
             // gp_offset
             tace.arg1.is_addr = 1;
             tace.arg1.sizing = s_sizing_uint;
@@ -764,7 +794,7 @@ static int be_compile_ExprBuiltin(struct BackEnd* be, struct ExprBuiltin* e, str
         {
             TACAddress va;
             UNWRAP(be_compile_expr(be, e->expr1, &va));
-            const size_t complete_lbl = ++be->next_label;
+            const size_t complete_lbl = be->next_label++;
             *out = be_alloc_temp(be, e->sizing);
             if (e->sizing.width <= 8)
             {
@@ -778,7 +808,7 @@ static int be_compile_ExprBuiltin(struct BackEnd* be, struct ExprBuiltin* e, str
                     .arg1 = gp_offset,
                     .arg2 = taca_imm(48),
                 };
-                const size_t use_memory_lbl = ++be->next_label;
+                const size_t use_memory_lbl = be->next_label++;
                 const TACEntry jump_stack = {
                     .rc = &e->tok->rc,
                     .op = TACO_BRZ,
@@ -870,20 +900,6 @@ fail:
     return rc;
 }
 
-static int be_compile_lvalue_ExprBuiltin(struct BackEnd* be, struct ExprBuiltin* e, struct TACAddress* out)
-{
-    int rc = 0;
-    switch (e->tok->type)
-    {
-        default:
-            UNWRAP(parser_tok_error(
-                e->tok, "error: lvalue builtin operation not yet implemented: %s\n", token_str(be->parser, e->tok)));
-            break;
-    }
-fail:
-    return rc;
-}
-
 static int be_compile_ExprUnOp(struct BackEnd* be, struct ExprUnOp* e, struct TACAddress* out)
 {
     int rc = 0;
@@ -931,7 +947,7 @@ fail:
 
 static int be_compile_ExprAddress(struct BackEnd* be, ExprAddress* e, struct TACAddress* out)
 {
-    return be_compile_lvalue(be, e->lhs, out);
+    return be_compile_expr(be, e->lhs, out);
 }
 
 static int be_compile_ExprIncr(struct BackEnd* be, struct ExprIncr* e, struct TACAddress* out)
@@ -940,7 +956,7 @@ static int be_compile_ExprIncr(struct BackEnd* be, struct ExprIncr* e, struct TA
     if (e->sizeof_ == 0) abort();
 
     TACAddress lhs_lvalue = {0};
-    UNWRAP(be_compile_lvalue(be, e->lhs, &lhs_lvalue));
+    UNWRAP(be_compile_expr(be, e->lhs, &lhs_lvalue));
     TACEntry tace = {
         .rc = token_rc(e->tok),
         .op = e->tok->type == TOKEN_SYM2('+', '+') ? TACO_ADD : TACO_SUB,
@@ -971,8 +987,8 @@ static int be_compile_ExprTernary(struct BackEnd* be, struct ExprTernary* e, str
 {
     int rc = 0;
     if (!e->cond || !e->iffalse || !e->iftrue) return parser_ice_tok(e->tok);
-    size_t on_false = ++be->next_label;
-    size_t end = ++be->next_label;
+    size_t on_false = be->next_label++;
+    size_t end = be->next_label++;
     TACEntry tace = {
         .op = TACO_BRZ,
         .arg2.kind = TACA_ALABEL,
@@ -1076,8 +1092,8 @@ static int be_compile_ExprBinOp(struct BackEnd* be, struct ExprBinOp* e, struct 
             if (e->rhs->kind != EXPR_BINOP) abort();
             struct ExprBinOp* rhs = (struct ExprBinOp*)e->rhs;
             UNWRAP(be_compile_expr(be, e->lhs, &tace.arg1));
-            size_t on_false = ++be->next_label;
-            size_t end = ++be->next_label;
+            size_t on_false = be->next_label++;
+            size_t end = be->next_label++;
             tace.op = TACO_BRZ;
             tace.arg2.kind = TACA_ALABEL;
             tace.arg2.alabel = on_false;
@@ -1109,7 +1125,7 @@ static int be_compile_ExprBinOp(struct BackEnd* be, struct ExprBinOp* e, struct 
             assign_out.arg1.is_addr = 1;
             UNWRAP(be_compile_expr(be, e->lhs, &assign_out.arg2));
             be_push_tace(be, &assign_out, e->sizing);
-            size_t on_false = ++be->next_label;
+            size_t on_false = be->next_label++;
             tace.op = e->tok->type == TOKEN_SYM2('&', '&') ? TACO_BRZ : TACO_BRNZ;
             tace.arg2.kind = TACA_ALABEL;
             tace.arg2.alabel = on_false;
@@ -1164,6 +1180,13 @@ push:
         if (is_unsigned) tace.op = tace.op == TACO_LT ? TACO_LTU : TACO_LTEQU;
     }
     *out = be_push_tace(be, &tace, e->sizing);
+    if (e->c.is_const)
+    {
+        if (!e->c.sym)
+        {
+            *out = taca_imm(e->c.value.lower);
+        }
+    }
 
 fail:
     return rc;
@@ -1233,13 +1256,13 @@ static int be_compile_StmtCase(struct BackEnd* be, struct StmtCase* stmt)
     {
         struct SwitchCase* c = array_alloc(&be->switch_cases, sizeof(struct SwitchCase));
         c->imm = stmt->value;
-        c->label = ++be->next_label;
+        c->label = be->next_label++;
         be_push_label(be, c->label);
     }
     else
     {
         // default
-        be->default_label = ++be->next_label;
+        be->default_label = be->next_label++;
         be_push_label(be, be->default_label);
     }
     return 0;
@@ -1251,9 +1274,9 @@ static int be_compile_StmtSwitch(struct BackEnd* be, struct StmtSwitch* stmt)
     int start_frame_size = be->frame_size;
     size_t prev_break = be->break_label;
     size_t switch_case_offset = array_size(&be->switch_cases, sizeof(struct SwitchCase));
-    be->break_label = ++be->next_label;
+    be->break_label = be->next_label++;
     be->default_label = be->break_label;
-    size_t jump_table = ++be->next_label;
+    size_t jump_table = be->next_label++;
     be_push_jump(be, jump_table);
 
     UNWRAP(be_compile_stmts(be, stmt->seq));
@@ -1336,7 +1359,7 @@ static int be_compile_StmtIf(struct BackEnd* be, struct StmtIf* stmt)
 {
     int rc = 0;
     int start_frame_size = be->frame_size;
-    size_t else_lbl = ++be->next_label;
+    size_t else_lbl = be->next_label++;
     struct TACEntry e = {
         .op = TACO_BRZ,
         .arg2 = {.kind = TACA_ALABEL, .alabel = else_lbl},
@@ -1348,7 +1371,7 @@ static int be_compile_StmtIf(struct BackEnd* be, struct StmtIf* stmt)
 
     if (stmt->else_body)
     {
-        size_t end_lbl = ++be->next_label;
+        size_t end_lbl = be->next_label++;
         be_push_jump(be, end_lbl);
         be_push_label(be, else_lbl);
         UNWRAP(be_compile_stmt(be, stmt->else_body));
@@ -1368,9 +1391,9 @@ static int be_compile_StmtLoop(struct BackEnd* be, struct StmtLoop* stmt)
     int rc = 0;
     size_t prev_continue_label = be->continue_label;
     size_t prev_break_label = be->break_label;
-    be->continue_label = ++be->next_label;
-    size_t first_lbl = ++be->next_label;
-    be->break_label = ++be->next_label;
+    be->continue_label = be->next_label++;
+    size_t first_lbl = be->next_label++;
+    be->break_label = be->next_label++;
 
     if (stmt->init)
     {
@@ -1424,10 +1447,10 @@ static void be_compile_global(struct BackEnd* be, Decl* decl)
         const char* name;
         if (decl->specs->parent)
         {
-            ++be->next_label;
-            int n = snprintf(NULL, 0, "%s$%zu", sym->name, be->next_label);
+            int n = snprintf(NULL, 0, "%s$%zu", sym->name, be->next_global);
             name = autoheap_alloc(&be->sym_renames, n + 1);
-            snprintf((char*)name, n + 1, "%s$%zu", sym->name, be->next_label);
+            snprintf((char*)name, n + 1, "%s$%zu", sym->name, be->next_global);
+            ++be->next_global;
         }
         else
         {
@@ -1511,15 +1534,7 @@ fail:
 static int be_compile_lvalue_ExprField(struct BackEnd* be, struct ExprField* e, struct TACAddress* out)
 {
     int rc = 0;
-    if (e->is_arrow)
-    {
-        UNWRAP(be_compile_expr(be, e->lhs, out));
-    }
-    else
-    {
-        UNWRAP(be_compile_lvalue(be, e->lhs, out));
-    }
-
+    UNWRAP(be_compile_expr(be, e->lhs, out));
     *out = be_increment(be, out, e->field_offset);
 
 fail:
@@ -1530,7 +1545,10 @@ static int be_compile_ExprField(struct BackEnd* be, struct ExprField* e, struct 
 {
     int rc = 0;
     UNWRAP(be_compile_lvalue_ExprField(be, e, out));
-    UNWRAP(be_dereference(be, out, e->sizing, &e->tok->rc));
+    if (!e->take_address)
+    {
+        UNWRAP(be_dereference(be, out, e->sizing, &e->tok->rc));
+    }
 
 fail:
     return rc;
@@ -1558,35 +1576,11 @@ fail:
     return rc;
 }
 
-static int be_compile_lvalue(struct BackEnd* be, struct Expr* e, struct TACAddress* out)
-{
-#define DISPATCH(TYPE)                                                                                                 \
-    case AST_KIND_##TYPE: return be_compile_lvalue_##TYPE(be, (struct TYPE*)e, out);
-
-    switch (e->kind)
-    {
-        DISPATCH(ExprRef);
-        DISPATCH(ExprField);
-        DISPATCH(ExprCast);
-        DISPATCH(ExprCall);
-        DISPATCH(ExprLit);
-        DISPATCH(ExprAssign);
-        DISPATCH(ExprDeref);
-        DISPATCH(ExprBuiltin);
-        case STMT_NONE: *out = s_taca_void; return 0;
-        default:
-            parser_tok_error(
-                e->tok, "error: be_compile_lvalue unhandled expr: %s (%d)\n", ast_kind_to_string(e->kind), e->kind);
-            return 1;
-    }
-    return 0;
-#undef DISPATCH
-}
-
 static int be_compile_expr(struct BackEnd* be, struct Expr* e, struct TACAddress* out)
 {
+    int rc;
 #define DISPATCH(TYPE)                                                                                                 \
-    case AST_KIND_##TYPE: return be_compile_##TYPE(be, (struct TYPE*)e, out);
+    case AST_KIND_##TYPE: rc = be_compile_##TYPE(be, (struct TYPE*)e, out); goto end;
 
     switch (e->kind)
     {
@@ -1609,7 +1603,13 @@ static int be_compile_expr(struct BackEnd* be, struct Expr* e, struct TACAddress
                 e->tok, "error: be_compile_expr unhandled expr: %s (%d)\n", ast_kind_to_string(e->kind), e->kind);
             return 1;
     }
-    return 0;
+end:
+    if (e->take_address)
+    {
+        be_take_address(be, out);
+    }
+
+    return rc;
 #undef DISPATCH
 }
 
@@ -1656,6 +1656,7 @@ int be_compile_toplevel_decl(struct BackEnd* be, Decl* decl)
 {
     int rc = 0;
     array_clear(&be->code);
+    be->fn_start_label = be->next_label;
     struct Symbol* const sym = decl->sym;
     if (!sym->name) abort();
     be_compile_global(be, decl);
@@ -1771,6 +1772,7 @@ int be_compile(struct BackEnd* be)
             UNWRAP(be_compile_toplevel_decl(be, decl));
             if (be->code.sz)
             {
+                be_eliminate_unused_tacs(be);
                 if (be->debug_taces)
                 {
                     struct TACEntry* taces = (struct TACEntry*)be->code.data;

@@ -1,0 +1,25 @@
+(STMT_BLOCK
+ (STMT_DECLS
+  (AST_DECLSPEC char $ const)
+  (AST_DECL mode (AST_DECLARR
+    (AST_DECLARR
+     (EXPR_LIT 5 D)
+     ? /* AST_DECLSPEC */))
+   (AST_INIT
+    0 0 (EXPR_LIT)
+    0 0 (EXPR_LIT))))
+ (STMT_DECLS
+  (AST_DECLSPEC char $ const)
+  (AST_DECL main (AST_DECLFN
+    (AST_DECLPTR? /* AST_DECLSPEC */))
+   (STMT_BLOCK
+    (STMT_DECLS
+     (AST_DECLSPEC char $ const)
+     (AST_DECL s (AST_DECLPTR? /* AST_DECLSPEC */)
+      (EXPR_DEREF *
+       (EXPR_REF mode))))
+    (STMT_RETURN (EXPR_DEREF ]
+      (EXPR_ADD [
+       (EXPR_REF mode)
+       (EXPR_LIT 0)
+        5 __u8)))))))

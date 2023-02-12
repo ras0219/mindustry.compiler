@@ -25,7 +25,9 @@ typedef struct BackEnd
 
     size_t frame_size;
     size_t max_frame_size;
+    size_t fn_start_label;
     size_t next_label;
+    size_t next_global;
 
     size_t next_constant;
 

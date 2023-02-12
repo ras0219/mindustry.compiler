@@ -5,6 +5,19 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "Launch MacOS",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/out/runall-test",
+            "args": [
+                "/opt/src/mindustry.compiler"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "MIMode": "lldb"
+        },
+        {
             "name": "Launch",
             "type": "cppdbg",
             "request": "launch",

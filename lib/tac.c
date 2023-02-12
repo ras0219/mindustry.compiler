@@ -44,7 +44,7 @@ void debug_tace(Array* arr, const TACEntry* tace)
     array_push_byte(arr, ')');
 }
 
-void debug_sizing(Array* arr, Sizing sz) { array_appendf(arr, "%c%d", sz.is_signed ? 'i' : 'u', sz.width); }
+static void debug_sizing(Array* arr, Sizing sz) { array_appendf(arr, "%c%d", sz.is_signed ? 'i' : 'u', sz.width); }
 
 void debug_taca(Array* arr, const TACAddress* addr)
 {

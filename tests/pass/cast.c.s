@@ -18,10 +18,6 @@ _main:
     mov %r11, 16(%rsp)
     movsl 16(%rsp), %r11
     mov %r11d, 8(%rsp)
-    mov $0, %r11
-    subq $1, %r11
-    mov %r11, 16(%rsp)
-    movzb 16(%rsp), %r11
-    mov %r11d, 12(%rsp)
+    movl $255, 12(%rsp)
     addq $56, %rsp
     ret

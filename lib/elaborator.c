@@ -576,7 +576,7 @@ static void elaborate_expr_ExprBuiltin(struct Elaborator* elab, struct ExprBuilt
             break;
         case LEX_UUVA_START:
             elaborate_expr(elab, e->expr2, rty);
-            elaborate_expr_decay(elab, e->expr1, rty);
+            elaborate_expr_lvalue(elab, e->expr1, rty);
             if (!typestr_match(rty, &s_valist_ptr))
             {
                 typestr_error2(
@@ -712,7 +712,8 @@ static void elaborate_expr_ExprAddress(struct Elaborator* elab, struct ExprAddre
 }
 static void elaborate_expr_ExprIncr(struct Elaborator* elab, struct ExprIncr* e, struct TypeStr* rty)
 {
-    elaborate_expr_decay(elab, e->lhs, rty);
+    elaborate_expr_lvalue(elab, e->lhs, rty);
+    typestr_dereference(rty);
     const struct TypeStr orig_lhs = *rty;
     unsigned int lhs_mask = typestr_mask(rty);
     if (!(lhs_mask & TYPE_MASK_SCALAR))
@@ -738,15 +739,6 @@ static void elaborate_stmts(struct Elaborator* elab, SeqView stmts)
     {
         elaborate_stmt(elab, seqs[stmts.off + i]);
     }
-}
-
-static void elaborate_init_ty(struct Elaborator* elab, size_t offset, const TypeStr* dty, struct Ast* ast);
-static void elaborate_init(struct Elaborator* elab, size_t offset, struct Decl* decl, struct Ast* ast)
-{
-    struct TypeStr dty;
-    typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, &dty, decl);
-    typestr_strip_cvr(&dty);
-    elaborate_init_ty(elab, offset, &dty, ast);
 }
 
 typedef struct DInitFrame
@@ -782,15 +774,15 @@ static int di_fill_frame(DInitFrame* frame,
                          const RowCol* rc)
 {
     memset(frame, 0, sizeof(*frame));
-    char b = typestr_byte(parent_ty);
+    frame->ty = *parent_ty;
+    typestr_strip_cvr(&frame->ty);
+    char b = frame->ty.buf.buf[frame->ty.buf.buf[0]];
     switch (b)
     {
         case TYPE_BYTE_UNK_ARRAY:
         case TYPE_BYTE_ARRAY:
         {
             frame->is_array = 1;
-            frame->ty = *parent_ty;
-            typestr_strip_cvr(&frame->ty);
             if (b == TYPE_BYTE_UNK_ARRAY)
             {
                 frame->extent = UINT32_MAX;
@@ -830,7 +822,7 @@ static int di_fill_frame(DInitFrame* frame,
         case TYPE_BYTE_UNION: frame->is_union = 1;
         case TYPE_BYTE_STRUCT:
         {
-            TypeSymbol* sym = typestr_get_decl(elab->types, parent_ty);
+            TypeSymbol* sym = typestr_get_decl(elab->types, &frame->ty);
             if (!sym || !sym->def)
             {
                 return parser_ferror(rc, "error: incomplete type\n");
@@ -980,7 +972,8 @@ static void elaborate_init_ty_AstInit(struct Elaborator* elab, size_t offset, co
                 if (di_enter(&iter, elab, &init->tok->rc)) goto fail;
                 back = array_back(&iter.stk, sizeof(*back));
             }
-            typestr_implicit_conversion(elab->types, &init->init->tok->rc, &ts, &back->ty);
+            typestr_implicit_conversion(elab->types, &init->init->tok->rc, &ts_decay, &back->ty);
+            expr->take_address = ts_decay_addr_taken;
         skip_conversion:
             init->is_aggregate_init = typestr_is_aggregate(&back->ty);
             init->offset = back->offset;
@@ -998,7 +991,7 @@ fail:
     di_destroy(&iter);
 }
 
-static void elaborate_init_ty(struct Elaborator* elab, size_t offset, const TypeStr* dty, struct Ast* ast)
+static void elaborate_init_ty(struct Elaborator* elab, size_t offset, const TypeStr* dty, Constant* c, struct Ast* ast)
 {
     if (ast->kind == AST_INIT)
     {
@@ -1042,6 +1035,10 @@ static void elaborate_init_ty(struct Elaborator* elab, size_t offset, const Type
             struct TypeStr ts;
             elaborate_expr_decay(elab, expr, &ts);
             typestr_implicit_conversion(elab->types, ast->tok ? &ast->tok->rc : NULL, &ts, dty);
+            if (typestr_is_const(dty))
+            {
+                *c = ts.c;
+            }
         }
     }
 }
@@ -1309,7 +1306,7 @@ static void elaborate_expr_ExprField_lhs(struct Elaborator* elab, struct ExprFie
 {
     if (typestr_is_unknown(rty)) return;
     const struct TypeStr orig_lhs = *rty;
-    if (e->is_arrow) typestr_dereference(rty);
+    typestr_dereference(rty);
     unsigned int cvr_mask = typestr_strip_cvr(rty);
     TypeSymbol* sym = typestr_get_decl(elab->types, rty);
     if (sym)
@@ -1362,7 +1359,16 @@ static void elaborate_expr_ExprField(struct Elaborator* elab, struct ExprField* 
 #if defined(TRACING_ELAB)
     fprintf(stderr, " EXPR_FIELD\n");
 #endif
-    elaborate_expr(elab, e->lhs, rty);
+
+    if (e->is_arrow)
+    {
+        elaborate_expr_decay(elab, e->lhs, rty);
+    }
+    else
+    {
+        elaborate_expr_lvalue(elab, e->lhs, rty);
+        typestr_dereference(rty);
+    }
     elaborate_expr_ExprField_lhs(elab, e, rty);
 }
 
@@ -1375,6 +1381,7 @@ static void elaborate_expr(struct Elaborator* elab, struct Expr* top_expr, struc
     {
         top_expr->sizing = typestr_calc_sizing_zero_void(elab->types, rty, top_expr->tok);
     }
+    top_expr->c = rty->c;
     top_expr->elaborated = 1;
 }
 
@@ -1408,10 +1415,9 @@ static void elaborate_expr_lvalue_ExprField(Elaborator* elab, ExprField* e, Type
     else
     {
         elaborate_expr_lvalue(elab, e->lhs, rty);
-        typestr_dereference(rty);
     }
     elaborate_expr_ExprField_lhs(elab, e, rty);
-    expr_addressof(&e->expr_base, rty);
+    typestr_add_pointer(rty);
 }
 
 static void elaborate_expr_lvalue(struct Elaborator* elab, struct Expr* expr, struct TypeStr* rty)
@@ -1433,26 +1439,31 @@ static void elaborate_expr_lvalue(struct Elaborator* elab, struct Expr* expr, st
             break;
     }
     expr->sizing = typestr_calc_elem_sizing(elab->types, rty, expr->tok);
+    expr->c = rty->c;
     expr->elaborated = 1;
 }
 
 static void elaborate_expr_decay(struct Elaborator* elab, struct Expr* expr, struct TypeStr* rty)
 {
     elaborate_expr_impl(elab, expr, rty);
-    expr->take_address = typestr_decay(rty);
+    if (typestr_decay(rty))
+    {
+        if (expr->take_address) abort();
+        expr->take_address = 1;
+    }
     expr->sizing = typestr_calc_sizing_zero_void(elab->types, rty, expr->tok);
+    expr->c = rty->c;
     expr->elaborated = 1;
 }
 
-// static void elaborate_complete_sym(Elaborator* elab, Symbol* sym)
-// {
-//     if (!sym->is_complete)
-//     {
-//         sym->is_complete = 1;
-//     }
-// }
-
-static void elaborate_expr_ExprRef(Elaborator* elab, ExprRef* e, TypeStr* rty) { *rty = e->sym->type; }
+static void elaborate_expr_ExprRef(Elaborator* elab, ExprRef* e, TypeStr* rty)
+{
+    *rty = e->sym->type;
+    if (e->sym->size.width == 0)
+    {
+        e->sym->size = typestr_calc_sizing(elab->types, &e->sym->type, e->tok);
+    }
+}
 static void elaborate_expr_ExprCast(Elaborator* elab, ExprCast* e, TypeStr* rty)
 {
     TypeStr orig;
@@ -1688,7 +1699,7 @@ static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
             {
                 Decl* prev = elab->cur_decl;
                 elab->cur_decl = decl;
-                elaborate_init(elab, 0, decl, decl->init);
+                elaborate_init_ty(elab, 0, &sym->type, &sym->type.c, decl->init);
                 elab->cur_decl = prev;
             }
             if (tyb == TYPE_BYTE_UNK_ARRAY)
@@ -1792,7 +1803,10 @@ static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
     }
     else
     {
-        sym->size = typestr_calc_sizing(elab->types, &sym->type, decl->tok);
+        if (!decl->specs->is_extern && !decl->specs->is_typedef)
+        {
+            sym->size = typestr_calc_sizing(elab->types, &sym->type, decl->tok);
+        }
     }
     UNWRAP(parser_has_errors());
 

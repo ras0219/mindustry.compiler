@@ -8,7 +8,7 @@ typedef struct
 {
     enum A a;
 } W;
-int main()
+void main()
 {
     enum A x = a3;
     unsigned y = (x == a2);

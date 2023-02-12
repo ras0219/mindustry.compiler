@@ -12,8 +12,8 @@ const Constant128 s_one_constant = {.lower = 1};
 
 static void mp_mul_i(Constant128* a, Constant128* b)
 {
-    const uint64_t bsr = b->lower >> 1 + (b->upper << 63);
-    const uint64_t asr = a->lower >> 1 + (a->upper << 63);
+    const uint64_t bsr = (b->lower >> 1) + (b->upper << 63);
+    const uint64_t asr = (a->lower >> 1) + (a->upper << 63);
     const uint64_t aup = a->lower * bsr + asr * (b->lower & 1);
     a->upper = aup >> 63;
     a->lower = (aup << 1) + (a->lower & b->lower & 1);

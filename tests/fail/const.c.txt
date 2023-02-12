@@ -1,3 +1,3 @@
 const.c:5:7: error: assignment to const object of type 'const int'
 const.c:6:8: error: assignment to const object of type 'const int'
-const.c:7:21: error: could not implicitly convert 'pointer to const int' to 'pointer to int'
+const.c:7:21: error: could not implicitly convert 'pointer to const int' to 'const pointer to int'

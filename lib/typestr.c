@@ -826,13 +826,22 @@ uint32_t typestr_pop_offset(struct TypeStr* ts)
     }
     return r;
 }
-
+#define CC_ASSERT(X)                                                                                                   \
+    if (X)                                                                                                             \
+    {                                                                                                                  \
+    }                                                                                                                  \
+    else                                                                                                               \
+    {                                                                                                                  \
+        abort();                                                                                                       \
+    }
 TypeSymbol* typestr_get_decl(struct TypeTable* tt, const struct TypeStr* ts)
 {
     char ch = ts->buf.buf[ts->buf.buf[0]];
     if (ch == TYPE_BYTE_STRUCT || ch == TYPE_BYTE_UNION)
     {
-        return tt_get(tt, typestr_get_offset(ts));
+        TypeSymbol* r = tt_get(tt, typestr_get_offset(ts));
+        CC_ASSERT(r);
+        return r;
     }
     return NULL;
 }

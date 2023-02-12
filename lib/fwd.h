@@ -9,3 +9,4 @@ typedef Array StrList;
 typedef struct StringSet StringSet;
 struct Parser;
 struct Token;
+struct Constant;

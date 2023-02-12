@@ -12,7 +12,7 @@ _g:
     mov %rax, 48(%rsp)
     mov 48(%rsp), %rax
     cmp $0, %rax
-    jz  L$2
+    jz  L$1
     mov 8(%rsp), %r11
     add $16, %r11
     mov %r11, 48(%rsp)
@@ -32,8 +32,8 @@ _g:
     movsl 48(%rsp), %r11
     mov 8(%rsp), %r10
     mov %r11d, (%r10)
-    jmp L$1
-L$2:
+    jmp L$0
+L$1:
     mov 8(%rsp), %r11
     add $8, %r11
     mov %r11, 48(%rsp)
@@ -49,7 +49,7 @@ L$2:
     mov 56(%rsp), %r11
     mov 48(%rsp), %r10
     mov %r11, (%r10)
-L$1:
+L$0:
     movsl 20(%rsp), %r11
     mov %r11d, 16(%rsp)
     addq $88, %rsp
@@ -79,7 +79,7 @@ _f:
     mov %rax, 88(%rsp)
     mov 88(%rsp), %rax
     cmp $0, %rax
-    jz  L$4
+    jz  L$3
     mov 72(%rsp), %r11
     movsl 56(%rsp), %r10
     add %r10, %r11
@@ -92,8 +92,8 @@ _f:
     mov %r11, 88(%rsp)
     movsl 88(%rsp), %r11
     mov %r11d, 56(%rsp)
-    jmp L$3
-L$4:
+    jmp L$2
+L$3:
     mov 64(%rsp), %rsi
     leaq 84(%rsp), %rdi
     movsd
@@ -102,7 +102,7 @@ L$4:
     mov %r11, 88(%rsp)
     mov 88(%rsp), %r11
     mov %r11, 64(%rsp)
-L$3:
+L$2:
     movsl 84(%rsp), %r11
     mov %r11d, 80(%rsp)
     movq $2, 0(%rsp)
