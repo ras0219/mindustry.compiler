@@ -2,6 +2,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "errors.h"
 #include "tok.h"
@@ -107,10 +108,12 @@ void parser_print_msgs(FILE* f)
 
 size_t parser_print_msgs_mem(void* buf, size_t sz)
 {
-    FILE* f = fmemopen(buf, sz, "wb");
-    if (!f) abort();
-    parser_print_msgs(f);
-    size_t r = ftello(f);
-    fclose(f);
-    return r;
+    size_t n = sz < s_error.used ? sz : s_error.used;
+    memcpy(buf, s_error.buf, n);
+    sz -= n;
+
+    size_t m = sz < s_warn.used ? sz : s_warn.used;
+    memcpy(buf, s_warn.buf, m);
+    sz -= m;
+    return n + m;
 }

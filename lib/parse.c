@@ -2245,6 +2245,7 @@ static void parser_dump_ast(struct Parser* p, FILE* f, void* ptr, int depth)
         {
             struct ExprAssign* blk = (void*)ast;
             if (blk->tok) fprintf(f, " %s", token_str(p, blk->tok));
+            if (blk->take_address) fprintf(f, " take_addr");
             nl_indent(f, depth);
             parser_dump_ast(p, f, blk->lhs, depth + 1);
             nl_indent(f, depth);
@@ -2337,6 +2338,7 @@ static void parser_dump_ast(struct Parser* p, FILE* f, void* ptr, int depth)
             struct ExprRef* blk = (void*)ast;
             if (blk->tok) fprintf(f, " %s", token_str(p, blk->tok));
             if (blk->take_address) fprintf(f, " take_addr");
+            parser_dump_sizing(f, depth, blk->sizing);
             break;
         }
         case EXPR_CALL:

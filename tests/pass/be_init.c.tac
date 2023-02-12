@@ -15,4 +15,4 @@ TACO_ADD
   TACA_IMM i4 8
 TACO_ASSIGN
   TACA_FRAME u8 is_addr 40
-  TACA_REF u0 is_addr 4
+  TACA_REF u8 4

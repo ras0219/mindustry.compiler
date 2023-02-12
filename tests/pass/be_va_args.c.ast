@@ -38,19 +38,19 @@
     (EXPR_BUILTIN __builtin_va_start
      (null)
      (null)
-     (EXPR_REF v)
+     (EXPR_REF v take_addr)
      (EXPR_REF fmt) 0)
     (EXPR_CALL
-     (EXPR_REF g)
+     (EXPR_REF g take_addr)
      (EXPR_REF fmt)
-     (EXPR_REF v))
+     (EXPR_REF v take_addr))
     (STMT_DECLS
      (AST_DECLSPEC int $)
      (AST_DECL x ? /* AST_DECLSPEC */
       (EXPR_BUILTIN __builtin_va_arg
        (AST_DECLSPEC int $)
        (AST_DECL ? /* AST_DECLSPEC */)
-       (EXPR_REF v)
+       (EXPR_REF v take_addr)
        (null) 0)))
     (EXPR_BUILTIN __builtin_va_end
      (null)
@@ -58,7 +58,7 @@
      (EXPR_REF v)
      (null) 0)
     (EXPR_CALL
-     (EXPR_REF f)
+     (EXPR_REF f take_addr)
      (EXPR_LIT 0)
      (EXPR_LIT 1 D)
      (EXPR_LIT 2 D)

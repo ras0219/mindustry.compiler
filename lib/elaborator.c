@@ -706,6 +706,11 @@ static void elaborate_expr_ExprDeref(struct Elaborator* elab, struct ExprDeref* 
         *rty = s_type_unknown;
     }
 }
+static void elaborate_expr_lvalue_ExprDeref(Elaborator* elab, ExprDeref* e, TypeStr* rty)
+{
+    elaborate_expr_decay(elab, e->lhs, rty);
+    e->take_address = 1;
+}
 static void elaborate_expr_ExprAddress(struct Elaborator* elab, struct ExprAddress* e, struct TypeStr* rty)
 {
     elaborate_expr_lvalue(elab, e->lhs, rty);
@@ -1302,6 +1307,36 @@ static void elaborate_expr_ExprCall(struct Elaborator* elab,
     }
 }
 
+static void elaborate_expr_impl(struct Elaborator* elab, struct Expr* top_expr, struct TypeStr* rty);
+
+static void elaborate_expr(struct Elaborator* elab, struct Expr* top_expr, struct TypeStr* rty)
+{
+    elaborate_expr_impl(elab, top_expr, rty);
+    if (rty->buf.buf[0])
+    {
+        top_expr->sizing = typestr_calc_sizing_zero_void(elab->types, rty, top_expr->tok);
+    }
+    top_expr->c = rty->c;
+    top_expr->elaborated = 1;
+}
+
+static void expr_addressof(Expr* e, TypeStr* ty)
+{
+    e->take_address = 1;
+    typestr_addressof(ty);
+}
+
+static void elaborate_expr_lvalue_ExprRef(Elaborator* elab, ExprRef* e, TypeStr* rty)
+{
+    *rty = e->sym->type;
+    expr_addressof(&e->expr_base, rty);
+}
+static void elaborate_expr_lvalue_ExprAssign(Elaborator* elab, ExprAssign* expr, TypeStr* rty)
+{
+    elaborate_expr_ExprAssign(elab, expr, rty);
+    expr_addressof(&expr->expr_base, rty);
+}
+
 static void elaborate_expr_ExprField_lhs(struct Elaborator* elab, struct ExprField* e, struct TypeStr* rty)
 {
     if (typestr_is_unknown(rty)) return;
@@ -1366,44 +1401,10 @@ static void elaborate_expr_ExprField(struct Elaborator* elab, struct ExprField* 
     }
     else
     {
-        elaborate_expr_lvalue(elab, e->lhs, rty);
-        typestr_dereference(rty);
+        elaborate_expr(elab, e->lhs, rty);
+        expr_addressof(e->lhs, rty);
     }
     elaborate_expr_ExprField_lhs(elab, e, rty);
-}
-
-static void elaborate_expr_impl(struct Elaborator* elab, struct Expr* top_expr, struct TypeStr* rty);
-
-static void elaborate_expr(struct Elaborator* elab, struct Expr* top_expr, struct TypeStr* rty)
-{
-    elaborate_expr_impl(elab, top_expr, rty);
-    if (rty->buf.buf[0])
-    {
-        top_expr->sizing = typestr_calc_sizing_zero_void(elab->types, rty, top_expr->tok);
-    }
-    top_expr->c = rty->c;
-    top_expr->elaborated = 1;
-}
-
-static void expr_addressof(Expr* e, TypeStr* ty)
-{
-    e->take_address = 1;
-    typestr_addressof(ty);
-}
-
-static void elaborate_expr_lvalue_ExprRef(Elaborator* elab, ExprRef* e, TypeStr* rty)
-{
-    *rty = e->sym->type;
-    expr_addressof(&e->expr_base, rty);
-}
-static void elaborate_expr_lvalue_ExprAssign(Elaborator* elab, ExprAssign* expr, TypeStr* rty)
-{
-    elaborate_expr_ExprAssign(elab, expr, rty);
-    expr_addressof(&expr->expr_base, rty);
-}
-static void elaborate_expr_lvalue_ExprDeref(Elaborator* elab, ExprDeref* expr, TypeStr* rty)
-{
-    elaborate_expr_decay(elab, expr->lhs, rty);
 }
 
 static void elaborate_expr_lvalue_ExprField(Elaborator* elab, ExprField* e, TypeStr* rty)
@@ -1418,6 +1419,7 @@ static void elaborate_expr_lvalue_ExprField(Elaborator* elab, ExprField* e, Type
     }
     elaborate_expr_ExprField_lhs(elab, e, rty);
     typestr_add_pointer(rty);
+    e->take_address = 1;
 }
 
 static void elaborate_expr_lvalue(struct Elaborator* elab, struct Expr* expr, struct TypeStr* rty)
@@ -1448,7 +1450,6 @@ static void elaborate_expr_decay(struct Elaborator* elab, struct Expr* expr, str
     elaborate_expr_impl(elab, expr, rty);
     if (typestr_decay(rty))
     {
-        if (expr->take_address) abort();
         expr->take_address = 1;
     }
     expr->sizing = typestr_calc_sizing_zero_void(elab->types, rty, expr->tok);
@@ -1461,7 +1462,7 @@ static void elaborate_expr_ExprRef(Elaborator* elab, ExprRef* e, TypeStr* rty)
     *rty = e->sym->type;
     if (e->sym->size.width == 0)
     {
-        e->sym->size = typestr_calc_sizing(elab->types, &e->sym->type, e->tok);
+        e->sym->size = typestr_calc_sizing(elab->types, rty, e->tok);
     }
 }
 static void elaborate_expr_ExprCast(Elaborator* elab, ExprCast* e, TypeStr* rty)

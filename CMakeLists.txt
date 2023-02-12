@@ -9,7 +9,7 @@ endif()
 project(mindustry.compiler C)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
-add_compile_options(-Werror -std=c11 -Wall -Wno-parentheses -Wno-missing-braces -Wno-comment)
+add_compile_options(-Werror -std=c99 -Wall -Wno-parentheses -Wno-missing-braces -Wno-comment -D_FILE_OFFSET_BITS=64 -D_POSIX_C_SOURCE=200112L)
 
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
     add_compile_options(-Wno-format-truncation)

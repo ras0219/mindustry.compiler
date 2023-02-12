@@ -27,4 +27,16 @@
        2 0 (AST_INIT
         2 0 (EXPR_LIT 2 D)))))
     (EXPR_FIELD . l 4
-     (EXPR_REF a))))))
+     (EXPR_REF a take_addr))
+    (EXPR_FIELD -> l 4
+     (EXPR_ADDRESS &
+      (EXPR_REF a take_addr)))
+    (EXPR_ASSIGN =
+     (EXPR_FIELD . l 4 take_addr
+      (EXPR_REF a take_addr))
+     (EXPR_LIT 5 D))
+    (EXPR_ASSIGN =
+     (EXPR_FIELD -> l 4 take_addr
+      (EXPR_ADDRESS &
+       (EXPR_REF a take_addr)))
+     (EXPR_LIT 8 D))))))

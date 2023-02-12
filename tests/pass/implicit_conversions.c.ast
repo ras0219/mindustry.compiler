@@ -24,7 +24,7 @@
      (AST_DECL x (AST_DECLPTR? /* AST_DECLSPEC */)
       (EXPR_LIT 0)))
     (EXPR_ASSIGN =
-     (EXPR_REF x __u8)
+     (EXPR_REF x take_addr __u8)
      (EXPR_ADD -
       (EXPR_LIT 1 D __i4)
       (EXPR_LIT 1 D __i4) __i4) __u8)

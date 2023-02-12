@@ -1,5 +1,6 @@
 #include "be.h"
 
+#include <assert.h>
 #include <string.h>
 
 #include "cg.h"
@@ -374,6 +375,7 @@ static struct TACAddress be_ensure_ref(struct BackEnd* be, const struct TACAddre
 
 static TACAddress be_deref(struct BackEnd* be, const TACAddress* in, Sizing sizing, const struct RowCol* rc)
 {
+    assert(sizing.width != 0);
     if (in->is_addr)
     {
         struct TACAddress out = *in;
@@ -705,54 +707,6 @@ fail:
     return rc;
 }
 
-static int be_compile_lvalue_ExprAssign(struct BackEnd* be, struct ExprAssign* e, struct TACAddress* out)
-{
-    int rc = 0;
-    struct TACEntry tace = {.rc = token_rc(e->tok)};
-    switch (e->tok->type)
-    {
-        case TOKEN_SYM2('+', '='): tace.op = TACO_ADD; goto binary_op_assign;
-        case TOKEN_SYM2('-', '='): tace.op = TACO_SUB; goto binary_op_assign;
-        case TOKEN_SYM2('/', '='): tace.op = TACO_DIV; goto binary_op_assign;
-        case TOKEN_SYM2('%', '='): tace.op = TACO_MOD; goto binary_op_assign;
-        case TOKEN_SYM2('&', '='): tace.op = TACO_BAND; goto binary_op_assign;
-        case TOKEN_SYM2('|', '='): tace.op = TACO_BOR; goto binary_op_assign;
-        case TOKEN_SYM2('^', '='): tace.op = TACO_BXOR; goto binary_op_assign;
-        case TOKEN_SYM2('*', '='): tace.op = TACO_MULT; goto binary_op_assign;
-        case TOKEN_SYM3('<', '<', '='): tace.op = TACO_SHL; goto binary_op_assign;
-        case TOKEN_SYM3('>', '>', '='): tace.op = TACO_SHR; goto binary_op_assign;
-        case TOKEN_SYM1('='):
-            tace.op = TACO_ASSIGN;
-            UNWRAP(be_compile_expr(be, e->rhs, &tace.arg2));
-            UNWRAP(be_compile_expr(be, e->lhs, out));
-            tace.arg1 = *out;
-            tace.arg1.sizing = e->sizing;
-            tace.arg2.sizing = tace.arg2.sizing;
-            be_push_tace(be, &tace, e->sizing);
-            goto fail;
-        default:
-            UNWRAP(parser_tok_error(
-                e->tok, "error: be_compile_lvalue_ExprAssign unimplemented op (%s)\n", token_str(be->parser, e->tok)));
-    }
-
-binary_op_assign:
-    if (tace.op == TACO_ADD || tace.op == TACO_SUB)
-        UNWRAP(be_compile_arith_rhs(be, e->rhs, e->mult, &tace.arg2));
-    else
-        UNWRAP(be_compile_expr(be, e->rhs, &tace.arg2));
-    UNWRAP(be_compile_expr(be, e->lhs, out));
-    tace.arg1 = be_deref(be, out, e->lhs->sizing, &e->tok->rc);
-    tace.arg2 = be_push_tace(be, &tace, e->sizing);
-    tace.arg1 = *out;
-    tace.arg1.sizing = e->sizing;
-    tace.op = TACO_ASSIGN;
-    be_push_tace(be, &tace, e->sizing);
-    goto fail;
-
-fail:
-    return rc;
-}
-
 static int be_compile_ExprBuiltin(struct BackEnd* be, struct ExprBuiltin* e, struct TACAddress* out)
 {
     int rc = 0;
@@ -940,7 +894,10 @@ static int be_compile_ExprDeref(struct BackEnd* be, struct ExprDeref* e, struct 
 {
     int rc = 0;
     UNWRAP(be_compile_expr(be, e->lhs, out));
-    UNWRAP(be_dereference(be, out, e->sizing, token_rc(e->tok)));
+    if (!e->take_address)
+    {
+        UNWRAP(be_dereference(be, out, e->sizing, token_rc(e->tok)));
+    }
 fail:
     return rc;
 }
@@ -1026,29 +983,56 @@ static int be_compile_ExprAssign(struct BackEnd* be, struct ExprAssign* e, struc
 {
     int rc = 0;
     if (!e->lhs || !e->rhs) return parser_ice_tok(e->tok);
-
-    struct TACEntry tace = {0};
-    tace.rc = &e->tok->rc;
+    struct TACEntry tace = {.rc = token_rc(e->tok)};
     switch (e->tok->type)
     {
-        case TOKEN_SYM2('+', '='):
-        case TOKEN_SYM2('-', '='):
-        case TOKEN_SYM2('/', '='):
-        case TOKEN_SYM2('&', '='):
-        case TOKEN_SYM2('|', '='):
-        case TOKEN_SYM2('^', '='):
-        case TOKEN_SYM2('*', '='):
-        case TOKEN_SYM2('%', '='):
-        case TOKEN_SYM3('<', '<', '='):
-        case TOKEN_SYM3('>', '>', '='):
+        case TOKEN_SYM2('+', '='): tace.op = TACO_ADD; goto binary_op_assign;
+        case TOKEN_SYM2('-', '='): tace.op = TACO_SUB; goto binary_op_assign;
+        case TOKEN_SYM2('/', '='): tace.op = TACO_DIV; goto binary_op_assign;
+        case TOKEN_SYM2('%', '='): tace.op = TACO_MOD; goto binary_op_assign;
+        case TOKEN_SYM2('&', '='): tace.op = TACO_BAND; goto binary_op_assign;
+        case TOKEN_SYM2('|', '='): tace.op = TACO_BOR; goto binary_op_assign;
+        case TOKEN_SYM2('^', '='): tace.op = TACO_BXOR; goto binary_op_assign;
+        case TOKEN_SYM2('*', '='): tace.op = TACO_MULT; goto binary_op_assign;
+        case TOKEN_SYM3('<', '<', '='): tace.op = TACO_SHL; goto binary_op_assign;
+        case TOKEN_SYM3('>', '>', '='): tace.op = TACO_SHR; goto binary_op_assign;
         case TOKEN_SYM1('='):
-            UNWRAP(be_compile_lvalue_ExprAssign(be, e, out));
-            UNWRAP(be_dereference(be, out, e->sizing, &e->tok->rc));
-            break;
+            tace.op = TACO_ASSIGN;
+            UNWRAP(be_compile_expr(be, e->rhs, &tace.arg2));
+            UNWRAP(be_compile_expr(be, e->lhs, out));
+            if (out->sizing.width != 0 && out->sizing.width != 8) abort();
+            tace.arg1 = *out;
+            tace.arg1.sizing = e->sizing;
+            tace.arg2.sizing = tace.arg2.sizing;
+            be_push_tace(be, &tace, e->sizing);
+            goto fail;
+        default:
+            UNWRAP(parser_tok_error(
+                e->tok, "error: be_compile_ExprAssign unimplemented op (%s)\n", token_str(be->parser, e->tok)));
     }
+
+binary_op_assign:
+    if (tace.op == TACO_ADD || tace.op == TACO_SUB)
+        UNWRAP(be_compile_arith_rhs(be, e->rhs, e->mult, &tace.arg2));
+    else
+        UNWRAP(be_compile_expr(be, e->rhs, &tace.arg2));
+    UNWRAP(be_compile_expr(be, e->lhs, out));
+    tace.arg1 = be_deref(be, out, e->lhs->sizing, &e->tok->rc);
+    tace.arg2 = be_push_tace(be, &tace, e->sizing);
+    tace.arg1 = *out;
+    tace.arg1.sizing = e->sizing;
+    tace.op = TACO_ASSIGN;
+    be_push_tace(be, &tace, e->sizing);
+    goto fail;
+
 fail:
+    if (!e->take_address)
+    {
+        UNWRAP(be_dereference(be, out, e->sizing, &e->tok->rc));
+    }
     return rc;
 }
+
 static int be_compile_ExprBinOp(struct BackEnd* be, struct ExprBinOp* e, struct TACAddress* out)
 {
     int rc = 0;
@@ -1531,20 +1515,11 @@ fail:
     return rc;
 }
 
-static int be_compile_lvalue_ExprField(struct BackEnd* be, struct ExprField* e, struct TACAddress* out)
+static int be_compile_ExprField(struct BackEnd* be, struct ExprField* e, struct TACAddress* out)
 {
     int rc = 0;
     UNWRAP(be_compile_expr(be, e->lhs, out));
     *out = be_increment(be, out, e->field_offset);
-
-fail:
-    return rc;
-}
-
-static int be_compile_ExprField(struct BackEnd* be, struct ExprField* e, struct TACAddress* out)
-{
-    int rc = 0;
-    UNWRAP(be_compile_lvalue_ExprField(be, e, out));
     if (!e->take_address)
     {
         UNWRAP(be_dereference(be, out, e->sizing, &e->tok->rc));
@@ -1606,7 +1581,13 @@ static int be_compile_expr(struct BackEnd* be, struct Expr* e, struct TACAddress
 end:
     if (e->take_address)
     {
-        be_take_address(be, out);
+        switch (e->kind)
+        {
+            case EXPR_DEREF:
+            case EXPR_ASSIGN:
+            case EXPR_FIELD: break;
+            default: be_take_address(be, out); break;
+        }
     }
 
     return rc;

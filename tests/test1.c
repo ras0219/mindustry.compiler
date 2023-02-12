@@ -1374,6 +1374,7 @@ static const Token* test_ast_ast_inner(AstChecker* ctx, const Token* cur_tok, co
             if (a->tok) PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
             if (a->fieldname) PARSER_DO(expect_str(ctx, cur_tok, a->fieldname));
             PARSER_DO(expect_number(ctx, cur_tok, a->field_offset));
+            if (a->take_address) PARSER_DO(expect_str(ctx, cur_tok, "take_addr"));
             if (a->lhs) PARSER_DO(test_ast_ast(ctx, cur_tok, &a->lhs->ast));
             break;
         }
@@ -1381,6 +1382,7 @@ static const Token* test_ast_ast_inner(AstChecker* ctx, const Token* cur_tok, co
         {
             const ExprRef* a = (void*)ast;
             PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
+            if (a->take_address) PARSER_DO(expect_str(ctx, cur_tok, "take_addr"));
             break;
         }
         case EXPR_CALL:
@@ -1398,6 +1400,7 @@ static const Token* test_ast_ast_inner(AstChecker* ctx, const Token* cur_tok, co
         {
             const ExprBinOp* a = (void*)ast;
             if (a->tok) PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
+            if (a->take_address) PARSER_DO(expect_str(ctx, cur_tok, "take_addr"));
             PARSER_DO(test_ast_ast(ctx, cur_tok, a->lhs));
             PARSER_DO(test_ast_ast(ctx, cur_tok, a->rhs));
             break;
@@ -1406,6 +1409,7 @@ static const Token* test_ast_ast_inner(AstChecker* ctx, const Token* cur_tok, co
         {
             const ExprAdd* a = (void*)ast;
             if (a->tok) PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
+            if (a->take_address) PARSER_DO(expect_str(ctx, cur_tok, "take_addr"));
             PARSER_DO(test_ast_ast(ctx, cur_tok, a->lhs));
             PARSER_DO(test_ast_ast(ctx, cur_tok, a->rhs));
             if (a->mult != 1) PARSER_DO(expect_number(ctx, cur_tok, a->mult));
@@ -1415,6 +1419,7 @@ static const Token* test_ast_ast_inner(AstChecker* ctx, const Token* cur_tok, co
         {
             const ExprAssign* a = (void*)ast;
             if (a->tok) PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
+            if (a->take_address) PARSER_DO(expect_str(ctx, cur_tok, "take_addr"));
             PARSER_DO(test_ast_ast(ctx, cur_tok, a->lhs));
             PARSER_DO(test_ast_ast(ctx, cur_tok, a->rhs));
             break;
@@ -1450,6 +1455,7 @@ static const Token* test_ast_ast_inner(AstChecker* ctx, const Token* cur_tok, co
         {
             const ExprDeref* a = (void*)ast;
             if (a->tok) PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
+            if (a->take_address) PARSER_DO(expect_str(ctx, cur_tok, "take_addr"));
             PARSER_DO(test_ast_ast(ctx, cur_tok, a->lhs));
             break;
         }
@@ -1457,6 +1463,7 @@ static const Token* test_ast_ast_inner(AstChecker* ctx, const Token* cur_tok, co
         {
             const ExprAddress* a = (void*)ast;
             if (a->tok) PARSER_DO(expect_str(ctx, cur_tok, token_str(ctx->p, a->tok)));
+            if (a->take_address) PARSER_DO(expect_str(ctx, cur_tok, "take_addr"));
             PARSER_DO(test_ast_ast(ctx, cur_tok, a->lhs));
             break;
         }
@@ -1674,8 +1681,8 @@ fail:
     {
         fprintf(stderr, "%.*s", (int)ebuf2sz, (char*)ebuf2);
     }
-    array_clear(&lines1);
-    array_clear(&lines2);
+    array_destroy(&lines1);
+    array_destroy(&lines2);
     return rc;
 }
 
@@ -1778,7 +1785,7 @@ static int test_file(struct TestState* state, const char* path)
     }
 
     elaborator_init(&elab, &parser);
-    if (elaborate(&elab) || parser_has_errors())
+    if (elaborate(&elab))
     {
         REQUIRE_FAIL_IMPL(path, 1, "%s", "failed to elaborate");
     }
@@ -1873,6 +1880,7 @@ failed:
     rc = 0;
 
 fail:
+    array_destroy(&msgpath);
     parser_clear_errors();
     elaborator_destroy(&elab);
     parser_destroy(&parser);

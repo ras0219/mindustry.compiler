@@ -16,10 +16,10 @@
     (STMT_DECLS
      (AST_DECLSPEC char $ const)
      (AST_DECL s (AST_DECLPTR? /* AST_DECLSPEC */)
-      (EXPR_DEREF *
-       (EXPR_REF mode))))
-    (STMT_RETURN (EXPR_DEREF ]
+      (EXPR_DEREF * take_addr
+       (EXPR_REF mode take_addr))))
+    (STMT_RETURN (EXPR_DEREF ] take_addr
       (EXPR_ADD [
-       (EXPR_REF mode)
-       (EXPR_LIT 0)
+       (EXPR_REF mode take_addr)
+       (EXPR_LIT 1 D)
         5 __u8)))))))

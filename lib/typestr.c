@@ -123,10 +123,12 @@ void typestr_add_array(struct TypeStr* s, unsigned int n)
 
 void typestr_add_pointer(TypeStr* s)
 {
-    unsigned o = s->buf.buf[0] + 1;
-    if (o >= TYPESTR_BUF_SIZE) abort();
-    s->buf.buf[o] = TYPE_BYTE_POINTER;
-    s->buf.buf[0] = o;
+    unsigned i = s->buf.buf[0];
+    if (i == 0) return;
+    ++i;
+    if (i >= TYPESTR_BUF_SIZE) abort();
+    s->buf.buf[i] = TYPE_BYTE_POINTER;
+    s->buf.buf[0] = i;
     if (s->c.is_const && s->c.is_lvalue)
     {
         s->c.is_lvalue = 0;

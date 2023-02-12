@@ -23,28 +23,28 @@
      (AST_DECLSPEC int $)
      (AST_DECL p (AST_DECLPTR ? /* AST_DECLSPEC */)))
     (EXPR_ASSIGN =
-     (EXPR_REF x)
+     (EXPR_REF x take_addr)
      (EXPR_LIT 0))
     (EXPR_ASSIGN =
-     (EXPR_FIELD . x 0
-      (EXPR_REF y))
+     (EXPR_FIELD . x 0 take_addr
+      (EXPR_REF y take_addr))
      (EXPR_LIT 0))
     (EXPR_ASSIGN =
-     (EXPR_FIELD -> x 0
+     (EXPR_FIELD -> x 0 take_addr
       (EXPR_REF py))
      (EXPR_LIT 0))
     (EXPR_ASSIGN =
-     (EXPR_DEREF ]
+     (EXPR_DEREF ] take_addr
       (EXPR_ADD [
-       (EXPR_REF z)
+       (EXPR_REF z take_addr)
        (EXPR_LIT 0) 4))
      (EXPR_LIT 0))
     (EXPR_ASSIGN =
-     (EXPR_DEREF *
+     (EXPR_DEREF * take_addr
       (EXPR_REF p))
      (EXPR_LIT 0))
     (EXPR_ASSIGN =
-     (EXPR_REF x)
+     (EXPR_REF x take_addr)
      (EXPR_LIT 0))
     (EXPR_ADDRESS &
-     (EXPR_REF z __i4) __u8)))))
+     (EXPR_REF z take_addr __i4) __u8)))))

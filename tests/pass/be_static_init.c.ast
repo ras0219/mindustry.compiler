@@ -33,5 +33,5 @@
   (AST_DECL ptrs (AST_DECLARR
     (AST_DECLPTR? /* AST_DECLSPEC */))
    (AST_INIT
-    0 0 (EXPR_REF foo)
-    0 0 (EXPR_REF bar)))))
+    0 0 (EXPR_REF foo take_addr)
+    0 0 (EXPR_REF bar take_addr)))))
