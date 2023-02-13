@@ -1093,18 +1093,22 @@ int cg_emit(struct CodeGen* cg, const char* src_filename, FILE* fout)
 
     if (cg->const_.sz)
     {
-        if (cg->target == CG_TARGET_WIN_MASM)
-            UNWRAP(fputs("\n.const\n\n", fout) < 0);
-        else
-            UNWRAP(fputs("\n.section __TEXT,__cstring,cstring_literals\n\n", fout) < 0);
+        static const char* const const_section_header[] = {
+            [CG_TARGET_WIN_MASM] = "\n.const\n\n",
+            [CG_TARGET_LINUX_GAS] = "\n.section        .rodata\n\n",
+            [CG_TARGET_MACOS_GAS] = "\n.section __TEXT,__cstring,cstring_literals\n\n",
+        };
+        UNWRAP(fputs(const_section_header[cg->target], fout) < 0);
         UNWRAP(!fwrite(cg->const_.data, cg->const_.sz, 1, fout));
     }
     if (cg->data.sz)
     {
-        if (cg->target == CG_TARGET_WIN_MASM)
-            UNWRAP(fputs("\n.data\n\n", fout) < 0);
-        else
-            UNWRAP(fputs("\n.section __DATA,__data\n\n", fout) < 0);
+        static const char* const data_section_header[] = {
+            [CG_TARGET_WIN_MASM] = "\n.data\n\n",
+            [CG_TARGET_LINUX_GAS] = "\n.data\n\n",
+            [CG_TARGET_MACOS_GAS] = "\n.section __DATA,__data\n\n",
+        };
+        UNWRAP(fputs(data_section_header[cg->target], fout) < 0);
         UNWRAP(!fwrite(cg->data.data, cg->data.sz, 1, fout));
     }
     if (cg->code.sz)

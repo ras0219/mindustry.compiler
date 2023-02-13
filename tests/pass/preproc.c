@@ -42,3 +42,15 @@
 #if 4 >> 2 != 1
 #error 'rightshift'
 #endif
+
+#if '\0' != 0
+#error 'char'
+#endif
+
+#ifdef __WCHAR_MAX__
+#define __WCHAR_MAX __WCHAR_MAX__
+#elif L'\0' - 1 > 0
+#define __WCHAR_MAX (0xffffffffu + L'\0')
+#else
+#define __WCHAR_MAX (0x7fffffff + L'\0')
+#endif

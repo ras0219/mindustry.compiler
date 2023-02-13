@@ -494,7 +494,21 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
 #if defined(TRACING_LEX)
                 fprintf(stderr, "lex('%c'): LEX_IDENT\n", ch);
 #endif
-                if (is_ascii_alnumu(ch))
+                if (l->sz == 1 && l->tok[0] == 'L' && ch == '\'')
+                {
+                    l->sz = 0;
+                    advance_rowcol(&l->rc, ch);
+                    ++i;
+                    goto LEX_CHARLIT;
+                }
+                else if (l->sz == 1 && l->tok[0] == 'L' && ch == '\"')
+                {
+                    l->sz = 0;
+                    advance_rowcol(&l->rc, ch);
+                    ++i;
+                    goto LEX_STRING;
+                }
+                else if (is_ascii_alnumu(ch))
                 {
                     UNWRAP(push_tok_char(l, ch));
                 }

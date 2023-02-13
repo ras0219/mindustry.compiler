@@ -420,6 +420,11 @@ static const Token* pp_parse_if_expr(struct Preprocessor* pp, const Token* cur, 
             if (lit_to_mp(pp_token_str(pp, cur), out_value, &cur->rc)) return NULL;
             ++cur;
         }
+        else if (cur->type == LEX_CHARLIT)
+        {
+            *out_value = mp_from_u64((unsigned char)*pp_token_str(pp, cur));
+            ++cur;
+        }
         else if (cur->basic_type == LEX_IDENT)
         {
             *out_value = s_zero_constant;
