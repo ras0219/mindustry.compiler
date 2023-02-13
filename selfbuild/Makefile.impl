@@ -1,0 +1,54 @@
+SHELL = /bin/sh
+.SUFFIXES:
+#.DELETE_ON_ERROR:
+
+MAKEFLAGS += --no-builtin-rules
+MAKEFLAGS += --no-builtin-variables
+
+srcdir:=$(abspath ..)
+
+all: stage3/main
+
+outdir:=stage1
+intdir:=stage1
+include $(srcdir)/main.mk
+
+CC:=stage1/main
+CFLAGS:= -D FAIL_ON_FIRST \
+    -S \
+
+outdir:=stage2
+intdir:=stage2
+include $(srcdir)/main.mk
+
+CC:=stage2/main
+CFLAGS:=${CFLAGS}
+outdir:=stage3
+intdir:=stage3
+include $(srcdir)/main.mk
+
+stage1 stage2 stage3:
+	mkdir -p $@
+
+clean:
+	rm -rf stage1 stage2 stage3
+
+srcs:=${wildcard ${srcdir}/lib/*.c}
+basenames:=${basename ${notdir ${srcs}}}
+stage3bases:=$(addprefix stage3/,$(basenames))
+astdiffs:=$(addsuffix .ast.diff,$(stage3bases))
+idiffs:=$(addsuffix .i.diff,$(stage3bases))
+asmdiffs:=$(addsuffix .asm.diff,$(stage3bases))
+
+$(idiffs) $(astdiffs) $(asmdiffs): stage3/%.diff: stage2/% stage3/%
+	diff -u $^ >$@
+
+.PHONY: ast.diffs i.diffs asm.diffs check
+
+ast.diffs: $(astdiffs)
+
+i.diffs: $(idiffs)
+
+asm.diffs: $(asmdiffs)
+
+check: ast.diffs i.diffs asm.diffs

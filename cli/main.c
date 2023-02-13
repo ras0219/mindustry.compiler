@@ -350,6 +350,10 @@ static int parse_arguments(int argc, const char* const* argv, struct Arguments* 
     strlist_appendz(&out->inc, "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include");
     strlist_appendz(&out->inc, "/Library/Developer/CommandLineTools/usr/lib/clang/13.0.0/include");
     strlist_appendz(&out->inc, "/Library/Developer/CommandLineTools/usr/lib/clang/12.0.0/include");
+#else
+    strlist_appendz(&out->inc, "/usr/include");
+    strlist_appendz(&out->inc, "/usr/include/x86_64-linux-gnu");
+    strlist_appendz(&out->inc, "/usr/lib/gcc/x86_64-linux-gnu/10/include");
 #endif
 
     if (out->input_offsets.sz == 0)
@@ -374,6 +378,7 @@ static const char* predefs[] = {
     "__LP64__",
     "__x86_64__",
     "__x86_64",
+    "__STDC_VERSION__=199901L",
     "__STDC__",
     "__APPLE__",
     "__MACH__",

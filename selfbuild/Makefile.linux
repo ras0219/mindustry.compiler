@@ -1,0 +1,12 @@
+CC:=$(shell which clang)
+AS:=${CC}
+LD:=${CC}
+ASFLAGS:=-g -c
+LDFLAGS:=
+CFLAGS:= \
+    -D FAIL_ON_FIRST \
+    -Wno-parentheses \
+    -g \
+    -S \
+
+include Makefile.impl

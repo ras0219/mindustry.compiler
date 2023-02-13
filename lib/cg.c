@@ -15,8 +15,10 @@
 void cg_init(struct CodeGen* cg)
 {
     memset(cg, 0, sizeof(struct CodeGen));
-#ifndef _WIN32
+#ifdef __APPLE__
     cg->target = CG_TARGET_MACOS_GAS;
+#else
+    cg->target = CG_TARGET_LINUX_GAS;
 #endif
 }
 void cg_destroy(struct CodeGen* cg)
@@ -1107,15 +1109,27 @@ int cg_emit(struct CodeGen* cg, const char* src_filename, FILE* fout)
     }
     if (cg->code.sz)
     {
-        if (cg->target == CG_TARGET_WIN_MASM)
-            UNWRAP(fputs("\n.code\n\n", fout) < 0);
-        else
-            UNWRAP(fputs("\n.section __TEXT,__text,regular,pure_instructions\n\n", fout) < 0);
+        static const char* const code_section_header[] = {
+            [CG_TARGET_WIN_MASM] = "\n.code\n\n",
+            [CG_TARGET_LINUX_GAS] = "\n.text\n\n",
+            [CG_TARGET_MACOS_GAS] = "\n.section __TEXT,__text,regular,pure_instructions\n\n",
+        };
+        static const char* const debug_abbrev_section_header[] = {
+            [CG_TARGET_WIN_MASM] = ".???",
+            [CG_TARGET_LINUX_GAS] = ".section        .debug_abbrev,\"\",@progbits",
+            [CG_TARGET_MACOS_GAS] = ".section __DWARF,__debug_abbrev,regular,debug",
+        };
+        static const char* const debug_info_section_header[] = {
+            [CG_TARGET_WIN_MASM] = ".???",
+            [CG_TARGET_LINUX_GAS] = ".section        .debug_info,\"\",@progbits",
+            [CG_TARGET_MACOS_GAS] = ".section __DWARF,__debug_info,regular,debug",
+        };
+        UNWRAP(fputs(code_section_header[cg->target], fout) < 0);
         UNWRAP(fputs("Lfunc_begin0:\n", fout) < 0);
         UNWRAP(!fwrite(cg->code.data, cg->code.sz, 1, fout));
         UNWRAP(fputs("Lfunc_end0:\n", fout) < 0);
         UNWRAP(fprintf(fout,
-                       "\n.section __DWARF,__debug_abbrev,regular,debug\n"
+                       "\n%s\n"
                        ".byte   1                               ## Abbreviation Code\n"
                        ".byte	17                              ## DW_TAG_compile_unit\n"
                        ".byte	1                               ## DW_CHILDREN_yes\n"
@@ -1131,7 +1145,7 @@ int cg_emit(struct CodeGen* cg, const char* src_filename, FILE* fout)
                        ".byte	6                               ## DW_FORM_data4\n"
                        ".byte	0                               ## EOM(1)\n"
                        ".byte	0                               ## EOM(2)\n"
-                       ".section __DWARF,__debug_info,regular,debug\n"
+                       "%s\n"
                        ".set Lset0, Ldebug_info_end0-Ldebug_info_start0 ## Length of Unit\n"
                        ".long	Lset0 ## section length\n"
                        "Ldebug_info_start0:\n"
@@ -1147,12 +1161,20 @@ int cg_emit(struct CodeGen* cg, const char* src_filename, FILE* fout)
                        ".long	Lset3\n"
                        ".byte	0                               ## End of Children\n"
                        "Ldebug_info_end0:\n",
+                       debug_abbrev_section_header[cg->target],
+                       debug_info_section_header[cg->target],
                        src_filename) < 0);
+        static const char* const debug_line_section_header[] = {
+            [CG_TARGET_WIN_MASM] = ".???",
+            [CG_TARGET_LINUX_GAS] = ".section        .debug_line,\"\",@progbits",
+            [CG_TARGET_MACOS_GAS] = ".section __DWARF,__debug_line,regular,debug",
+        };
+        if (cg->target == CG_TARGET_MACOS_GAS) UNWRAP(fputs(".subsections_via_symbols\n", fout) < 0);
         UNWRAP(fprintf(fout,
-                       ".subsections_via_symbols\n"
-                       ".section __DWARF,__debug_line,regular,debug\n"
+                       "%s\n"
                        "Lsection_line:\n"
-                       "Lline_table_start0:\n") < 0);
+                       "Lline_table_start0:\n",
+                       debug_line_section_header[cg->target]) < 0);
     }
 
     if (cg->target == CG_TARGET_WIN_MASM) UNWRAP(0 > fputs("END\n", fout));

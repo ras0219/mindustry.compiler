@@ -374,12 +374,14 @@ static int lit_to_mp(const char* s, Constant128* out, const struct RowCol* rc)
 
 static const Token* pp_parse_if_expr(struct Preprocessor* pp, const Token* cur, Constant128* out_value)
 {
-    const Token* add_op = 0;
     const Token* mul_op = 0;
+    const Token* add_op = 0;
+    const Token* shift_op = 0;
     const Token* relop = 0;
     const Token* eqop = 0;
-    Constant128 add_value;
     Constant128 mul_value;
+    Constant128 add_value;
+    Constant128 shift_value;
     Constant128 rel_value;
     Constant128 eq_value;
 
@@ -511,6 +513,26 @@ static const Token* pp_parse_if_expr(struct Preprocessor* pp, const Token* cur, 
             case TOKEN_SYM1('-'):
                 add_op = cur;
                 add_value = *out_value;
+                continue;
+            default: break;
+        }
+
+        if (shift_op)
+        {
+            switch (shift_op->type)
+            {
+                case TOKEN_SYM2('<', '<'): *out_value = mp_shl(shift_value, *out_value, shift_op); break;
+                case TOKEN_SYM2('>', '>'): *out_value = mp_shr(shift_value, *out_value, shift_op); break;
+                default: abort();
+            }
+        }
+        shift_op = 0;
+        switch (cur->type)
+        {
+            case TOKEN_SYM2('<', '<'):
+            case TOKEN_SYM2('>', '>'):
+                shift_op = cur;
+                shift_value = *out_value;
                 continue;
             default: break;
         }

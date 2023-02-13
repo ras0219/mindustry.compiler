@@ -11,6 +11,7 @@
 enum CGTarget
 {
     CG_TARGET_WIN_MASM,
+    CG_TARGET_LINUX_GAS,
     CG_TARGET_MACOS_GAS,
 };
 
