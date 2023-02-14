@@ -80,7 +80,7 @@ struct ParsedFile
     char* filename;
 };
 
-typedef struct Preprocessor
+struct Preprocessor
 {
     enum PreprocessorState preproc;
 
@@ -125,7 +125,7 @@ typedef struct Preprocessor
 
     const StringSet* frameworks;
     const StrList* fw_paths;
-} Preprocessor;
+};
 
 void preproc_free(struct Preprocessor* pp)
 {

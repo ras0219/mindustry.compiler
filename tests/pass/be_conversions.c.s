@@ -1,5 +1,5 @@
 _cg_declare_extern:
-    subq $88, %rsp
+    subq $56, %rsp
     movb $10, 0(%rsp)
     movb $11, 0(%rsp)
     movsb 0(%rsp), %r11
@@ -8,14 +8,15 @@ _cg_declare_extern:
     mov %r11d, 4(%rsp)
     movsb 0(%rsp), %r11
     add $1, %r11
-    mov %r11, 72(%rsp)
-    movsb 72(%rsp), %r11
+    mov %r11, 48(%rsp)
+    movsb 48(%rsp), %r11
     mov %r11b, 0(%rsp)
     leaq 0(%rsp), %r11
     mov %r11, 8(%rsp)
     movsb 0(%rsp), %r11
     add $1, %r11
-    movsb 64(%rsp), %r11
+    mov %r11, 48(%rsp)
+    movsb 48(%rsp), %r11
     mov %r11b, 0(%rsp)
     mov L_.S0(%rip), %r11d
     movzw L_.S0+4(%rip), %r10
@@ -30,11 +31,13 @@ _cg_declare_extern:
     mov %r11, 24(%rsp)
     movsb 0(%rsp), %r11
     imul $2, %r11
-    movsl 56(%rsp), %r11
+    mov %r11, 48(%rsp)
+    movsl 48(%rsp), %r11
     mov %r11, 32(%rsp)
     mov 32(%rsp), %r11
     imul $2, %r11
+    mov %r11, 48(%rsp)
     mov 48(%rsp), %r11
     mov %r11, 40(%rsp)
-    addq $88, %rsp
+    addq $56, %rsp
     ret

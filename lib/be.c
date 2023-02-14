@@ -201,7 +201,6 @@ static int taco_has_side_effect(enum TACOKind k)
 {
     static char data[TACO_KIND_COUNT] = {
         [TACO_ASSIGN] = 1,
-        [TACO_GOTO] = 1,
         [TACO_BRZ] = 1,
         [TACO_BRNZ] = 1,
         [TACO_CTBZ] = 1,
@@ -245,27 +244,36 @@ static void be_eliminate_unused_tacs(struct BackEnd* be)
     {
         if (code[i].op == TACO_LABEL)
         {
-            used[i] |= used_labels[code[i].arg1.alabel - be->fn_start_label];
+            if (code[i].arg1.kind == TACA_ALABEL)
+            {
+                used[i] |= used_labels[code[i].arg1.alabel - be->fn_start_label];
+            }
+            else
+                used[i] |= 1;
         }
     }
 
     for (i = 0; i < n; ++i)
     {
         if (used[i] == 0) break;
+        used[i] = i;
     }
     size_t j = i++;
     for (; i < n; ++i)
     {
         if (used[i] == 1)
         {
+            used[i] = j;
             if (code[i].arg1.kind == TACA_REF) code[i].arg1.ref = used[code[i].arg1.ref];
             if (code[i].arg2.kind == TACA_REF) code[i].arg2.ref = used[code[i].arg2.ref];
             code[j++] = code[i];
         }
-        used[i] = j;
+        else
+        {
+            used[i] = SIZE_MAX;
+        }
     }
     array_shrink(&be->code, j, sizeof(struct TACEntry));
-
     array_destroy(&used_labels_buf);
     array_destroy(&used_buf);
 }
@@ -375,7 +383,7 @@ static struct TACAddress be_ensure_ref(struct BackEnd* be, const struct TACAddre
 
 static TACAddress be_deref(struct BackEnd* be, const TACAddress* in, Sizing sizing, const struct RowCol* rc)
 {
-    assert(sizing.width != 0);
+    if (sizing.width == 0) abort();
     if (in->is_addr)
     {
         struct TACAddress out = *in;

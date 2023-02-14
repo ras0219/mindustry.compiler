@@ -12,7 +12,7 @@ void preproc_free(Preprocessor* pp);
 
 void preproc_include_paths(Preprocessor* pp, const StrList* incs);
 void preproc_framework_paths(Preprocessor* pp, const StrList* incs);
-void preproc_frameworks(Preprocessor* pp, const StringSet* frameworks);
+void preproc_frameworks(Preprocessor* pp, const struct StringSet* frameworks);
 
 int preproc_file(Preprocessor* pp, FILE* f, const char* filename);
 int preproc_text(Preprocessor* pp, const char* text);

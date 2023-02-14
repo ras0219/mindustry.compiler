@@ -1,12 +1,12 @@
 #pragma once
 
-typedef struct Array Array;
+struct Array;
 struct Decl;
 struct TACAddress;
-typedef struct BStringMap BStringMap;
-typedef struct StrStrMap StrStrMap;
-typedef Array StrList;
-typedef struct StringSet StringSet;
+struct BStringMap;
+struct StrStrMap;
+struct StringSet;
+typedef struct Array StrList;
 struct Parser;
 struct Token;
 struct Constant;

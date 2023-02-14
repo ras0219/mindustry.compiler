@@ -29,14 +29,12 @@
     Y(TACO_SHR)                                                                                                        \
     Y(TACO_BSWAP32)                                                                                                    \
     Y(TACO_BSWAP64)                                                                                                    \
-    Y(TACO_GOTO)                                                                                                       \
     Y(TACO_BRZ)                                                                                                        \
     Y(TACO_BRNZ)                                                                                                       \
     Y(TACO_CTBZ)                                                                                                       \
     Y(TACO_JUMP)                                                                                                       \
     Y(TACO_CALL)                                                                                                       \
     Y(TACO_RETURN)                                                                                                     \
-    Y(TACO_LEA)                                                                                                        \
     Y(TACO_LOAD)
 
 #define X_TACA_KIND(Y)                                                                                                 \
