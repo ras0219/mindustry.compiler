@@ -16,6 +16,13 @@ void f(const char* fmt, va_list v3)
     printf("(%d,%d,%p,%p)\n", ((int*)v3)[0], ((int*)v3)[1], ((void**)v3)[1], ((void**)v3)[2]);
 }
 
+int foo(int a, ...) {
+    va_list v;
+    va_start(v, a);
+    va_arg(v,int);
+    va_end(v);
+}
+
 void g(const char* fmt, ...)
 {
     va_list v;

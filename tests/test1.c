@@ -1803,6 +1803,7 @@ static int test_file(struct TestState* state, const char* path)
     }
 
     cg_init(&cg);
+    cg.target = CG_TARGET_MACOS_GAS;
     be_init(&be, &parser, &elab, &cg);
     if (be_compile(&be))
     {
@@ -2199,6 +2200,7 @@ int test_cg_assign(TestState* state, StandardTest* test)
     int rc = 1;
     test->cg = my_malloc(sizeof(struct CodeGen));
     cg_init(test->cg);
+    test->cg->target = CG_TARGET_MACOS_GAS;
     TACEntry taces[] = {
         // stores from reg
         {
@@ -2419,6 +2421,7 @@ int test_cg_refs(TestState* state, StandardTest* test)
     int rc = 1;
     test->cg = my_malloc(sizeof(struct CodeGen));
     cg_init(test->cg);
+    test->cg->target = CG_TARGET_MACOS_GAS;
     TACEntry taces[] = {
         {
             TACO_ADD,
@@ -2511,6 +2514,7 @@ int test_cg_regalloc(TestState* state, StandardTest* test)
     int rc = 1;
     test->cg = my_malloc(sizeof(struct CodeGen));
     cg_init(test->cg);
+    test->cg->target = CG_TARGET_MACOS_GAS;
     TACEntry taces[] = {
         {
             TACO_BAND,
@@ -2548,6 +2552,7 @@ int test_cg_call(TestState* state, StandardTest* test)
     int rc = 1;
     test->cg = my_malloc(sizeof(struct CodeGen));
     cg_init(test->cg);
+    test->cg->target = CG_TARGET_MACOS_GAS;
     TACEntry taces[] = {
         {
             TACO_CALL,
@@ -2607,6 +2612,7 @@ int test_cg_add(TestState* state, StandardTest* test)
     int rc = 1;
     test->cg = my_malloc(sizeof(struct CodeGen));
     cg_init(test->cg);
+    test->cg->target = CG_TARGET_MACOS_GAS;
     TACEntry taces[] = {
         {
             TACO_ADD,

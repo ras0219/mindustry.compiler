@@ -423,7 +423,11 @@ int main(int argc, const char* const* argv)
         UNWRAP(1);
     }
 
+#ifdef __APPLE__
     array_appends(&link_line, "clang -target x86_64-apple-darwin20.3.0 ");
+#else
+    array_appends(&link_line, "clang ");
+#endif
     array_push(&link_line, args.link_flags.data, args.link_flags.sz);
     for (size_t i = 0; i < n_inputs; ++i)
     {
@@ -568,7 +572,11 @@ int main(int argc, const char* const* argv)
             // #else
             // #endif
             array_clear(&cmd_buf);
+#ifdef __APPLE__
             array_appends(&cmd_buf, "clang -target x86_64-apple-darwin20.3.0 -g -c");
+#else
+            array_appends(&cmd_buf, "clang -g -c");
+#endif
             append_cli_arg(&cmd_buf, asm_file, strlen(asm_file));
             array_appends(&cmd_buf, " -o");
             append_cli_arg(&cmd_buf, obj_file, strlen(obj_file));

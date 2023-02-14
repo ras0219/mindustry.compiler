@@ -55,25 +55,25 @@ _f:
     mov %r11d, 8(%rsp)
     movsl 8(%rsp), %rax
     mov $1, %rcx
-    movq $0, %rdx
+    cqto
     idivq %rcx
     movsl 56(%rsp), %r11
     mov %r11d, 8(%rsp)
     movsl 8(%rsp), %rax
     mov $1, %rcx
-    movq $0, %rdx
+    cqto
     idivq %rcx
     movsl 48(%rsp), %r11
     mov %r11d, 8(%rsp)
     movsl 8(%rsp), %rax
     mov $1, %rcx
-    movq $0, %rdx
+    cqto
     idivq %rcx
     movsl 40(%rsp), %r11
     mov %r11d, 8(%rsp)
     movsl 8(%rsp), %rax
     mov $1, %rcx
-    movq $0, %rdx
+    cqto
     idivq %rcx
     movsl 32(%rsp), %r11
     mov %r11d, 8(%rsp)

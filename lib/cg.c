@@ -76,13 +76,35 @@ void cg_declare_extern(struct CodeGen* cg, const char* sym)
         ;
 }
 
+static void cg_mangle_sym(CodeGen* cg, Array* arr, const char* sym)
+{
+    if (cg->target == CG_TARGET_MACOS_GAS) array_push_byte(arr, '_');
+    array_appends(arr, sym);
+}
+
+static void cg_mangle_label(CodeGen* cg, Array* arr, size_t n)
+{
+    if (cg->target == CG_TARGET_LINUX_GAS) array_push_byte(arr, '.');
+    array_appendf(arr, "L$%zu", n);
+}
+
+static void cg_mangle_const(CodeGen* cg, Array* arr, size_t n)
+{
+    if (cg->target == CG_TARGET_LINUX_GAS) array_push_byte(arr, '.');
+    array_appendf(arr, "L_.S%zu", n);
+}
+
 void cg_declare_public(struct CodeGen* cg, const char* sym)
 {
+    static const char* const public_fmt[] = {
+        [CG_TARGET_WIN_MASM] = "public ",
+        [CG_TARGET_LINUX_GAS] = ".globl ",
+        [CG_TARGET_MACOS_GAS] = ".globl ",
+    };
     cg_debug(cg, "   : %s\n", sym);
-    if (cg->target == CG_TARGET_WIN_MASM)
-        array_appendf(&cg->code, "public %s\n", sym);
-    else
-        array_appendf(&cg->code, ".globl _%s\n", sym);
+    array_appendf(&cg->code, public_fmt[cg->target], sym);
+    cg_mangle_sym(cg, &cg->code, sym);
+    array_push_byte(&cg->code, '\n');
 }
 
 void cg_start_function(struct CodeGen* cg, const char* sym) { cg_mark_label(cg, sym); }
@@ -90,16 +112,15 @@ void cg_start_function(struct CodeGen* cg, const char* sym) { cg_mark_label(cg, 
 void cg_mark_label(struct CodeGen* cg, const char* sym)
 {
     cg_debug(cg, "   : %s\n", sym);
-    if (cg->target == CG_TARGET_WIN_MASM)
-        array_appendf(&cg->code, "%s:\n", sym);
-    else
-        array_appendf(&cg->code, "_%s:\n", sym);
+    cg_mangle_sym(cg, &cg->code, sym);
+    array_appends(&cg->code, ":\n");
 }
 
 void cg_mark_alabel(struct CodeGen* cg, size_t n)
 {
     cg_debug(cg, "   : L$%zu\n", n);
-    array_appendf(&cg->code, "L$%zu:\n", n);
+    cg_mangle_label(cg, &cg->code, n);
+    array_appends(&cg->code, ":\n");
 }
 
 size_t cg_next_alabel(struct CodeGen* cg) { return cg->next_label++; }
@@ -109,7 +130,8 @@ static int needs_escape(char ch) { return !(ch >= 32 && ch < 127 && ch != '"' &&
 void cg_string_constant(struct CodeGen* cg, size_t cidx, const char* str, size_t sz)
 {
     // cg_debug(cg, "   : strconst %d: %s\n", cidx, str);
-    array_appendf(&cg->const_, "L_.S%zu: .asciz \"", cidx);
+    cg_mangle_const(cg, &cg->const_, cidx);
+    array_appends(&cg->const_, ": .asciz \"");
     for (size_t i = 0; i < sz; ++i)
     {
         if (needs_escape(str[i]))
@@ -126,7 +148,9 @@ void cg_string_constant(struct CodeGen* cg, size_t cidx, const char* str, size_t
 void cg_reserve_data(struct CodeGen* cg, const char* name, const char* data, const TACAddress* const* bases, size_t sz)
 {
     if (sz == 0) abort();
-    array_appendf(&cg->data, ".p2align 3\n_%s:\n", name);
+    array_appends(&cg->data, ".p2align 3\n");
+    cg_mangle_sym(cg, &cg->data, name);
+    array_appends(&cg->data, ":\n");
     size_t zeroes = 0;
     size_t i = 0;
     size_t j = 0;
@@ -148,11 +172,15 @@ void cg_reserve_data(struct CodeGen* cg, const char* name, const char* data, con
         }
         if (base && base->kind == TACA_CONST)
         {
-            array_appendf(&cg->data, ".quad L_.S%zu + %zu\n", base->const_idx, offset);
+            array_appends(&cg->data, ".quad ");
+            cg_mangle_const(cg, &cg->data, base->const_idx);
+            array_appendf(&cg->data, " + %zu\n", offset);
         }
         else if (base && (base->kind == TACA_LNAME || base->kind == TACA_NAME))
         {
-            array_appendf(&cg->data, ".quad _%s + %zu\n", base->name, offset);
+            array_appends(&cg->data, ".quad ");
+            cg_mangle_sym(cg, &cg->data, base->name);
+            array_appendf(&cg->data, " + %zu\n", offset);
         }
         else if (base)
         {
@@ -192,7 +220,8 @@ void cg_reserve_data(struct CodeGen* cg, const char* name, const char* data, con
 void cg_reserve_zeroes(struct CodeGen* cg, const char* name, size_t sz)
 {
     if (sz == 0) abort();
-    array_appendf(&cg->data, "_%s: .skip %zu\n", name, sz);
+    cg_mangle_sym(cg, &cg->data, name);
+    array_appendf(&cg->data, ": .skip %zu\n", sz);
 }
 
 static const char* const s_reg_names[] = {"%rax", "%rbx", "%rcx", "%rdx", "%rdi", "%rsi", "%r8", "%r9", "%r10", "%r11"};
@@ -270,26 +299,30 @@ static void cg_gen_taca(struct CodeGen* cg, struct TACAddress addr, struct Activ
     switch (addr.kind)
     {
         case TACA_NAME:
-            array_push_byte(&cg->code, '_');
-            array_appends(&cg->code, addr.name);
+            cg_mangle_sym(cg, &cg->code, addr.name);
             array_appends(&cg->code, "@GOTPCREL(%rip)");
             break;
         case TACA_LNAME:
-            array_push_byte(&cg->code, '_');
-            array_appends(&cg->code, addr.name);
+            cg_mangle_sym(cg, &cg->code, addr.name);
             array_appends(&cg->code, "(%rip)");
             break;
         case TACA_LITERAL: array_appends(&cg->code, addr.literal); break;
         case TACA_IMM: array_appendf(&cg->code, "$%zu", addr.imm); break;
-        case TACA_ALABEL: array_appendf(&cg->code, "L$%zu", addr.alabel); break;
-        case TACA_LLABEL: array_appendf(&cg->code, "L$%zu_%s", cg->cur_fn_lbl_prefix, addr.literal); break;
+        case TACA_ALABEL: cg_mangle_label(cg, &cg->code, addr.alabel); break;
+        case TACA_LLABEL:
+            cg_mangle_label(cg, &cg->code, cg->cur_fn_lbl_prefix);
+            array_appendf(&cg->code, "_%s", addr.literal);
+            break;
         case TACA_REG: cg_gen_taca_reg(cg, addr.reg, addr.sizing); break;
         case TACA_THROUGH_REG:
             array_push_byte(&cg->code, '(');
             array_appends(&cg->code, s_reg_names[addr.reg]);
             array_push_byte(&cg->code, ')');
             break;
-        case TACA_CONST: array_appendf(&cg->code, "L_.S%d(%%rip)", addr.const_idx); break;
+        case TACA_CONST:
+            cg_mangle_const(cg, &cg->code, addr.const_idx);
+            array_appendf(&cg->code, "(%%rip)");
+            break;
         case TACA_REF:
             if (frame->temp_offset + frame->frame_slots[addr.ref] * 8 >= frame->total_frame_size) abort();
             array_appendf(&cg->code, "%zu(%%rsp)", frame->temp_offset + frame->frame_slots[addr.ref] * 8);
@@ -311,9 +344,18 @@ static void cg_gen_taca_offset(struct CodeGen* cg, struct TACAddress addr, int o
 {
     switch (addr.kind)
     {
-        case TACA_NAME: array_appendf(&cg->code, "_%s@GOTPCREL+%d(%%rip)", addr.name, offset); break;
-        case TACA_LNAME: array_appendf(&cg->code, "_%s+%d(%%rip)", addr.name, offset); break;
-        case TACA_CONST: array_appendf(&cg->code, "L_.S%d+%d(%%rip)", addr.const_idx, offset); break;
+        case TACA_NAME:
+            cg_mangle_sym(cg, &cg->code, addr.name);
+            array_appendf(&cg->code, "@GOTPCREL+%d(%%rip)", offset);
+            break;
+        case TACA_LNAME:
+            cg_mangle_sym(cg, &cg->code, addr.name);
+            array_appendf(&cg->code, "+%d(%%rip)", offset);
+            break;
+        case TACA_CONST:
+            cg_mangle_const(cg, &cg->code, addr.const_idx);
+            array_appendf(&cg->code, "+%d(%%rip)", offset);
+            break;
         case TACA_REF:
             if (frame->temp_offset + frame->frame_slots[addr.ref] * 8 >= frame->total_frame_size) abort();
             array_appendf(&cg->code, "%zu(%%rsp)", offset + frame->temp_offset + frame->frame_slots[addr.ref] * 8);
@@ -721,7 +763,9 @@ static void cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t
         {
             if (!tace.arg1.is_addr)
             {
-                array_appendf(&cg->code, "    movq _%s@GOTPCREL(%%rip), %%r11\n", tace.arg1.name);
+                array_appends(&cg->code, "    movq ");
+                cg_gen_taca(cg, tace.arg1, frame);
+                array_appends(&cg->code, ", %r11\n");
                 tace.arg1.kind = TACA_THROUGH_REG;
                 tace.arg1.reg = REG_R11;
             }
@@ -743,7 +787,9 @@ static void cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t
             }
             else
             {
-                array_appendf(&cg->code, "    movq _%s@GOTPCREL(%%rip), %%rax\n", tace.arg1.name);
+                array_appends(&cg->code, "    movq ");
+                cg_gen_taca(cg, tace.arg1, frame);
+                array_appends(&cg->code, ", %rax\n");
                 tace.arg1.kind = TACA_THROUGH_REG;
                 tace.arg1.reg = REG_RAX;
             }
@@ -759,7 +805,9 @@ static void cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t
         }
         else
         {
-            array_appendf(&cg->code, "    movq _%s@GOTPCREL(%%rip), %%r11\n", tace.arg2.name);
+            array_appends(&cg->code, "    movq ");
+            cg_gen_taca(cg, tace.arg2, frame);
+            array_appends(&cg->code, ", %r11\n");
             tace.arg2.kind = TACA_THROUGH_REG;
             tace.arg2.reg = REG_R11;
         }
@@ -817,7 +865,7 @@ static void cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t
             ar_reg_use(frame, REG_RDX);
             cg_gen_load(cg, tace.arg1, REG_RAX, frame);
             cg_gen_load(cg, tace.arg2, REG_RCX, frame);
-            array_appends(&cg->code, "    movq $0, %rdx\n");
+            array_appends(&cg->code, "    cqto\n");
             array_appends(&cg->code, "    idivq %rcx\n");
             if (tace.op == TACO_DIV)
                 cg_gen_store_frame(cg, i, REG_RAX, frame);
@@ -850,8 +898,7 @@ static void cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t
             array_appends(&cg->code, "    callq ");
             if ((tace.arg1.kind == TACA_LNAME || tace.arg1.kind == TACA_NAME) && tace.arg1.is_addr)
             {
-                array_push_byte(&cg->code, '_');
-                array_appends(&cg->code, tace.arg1.name);
+                cg_mangle_sym(cg, &cg->code, tace.arg1.name);
             }
             else
             {
