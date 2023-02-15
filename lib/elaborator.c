@@ -121,7 +121,7 @@ static unsigned int binop_mask(unsigned int tok_type)
         case TOKEN_SYM2('>', '='):
         case TOKEN_SYM2('!', '='):
         case TOKEN_SYM1('<'):
-        case TOKEN_SYM1('>'):
+        case TOKEN_SYM1('>'): return BINOP_FLAGS_INTPROMO | BINOP_FLAGS_SCALAR;
         case TOKEN_SYM1('['):
         case TOKEN_SYM2('|', '|'):
         case TOKEN_SYM2('&', '&'): return BINOP_FLAGS_SCALAR;
@@ -429,22 +429,21 @@ static void elaborate_expr_ExprAssign(struct Elaborator* elab, struct ExprAssign
                 typestr_error1(
                     rc, elab->types, "error: expected integer type on right-hand side, but got '%.*s'\n", &rhs_ty);
             }
-            elaborate_expr_ExprAdd_impl(elab, &e->tok->rc, rty, &rhs_ty, TOKEN_SLICE_SYM1(op), &e->mult);
+            elaborate_expr_ExprAdd_impl(elab, rc, rty, &rhs_ty, TOKEN_SLICE_SYM1(op), &e->mult);
             break;
         case TOKEN_SYM2('*', '='):
         case TOKEN_SYM2('%', '='):
         case TOKEN_SYM2('/', '='):
         case TOKEN_SYM2('^', '='):
         case TOKEN_SYM2('&', '='):
-        case TOKEN_SYM2('|', '='):
-            elaborate_expr_ExprBinOp_impl(elab, &e->tok->rc, rty, &rhs_ty, TOKEN_SLICE_SYM1(op));
-            break;
+        case TOKEN_SYM2('|', '='): elaborate_expr_ExprBinOp_impl(elab, rc, rty, &rhs_ty, TOKEN_SLICE_SYM1(op)); break;
         case TOKEN_SYM3('<', '<', '='):
         case TOKEN_SYM3('>', '>', '='):
-            elaborate_expr_ExprBinOp_impl(elab, &e->tok->rc, rty, &rhs_ty, TOKEN_SLICE_SYM2(op));
+            elaborate_expr_ExprBinOp_impl(elab, rc, rty, &rhs_ty, TOKEN_SLICE_SYM2(op));
             break;
         default: abort();
     }
+    e->is_signed = typestr_calc_sizing(elab->types, &rhs_ty, rc).is_signed;
     *rty = orig_lhs;
 }
 
@@ -511,11 +510,13 @@ static void elaborate_expr_ExprBinOp(struct Elaborator* elab, struct ExprBinOp* 
 #if defined(TRACING_ELAB)
     fprintf(stderr, "elaborate_expr_ExprBinOp\n");
 #endif
+    const RowCol* const rc = &e->tok->rc;
     const unsigned op = e->tok->type;
     elaborate_expr_decay(elab, e->lhs, rty);
     struct TypeStr rhs_ty;
     elaborate_expr_decay(elab, e->rhs, &rhs_ty);
-    elaborate_expr_ExprBinOp_impl(elab, &e->tok->rc, rty, &rhs_ty, op);
+    elaborate_expr_ExprBinOp_impl(elab, rc, rty, &rhs_ty, op);
+    e->is_signed = typestr_calc_sizing(elab->types, &rhs_ty, rc).is_signed;
     if (rty->c.is_const && rhs_ty.c.is_const && !rty->c.is_lvalue && !rhs_ty.c.is_lvalue)
     {
         switch (op)
@@ -943,11 +944,12 @@ static void elaborate_init_ty_AstInit(struct Elaborator* elab, size_t offset, co
             }
         }
         if (di_end(&iter)) break;
+        const RowCol* const rc = init->init->tok ? &init->init->tok->rc : NULL;
         DInitFrame* back = array_back(&iter.stk, sizeof(*back));
         if (init->init->kind == AST_INIT)
         {
             init->offset = back->offset;
-            init->sizing = typestr_calc_sizing(elab->types, &back->ty, init->init->tok);
+            init->sizing = typestr_calc_sizing(elab->types, &back->ty, rc);
             elaborate_init_ty_AstInit(elab, back->offset, &back->ty, (AstInit*)init->init);
         }
         else
@@ -977,12 +979,12 @@ static void elaborate_init_ty_AstInit(struct Elaborator* elab, size_t offset, co
                 if (di_enter(&iter, elab, &init->tok->rc)) goto fail;
                 back = array_back(&iter.stk, sizeof(*back));
             }
-            typestr_implicit_conversion(elab->types, &init->init->tok->rc, &ts_decay, &back->ty);
+            typestr_implicit_conversion(elab->types, rc, &ts_decay, &back->ty);
             expr->take_address = ts_decay_addr_taken;
         skip_conversion:
             init->is_aggregate_init = typestr_is_aggregate(&back->ty);
             init->offset = back->offset;
-            init->sizing = typestr_calc_sizing(elab->types, &back->ty, init->init->tok);
+            init->sizing = typestr_calc_sizing(elab->types, &back->ty, rc);
         }
     }
 
@@ -1266,12 +1268,12 @@ static void elaborate_expr_ExprCall(struct Elaborator* elab,
         if (arg_expr == NULL) abort();
         elaborate_expr_decay(elab, arg_expr, &arg_expr_ty);
         struct TypeStr orig_arg_expr_ty = arg_expr_ty;
+        const RowCol* const rc = arg_expr->tok ? &arg_expr->tok->rc : NULL;
         if (i < fn_info.extent)
         {
             const struct TypeStr* orig_tt_arg = typestr_get_arg(elab->types, &fn_info, i);
-            typestr_implicit_conversion(
-                elab->types, arg_expr->tok ? &arg_expr->tok->rc : NULL, &arg_expr_ty, orig_tt_arg);
-            param->sizing = typestr_calc_sizing(elab->types, orig_tt_arg, arg_expr->tok);
+            typestr_implicit_conversion(elab->types, rc, &arg_expr_ty, orig_tt_arg);
+            param->sizing = typestr_calc_sizing(elab->types, orig_tt_arg, rc);
             param->align = typestr_get_align(elab->types, orig_tt_arg);
         }
         else
@@ -1280,7 +1282,7 @@ static void elaborate_expr_ExprCall(struct Elaborator* elab,
             unsigned int lhs_mask = typestr_mask(&arg_expr_ty);
             if (!(lhs_mask & TYPE_MASK_SCALAR))
             {
-                typestr_error1(&arg_expr->tok->rc,
+                typestr_error1(rc,
                                elab->types,
                                "error: expected scalar type in variadic arguments but got '%.*s'\n",
                                &orig_arg_expr_ty);
@@ -1314,7 +1316,7 @@ static void elaborate_expr(struct Elaborator* elab, struct Expr* top_expr, struc
     elaborate_expr_impl(elab, top_expr, rty);
     if (rty->buf.buf[0])
     {
-        top_expr->sizing = typestr_calc_sizing_zero_void(elab->types, rty, top_expr->tok);
+        top_expr->sizing = typestr_calc_sizing_zero_void(elab->types, rty, token_rc(top_expr->tok));
     }
     top_expr->c = rty->c;
     top_expr->elaborated = 1;
@@ -1440,7 +1442,7 @@ static void elaborate_expr_lvalue(struct Elaborator* elab, struct Expr* expr, st
             *rty = s_type_unknown;
             break;
     }
-    expr->sizing = typestr_calc_elem_sizing(elab->types, rty, expr->tok);
+    expr->sizing = typestr_calc_elem_sizing(elab->types, rty, token_rc(expr->tok));
     expr->c = rty->c;
     expr->elaborated = 1;
 }
@@ -1452,7 +1454,7 @@ static void elaborate_expr_decay(struct Elaborator* elab, struct Expr* expr, str
     {
         expr->take_address = 1;
     }
-    expr->sizing = typestr_calc_sizing_zero_void(elab->types, rty, expr->tok);
+    expr->sizing = typestr_calc_sizing_zero_void(elab->types, rty, token_rc(expr->tok));
     expr->c = rty->c;
     expr->elaborated = 1;
 }
@@ -1462,7 +1464,7 @@ static void elaborate_expr_ExprRef(Elaborator* elab, ExprRef* e, TypeStr* rty)
     *rty = e->sym->type;
     if (e->sym->size.width == 0)
     {
-        e->sym->size = typestr_calc_sizing(elab->types, rty, e->tok);
+        e->sym->size = typestr_calc_sizing(elab->types, rty, token_rc(e->tok));
     }
 }
 static void elaborate_expr_ExprCast(Elaborator* elab, ExprCast* e, TypeStr* rty)
@@ -1657,7 +1659,7 @@ fail:
     return rc;
 }
 
-static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
+static int elaborate_decl(Elaborator* const elab, Decl* const decl)
 {
     int rc = 0;
     decl->elaborated = 1;
@@ -1694,7 +1696,7 @@ static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
 
                 TypeStr ts = sym->type;
                 typestr_pop_offset(&ts);
-                sym->fn_ret_sizing = typestr_calc_sizing_zero_void(elab->types, &ts, decl->tok);
+                sym->fn_ret_sizing = typestr_calc_sizing_zero_void(elab->types, &ts, token_rc(decl->tok));
             }
             if (decl->init && !sym->is_enum_constant)
             {
@@ -1767,7 +1769,7 @@ static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
             }
             else
             {
-                sym->size = typestr_calc_sizing(elab->types, &sym->type, decl->tok);
+                sym->size = typestr_calc_sizing(elab->types, &sym->type, token_rc(decl->tok));
 
                 if (sym->size.width == 0)
                 {
@@ -1806,7 +1808,7 @@ static int elaborate_decl(struct Elaborator* elab, struct Decl* decl)
     {
         if (!decl->specs->is_extern && !decl->specs->is_typedef)
         {
-            sym->size = typestr_calc_sizing(elab->types, &sym->type, decl->tok);
+            sym->size = typestr_calc_sizing(elab->types, &sym->type, token_rc(decl->tok));
         }
     }
     UNWRAP(parser_has_errors());

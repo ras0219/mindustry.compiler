@@ -506,16 +506,16 @@ unsigned long long typestr_get_add_size(const TypeTable* types, const TypeStr* t
 static const Sizing s_sizing_zero = {0};
 // static const Sizing s_sizing_one = {.width = 1};
 
-static Sizing typestr_calc_sizing_i(const TypeTable* types, const TypeStr* ts, int i, const Token* tok)
+static Sizing typestr_calc_sizing_i(const TypeTable* types, const TypeStr* ts, int i, const RowCol* rc)
 {
     tsb_skip_cvr_i(&ts->buf, &i);
-    const size_t sz = typestr_get_size_i(types, ts, i, tok ? &tok->rc : NULL);
+    const size_t sz = typestr_get_size_i(types, ts, i, rc);
     if (sz > INT32_MAX) abort();
     const Sizing ret = {.width = sz, .is_signed = !!(s_typestr_mask_data[ts->buf.buf[i]] & TYPE_FLAGS_SIGNED)};
     return ret;
 }
 
-Sizing typestr_calc_elem_sizing(const TypeTable* types, const TypeStr* ts, const Token* tok)
+Sizing typestr_calc_elem_sizing(const TypeTable* types, const TypeStr* ts, const RowCol* rc)
 {
     int i = ts->buf.buf[0];
     if (i == 0) return s_sizing_zero;
@@ -524,16 +524,16 @@ Sizing typestr_calc_elem_sizing(const TypeTable* types, const TypeStr* ts, const
     if (ts->buf.buf[i] == TYPE_BYTE_POINTER)
     {
         --i;
-        return typestr_calc_sizing_i(types, ts, i, tok);
+        return typestr_calc_sizing_i(types, ts, i, rc);
     }
     else
     {
-        typestr_error1(tok ? &tok->rc : NULL, types, "error: expected pointer type: %.*s\n", ts);
+        typestr_error1(rc, types, "error: expected pointer type: %.*s\n", ts);
         return s_sizing_zero;
     }
 }
 
-Sizing typestr_calc_sizing_zero_void(const TypeTable* types, const TypeStr* ts, const Token* tok)
+Sizing typestr_calc_sizing_zero_void(const TypeTable* types, const TypeStr* ts, const RowCol* rc)
 {
     int i = ts->buf.buf[0];
     tsb_skip_cvr_i(&ts->buf, &i);
@@ -541,11 +541,11 @@ Sizing typestr_calc_sizing_zero_void(const TypeTable* types, const TypeStr* ts, 
     {
         return s_sizing_zero;
     }
-    return typestr_calc_sizing_i(types, ts, i, tok);
+    return typestr_calc_sizing_i(types, ts, i, rc);
 }
-Sizing typestr_calc_sizing(const TypeTable* types, const struct TypeStr* ts, const Token* tok)
+Sizing typestr_calc_sizing(const TypeTable* types, const struct TypeStr* ts, const RowCol* rc)
 {
-    return typestr_calc_sizing_i(types, ts, ts->buf.buf[0], tok);
+    return typestr_calc_sizing_i(types, ts, ts->buf.buf[0], rc);
 }
 const unsigned int s_typestr_mask_data[256] = {
     [TYPE_BYTE_VARIADIC] = TYPE_FLAGS_VAR,

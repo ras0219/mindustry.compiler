@@ -857,20 +857,30 @@ static void cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t
             cg_gen_store_frame(cg, i, REG_RAX, frame);
             break;
         case TACO_SUB: inst = "subq"; goto simple_binary;
-        case TACO_MULT: inst = "imul"; goto simple_binary;
+        case TACO_MUL: inst = "imul"; goto simple_binary;
         case TACO_DIV:
+        case TACO_IDIV:
         case TACO_MOD:
+        case TACO_IMOD:
             ar_reg_use(frame, REG_RAX);
             ar_reg_use(frame, REG_RCX);
             ar_reg_use(frame, REG_RDX);
             cg_gen_load(cg, tace.arg1, REG_RAX, frame);
             cg_gen_load(cg, tace.arg2, REG_RCX, frame);
-            array_appends(&cg->code, "    cqto\n");
-            array_appends(&cg->code, "    idivq %rcx\n");
-            if (tace.op == TACO_DIV)
-                cg_gen_store_frame(cg, i, REG_RAX, frame);
+            if (tace.op == TACO_IMOD || tace.op == TACO_IDIV)
+            {
+                array_appends(&cg->code, "    cqto\n");
+                array_appends(&cg->code, "    idivq %rcx\n");
+            }
             else
+            {
+                array_appends(&cg->code, "    mov $0, %rdx\n");
+                array_appends(&cg->code, "    divq %rcx\n");
+            }
+            if (tace.op == TACO_MOD || tace.op == TACO_IMOD)
                 cg_gen_store_frame(cg, i, REG_RDX, frame);
+            else
+                cg_gen_store_frame(cg, i, REG_RAX, frame);
             break;
         case TACO_BAND: inst = "andq"; goto simple_binary;
         case TACO_BOR: inst = "orq"; goto simple_binary;

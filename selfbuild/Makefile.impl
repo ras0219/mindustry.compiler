@@ -39,16 +39,14 @@ stage3bases:=$(addprefix stage3/,$(basenames))
 astdiffs:=$(addsuffix .ast.diff,$(stage3bases))
 idiffs:=$(addsuffix .i.diff,$(stage3bases))
 asmdiffs:=$(addsuffix .asm.diff,$(stage3bases))
+diffchecks:=$(addsuffix .check,$(astdiffs) $(idiffs) $(asmdiffs))
 
 $(idiffs) $(astdiffs) $(asmdiffs): stage3/%.diff: stage2/% stage3/%
-	diff -u $^ >$@
+	diff -u $^ >$@ || true
 
-.PHONY: ast.diffs i.diffs asm.diffs check
+$(diffchecks): %.check: %
+	[ ! -s $^ ]
 
-ast.diffs: $(astdiffs)
+.PHONY: check
 
-i.diffs: $(idiffs)
-
-asm.diffs: $(asmdiffs)
-
-check: ast.diffs i.diffs asm.diffs
+check: $(diffchecks)

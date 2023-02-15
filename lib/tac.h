@@ -12,15 +12,17 @@
     Y(TACO_ASSIGN)                                                                                                     \
     Y(TACO_ADD)                                                                                                        \
     Y(TACO_SUB)                                                                                                        \
+    Y(TACO_MUL)                                                                                                        \
     Y(TACO_DIV)                                                                                                        \
+    Y(TACO_IDIV)                                                                                                       \
     Y(TACO_MOD)                                                                                                        \
+    Y(TACO_IMOD)                                                                                                       \
     Y(TACO_EQ)                                                                                                         \
     Y(TACO_NEQ)                                                                                                        \
     Y(TACO_LTEQ)                                                                                                       \
     Y(TACO_LT)                                                                                                         \
     Y(TACO_LTEQU)                                                                                                      \
     Y(TACO_LTU)                                                                                                        \
-    Y(TACO_MULT)                                                                                                       \
     Y(TACO_BAND)                                                                                                       \
     Y(TACO_BOR)                                                                                                        \
     Y(TACO_BXOR)                                                                                                       \

@@ -183,7 +183,7 @@ static struct TACAddress be_push_tace(struct BackEnd* be, const struct TACEntry*
     }
     else if (e->arg2.kind == TACA_VOID)
     {
-        if (e->op == TACO_MULT) abort();
+        if (e->op == TACO_MUL) abort();
     }
 
     if (e->arg1.kind == TACA_FRAME && e->arg1.frame_offset >= be->max_frame_size) abort();
@@ -350,7 +350,7 @@ static TACAddress be_umultiply(struct BackEnd* be, const TACAddress* addr, int o
     else
     {
         struct TACEntry tace = {
-            .op = TACO_MULT,
+            .op = TACO_MUL,
             .arg1 = taca_imm(operand),
             .arg2 = *addr,
         };
@@ -707,7 +707,7 @@ static int be_compile_sub(struct BackEnd* be, struct ExprAdd* e, struct TACAddre
     if (e->mult < -1)
     {
         tace.arg1 = be_push_tace(be, &tace, e->sizing);
-        tace.op = TACO_DIV;
+        tace.op = e->sizing.is_signed ? TACO_IDIV : TACO_DIV;
         tace.arg2 = taca_imm(-e->mult);
     }
     *out = be_push_tace(be, &tace, e->sizing);
@@ -996,12 +996,12 @@ static int be_compile_ExprAssign(struct BackEnd* be, struct ExprAssign* e, struc
     {
         case TOKEN_SYM2('+', '='): tace.op = TACO_ADD; goto binary_op_assign;
         case TOKEN_SYM2('-', '='): tace.op = TACO_SUB; goto binary_op_assign;
-        case TOKEN_SYM2('/', '='): tace.op = TACO_DIV; goto binary_op_assign;
-        case TOKEN_SYM2('%', '='): tace.op = TACO_MOD; goto binary_op_assign;
+        case TOKEN_SYM2('*', '='): tace.op = TACO_MUL; goto binary_op_assign;
+        case TOKEN_SYM2('/', '='): tace.op = e->is_signed ? TACO_IDIV : TACO_DIV; goto binary_op_assign;
+        case TOKEN_SYM2('%', '='): tace.op = e->is_signed ? TACO_IMOD : TACO_MOD; goto binary_op_assign;
         case TOKEN_SYM2('&', '='): tace.op = TACO_BAND; goto binary_op_assign;
         case TOKEN_SYM2('|', '='): tace.op = TACO_BOR; goto binary_op_assign;
         case TOKEN_SYM2('^', '='): tace.op = TACO_BXOR; goto binary_op_assign;
-        case TOKEN_SYM2('*', '='): tace.op = TACO_MULT; goto binary_op_assign;
         case TOKEN_SYM3('<', '<', '='): tace.op = TACO_SHL; goto binary_op_assign;
         case TOKEN_SYM3('>', '>', '='): tace.op = TACO_SHR; goto binary_op_assign;
         case TOKEN_SYM1('='):
@@ -1050,62 +1050,62 @@ static int be_compile_ExprBinOp(struct BackEnd* be, struct ExprBinOp* e, struct 
     tace.rc = &e->tok->rc;
     switch (e->tok->type)
     {
-        case TOKEN_SYM2('>', '='): tace.op = TACO_LTEQ; goto swapped_binary;
-        case TOKEN_SYM1('>'): tace.op = TACO_LT; goto swapped_binary;
-        case TOKEN_SYM2('<', '='): tace.op = TACO_LTEQ; goto basic_binary;
-        case TOKEN_SYM1('<'): tace.op = TACO_LT; goto basic_binary;
+        case TOKEN_SYM2('>', '='): tace.op = e->is_signed ? TACO_LTEQ : TACO_LTEQU; goto swapped_binary;
+        case TOKEN_SYM1('>'): tace.op = e->is_signed ? TACO_LT : TACO_LTU; goto swapped_binary;
+        case TOKEN_SYM2('<', '='): tace.op = e->is_signed ? TACO_LTEQ : TACO_LTEQU; goto basic_binary;
+        case TOKEN_SYM1('<'): tace.op = e->is_signed ? TACO_LT : TACO_LTU; goto basic_binary;
         case TOKEN_SYM2('=', '='): tace.op = TACO_EQ; goto basic_binary;
         case TOKEN_SYM2('!', '='): tace.op = TACO_NEQ; goto basic_binary;
-        case TOKEN_SYM1('*'): tace.op = TACO_MULT; goto basic_binary;
-        case TOKEN_SYM1('/'): tace.op = TACO_DIV; goto basic_binary;
-        case TOKEN_SYM1('%'): tace.op = TACO_MOD; goto basic_binary;
+        case TOKEN_SYM1('*'): tace.op = TACO_MUL; goto basic_binary;
+        case TOKEN_SYM1('/'): tace.op = e->is_signed ? TACO_IDIV : TACO_DIV; goto basic_binary;
+        case TOKEN_SYM1('%'): tace.op = e->is_signed ? TACO_IMOD : TACO_MOD; goto basic_binary;
         case TOKEN_SYM1('|'): tace.op = TACO_BOR; goto basic_binary;
         case TOKEN_SYM1('&'): tace.op = TACO_BAND; goto basic_binary;
         case TOKEN_SYM1('^'): tace.op = TACO_BXOR; goto basic_binary;
         case TOKEN_SYM2('<', '<'): tace.op = TACO_SHL; goto basic_binary;
         case TOKEN_SYM2('>', '>'): tace.op = TACO_SHR; goto basic_binary;
-        case TOKEN_SYM2('+', '='):
-        case TOKEN_SYM2('-', '='):
-        case TOKEN_SYM2('/', '='):
-        case TOKEN_SYM2('&', '='):
-        case TOKEN_SYM2('|', '='):
-        case TOKEN_SYM2('^', '='):
-        case TOKEN_SYM2('*', '='):
-        case TOKEN_SYM2('%', '='):
-        case TOKEN_SYM3('<', '<', '='):
-        case TOKEN_SYM3('>', '>', '='):
-        case TOKEN_SYM1('='):
+        // case TOKEN_SYM2('+', '='):
+        // case TOKEN_SYM2('-', '='):
+        // case TOKEN_SYM2('/', '='):
+        // case TOKEN_SYM2('&', '='):
+        // case TOKEN_SYM2('|', '='):
+        // case TOKEN_SYM2('^', '='):
+        // case TOKEN_SYM2('*', '='):
+        // case TOKEN_SYM2('%', '='):
+        // case TOKEN_SYM3('<', '<', '='):
+        // case TOKEN_SYM3('>', '>', '='):
+        // case TOKEN_SYM1('='):
         case TOKEN_SYM1(','):
             UNWRAP(be_compile_expr(be, e->lhs, out));
             UNWRAP(be_compile_expr(be, e->rhs, out));
             break;
-        case TOKEN_SYM1('?'):
-        {
-            if (e->rhs->kind != EXPR_BINOP) abort();
-            struct ExprBinOp* rhs = (struct ExprBinOp*)e->rhs;
-            UNWRAP(be_compile_expr(be, e->lhs, &tace.arg1));
-            size_t on_false = be->next_label++;
-            size_t end = be->next_label++;
-            tace.op = TACO_BRZ;
-            tace.arg2.kind = TACA_ALABEL;
-            tace.arg2.alabel = on_false;
-            be_push_tace(be, &tace, s_sizing_zero);
-            *out = be_alloc_temp(be, e->sizing);
-            struct TACAddress ret_addr = *out;
-            ret_addr.is_addr = 1;
-            struct TACEntry assign = {
-                .op = TACO_ASSIGN,
-                .arg1 = ret_addr,
-            };
-            UNWRAP(be_compile_expr(be, rhs->lhs, &assign.arg2));
-            be_push_tace(be, &assign, s_sizing_zero);
-            be_push_jump(be, end);
-            be_push_label(be, on_false);
-            UNWRAP(be_compile_expr(be, rhs->rhs, &assign.arg2));
-            be_push_tace(be, &assign, s_sizing_zero);
-            be_push_label(be, end);
-            break;
-        }
+        // case TOKEN_SYM1('?'):
+        // {
+        //     if (e->rhs->kind != EXPR_BINOP) abort();
+        //     struct ExprBinOp* rhs = (struct ExprBinOp*)e->rhs;
+        //     UNWRAP(be_compile_expr(be, e->lhs, &tace.arg1));
+        //     size_t on_false = be->next_label++;
+        //     size_t end = be->next_label++;
+        //     tace.op = TACO_BRZ;
+        //     tace.arg2.kind = TACA_ALABEL;
+        //     tace.arg2.alabel = on_false;
+        //     be_push_tace(be, &tace, s_sizing_zero);
+        //     *out = be_alloc_temp(be, e->sizing);
+        //     struct TACAddress ret_addr = *out;
+        //     ret_addr.is_addr = 1;
+        //     struct TACEntry assign = {
+        //         .op = TACO_ASSIGN,
+        //         .arg1 = ret_addr,
+        //     };
+        //     UNWRAP(be_compile_expr(be, rhs->lhs, &assign.arg2));
+        //     be_push_tace(be, &assign, s_sizing_zero);
+        //     be_push_jump(be, end);
+        //     be_push_label(be, on_false);
+        //     UNWRAP(be_compile_expr(be, rhs->rhs, &assign.arg2));
+        //     be_push_tace(be, &assign, s_sizing_zero);
+        //     be_push_label(be, end);
+        //     break;
+        // }
         case TOKEN_SYM2('|', '|'):
         case TOKEN_SYM2('&', '&'):
         {
@@ -1150,27 +1150,6 @@ basic_binary:
     UNWRAP(be_compile_expr(be, e->rhs, &tace.arg2));
     UNWRAP(be_compile_expr(be, e->lhs, &tace.arg1));
 push:
-    if (tace.op == TACO_LTEQ || tace.op == TACO_LT)
-    {
-        Sizing l = e->lhs->sizing;
-        Sizing r = e->rhs->sizing;
-        if (l.width < 4) l = s_sizing_int;
-        if (r.width < 4) r = s_sizing_int;
-        int is_unsigned;
-        if (l.width < r.width)
-        {
-            is_unsigned = !r.is_signed;
-        }
-        else if (l.width > r.width)
-        {
-            is_unsigned = !l.is_signed;
-        }
-        else
-        {
-            is_unsigned = !(l.is_signed & r.is_signed);
-        }
-        if (is_unsigned) tace.op = tace.op == TACO_LT ? TACO_LTU : TACO_LTEQU;
-    }
     *out = be_push_tace(be, &tace, e->sizing);
     if (e->c.is_const)
     {
