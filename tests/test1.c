@@ -5,6 +5,7 @@
 #include "ast.h"
 #include "be.h"
 #include "cg.h"
+#include "checker.h"
 #include "dirent.h"
 #include "elaborator.h"
 #include "errors.h"
@@ -1156,58 +1157,6 @@ fail:
     return rc;
 }
 
-int parse_enums(struct TestState* state)
-{
-    int rc = 1;
-    StandardTest test = {0};
-    SUBTEST(stdtest_run(state,
-                        &test,
-                        "enum A { a1 = 5, a2, a3 = a2 + 20 };\n"
-                        "typedef struct { enum A a; } W;\n"
-                        "int main() {\n"
-                        "enum A x = a3;\n"
-                        "int y = (x == a2);\n"
-                        "if ((unsigned int)y == a1)\n"
-                        "  sizeof(enum A);\n"
-                        "W w, *pw = &w;\n"
-                        "pw->a = a1;\n"
-                        "}\n"
-                        "struct N { enum { N1 = 4 } e; };\n"
-                        "char ch[N1];"));
-    rc = 0;
-
-    struct Expr** const exprs = (struct Expr**)test.parser->expr_seqs.data;
-    REQUIRE_EQ(5, test.parser->top->seq.ext);
-    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->seq.off])
-    {
-        REQUIRE_EQ(0, decls->seq.ext);
-        REQUIRE(decls->specs->enum_init);
-        REQUIRE_EQ(3, decls->specs->enum_init->seq.ext);
-        REQUIRE_EXPR(Decl, w, exprs[decls->specs->enum_init->seq.off])
-        {
-            REQUIRE_EQ(5, w->sym->enum_value);
-            REQUIRE_PTR_EQ(w, w->sym->def);
-            REQUIRE_SIZING_EQ(s_sizing_int, w->sym->size);
-        }
-        REQUIRE_EXPR(Decl, w, exprs[decls->specs->enum_init->seq.off + 1])
-        {
-            REQUIRE_EQ(6, w->sym->enum_value);
-            REQUIRE_PTR_EQ(w, w->sym->def);
-            REQUIRE_SIZING_EQ(s_sizing_int, w->sym->size);
-        }
-        REQUIRE_EXPR(Decl, w, exprs[decls->specs->enum_init->seq.off + 2])
-        {
-            REQUIRE_EQ(26, w->sym->enum_value);
-            REQUIRE_PTR_EQ(w, w->sym->def);
-            REQUIRE_SIZING_EQ(s_sizing_int, w->sym->size);
-        }
-    }
-
-fail:
-    stdtest_destroy(&test);
-    return rc;
-}
-
 typedef struct AstChecker
 {
     TestState* const state;
@@ -1763,12 +1712,13 @@ static int test_file(struct TestState* state, const char* path)
     int rc = 1;
     Array astfile = {0}, buf = {0};
     Preprocessor *pp = NULL, *ast_pp = NULL;
+    Checker* chk = NULL;
     Parser parser = {0};
     Elaborator elab = {0};
     BackEnd be = {0};
     CodeGen cg = {0};
     FILE* f = fopen(path, "r");
-    FILE* f2 = NULL;
+    FILE *f2 = NULL, *f3 = NULL;
     if (!f) REQUIRE_FAIL("failed to open test file %s", path);
 
     parser_clear_errors();
@@ -1802,6 +1752,17 @@ static int test_file(struct TestState* state, const char* path)
         if (test_ast(state, ast_pp, &parser, &elab, astfile.data)) goto fail;
     }
 
+    array_pop(&astfile, 5);
+    array_push(&astfile, ".checks", 8);
+    if (f3 = fopen(astfile.data, "rb"))
+    {
+        chk = checker_alloc(&elab);
+        if (checker_check(chk))
+        {
+            REQUIRE_FAIL_IMPL(path, 1, "%s", "failed to check");
+        }
+    }
+
     cg_init(&cg);
     cg.target = CG_TARGET_MACOS_GAS;
     be_init(&be, &parser, &elab, &cg);
@@ -1817,10 +1778,12 @@ fail:
     if (parser_has_errors()) parser_print_msgs(stderr), parser_clear_errors();
     cg_destroy(&cg);
     be_destroy(&be);
+    if (chk) checker_free(chk);
     elaborator_destroy(&elab);
     parser_destroy(&parser);
     if (ast_pp) preproc_free(ast_pp);
     if (pp) preproc_free(pp);
+    if (f3) fclose(f3);
     if (f2) fclose(f2);
     if (f) fclose(f);
     array_destroy(&buf);
@@ -2719,6 +2682,8 @@ fail:
     return rc;
 }
 
+void run_interval_tests(struct TestState* state);
+
 int main(int argc, char** argv)
 {
     struct TestState _state = {.colorsuc = "", .colorerr = "", .colorreset = ""};
@@ -2798,10 +2763,11 @@ int main(int argc, char** argv)
     RUN_TEST(parse_decls_and_defs);
     RUN_TEST(parse_uuva_list);
     RUN_TEST(parse_params);
-    RUN_TEST(parse_enums);
 
     foreach_c_file(state, "tests/pass", test_file);
     foreach_c_file(state, "tests/fail", test_file_fail);
+
+    run_interval_tests(state);
 
     const char* color = (state->testfails + state->assertionfails == 0) ? _state.colorsuc : _state.colorerr;
 

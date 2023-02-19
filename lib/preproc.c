@@ -427,7 +427,7 @@ static const Token* pp_parse_if_expr(struct Preprocessor* pp, const Token* cur, 
         }
         else if (cur->basic_type == LEX_IDENT)
         {
-            *out_value = s_zero_constant;
+            *out_value = s_zero_c128;
             ++cur;
         }
         else if (cur->type == TOKEN_SYM1('!'))
@@ -465,11 +465,11 @@ static const Token* pp_parse_if_expr(struct Preprocessor* pp, const Token* cur, 
         {
             if ((lnot & 1) == mp_is_nonzero(*out_value))
             {
-                *out_value = s_zero_constant;
+                *out_value = s_zero_c128;
             }
             else
             {
-                *out_value = s_one_constant;
+                *out_value = s_one_c128;
             }
             lnot = 0;
         }
@@ -555,9 +555,9 @@ static const Token* pp_parse_if_expr(struct Preprocessor* pp, const Token* cur, 
                 default: abort();
             }
             if (s == r)
-                *out_value = s_zero_constant;
+                *out_value = s_zero_c128;
             else
-                *out_value = s_one_constant;
+                *out_value = s_one_c128;
         }
         relop = 0;
         switch (cur->type)
@@ -577,11 +577,11 @@ static const Token* pp_parse_if_expr(struct Preprocessor* pp, const Token* cur, 
             int r = mp_is_eq(eq_value, *out_value);
             if (r == (eqop->type == TOKEN_SYM2('=', '=')))
             {
-                *out_value = s_one_constant;
+                *out_value = s_one_c128;
             }
             else
             {
-                *out_value = s_zero_constant;
+                *out_value = s_zero_c128;
             }
         }
         eqop = 0;
@@ -595,9 +595,9 @@ static const Token* pp_parse_if_expr(struct Preprocessor* pp, const Token* cur, 
             default: break;
         }
 
-        if (mp_is_nonzero(*out_value)) *out_value = s_one_constant;
+        if (mp_is_nonzero(*out_value)) *out_value = s_one_c128;
 
-        if (!and_value) *out_value = s_zero_constant;
+        if (!and_value) *out_value = s_zero_c128;
         and_value = 1;
         if (cur->type == TOKEN_SYM2('&', '&'))
         {
@@ -605,7 +605,7 @@ static const Token* pp_parse_if_expr(struct Preprocessor* pp, const Token* cur, 
             continue;
         }
 
-        if (or_value) *out_value = s_one_constant;
+        if (or_value) *out_value = s_one_c128;
         or_value = 0;
         if (cur->type == TOKEN_SYM2('|', '|'))
         {

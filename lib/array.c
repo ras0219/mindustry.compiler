@@ -85,3 +85,15 @@ void array_appendv(struct Array* arr, const char* fmt, va_list argp)
     --arr->sz;
     va_end(args2);
 }
+
+size_t arrptr_find(const struct Array* arr, const void* p)
+{
+    const void** data = arr->data;
+    size_t i = 0;
+    const size_t n = arrptr_size(arr);
+    for (; i < n; ++i)
+    {
+        if (data[i] == p) return i;
+    }
+    return i;
+}

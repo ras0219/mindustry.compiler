@@ -28,6 +28,8 @@ L$0:
 L$1:
     leaq 8(%rsp), %r11
     mov %r11, 16(%rsp)
+    leaq 8(%rsp), %r11
+    mov %r11, 16(%rsp)
     mov 16(%rsp), %rdi
     movl $5, (%rdi)
     mov 16(%rsp), %rsi

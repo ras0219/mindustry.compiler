@@ -53,6 +53,9 @@
       (EXPR_ADDRESS &
        (EXPR_REF w take_addr))))
     (EXPR_ASSIGN =
+     (EXPR_REF pw take_addr)
+     (EXPR_ADDRESS & (EXPR_REF w take_addr)))
+    (EXPR_ASSIGN =
      (EXPR_FIELD -> a 0 take_addr
       (EXPR_REF pw))
      (EXPR_REF a1)))))

@@ -12,8 +12,8 @@ typedef struct Constant128
     unsigned long long upper;
 } Constant128;
 
-extern const Constant128 s_one_constant;
-extern const Constant128 s_zero_constant;
+extern const Constant128 s_one_c128;
+extern const Constant128 s_zero_c128;
 
 __forceinline static uint8_t mp_u8(Constant128 a) { return (uint8_t)a.lower; }
 __forceinline static uint16_t mp_u16(Constant128 a) { return (uint16_t)a.lower; }
@@ -50,6 +50,14 @@ __forceinline static int mp_is_nonzero(Constant128 a) { return a.lower || a.uppe
 __forceinline static int mp_is_lt(Constant128 a, Constant128 b)
 {
     return a.upper > b.upper || (a.upper == b.upper && a.lower < b.lower);
+}
+__forceinline static int mp_cmp(Constant128 a, Constant128 b)
+{
+    const int x = a.upper > b.upper;
+    const int y = a.upper < b.upper;
+    const int z = x - y;
+    if (z) return z;
+    return (a.lower > b.lower) - (a.lower < b.lower);
 }
 
 void mpa_add(Constant128* a, Constant128 b);

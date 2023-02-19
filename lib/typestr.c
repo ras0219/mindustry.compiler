@@ -50,6 +50,34 @@ unsigned int tt_register(struct TypeTable* tt, struct TypeSymbol* tsym)
     return ret;
 }
 
+void constant_load_lvalue(Constant* c)
+{
+    if (c->is_const)
+    {
+        if (c->is_lvalue)
+        {
+            if (mp_is_nonzero(c->value))
+            {
+                *c = s_not_constant;
+            }
+            else
+            {
+                *c = c->sym->const_init;
+            }
+        }
+    }
+}
+void constant_addressof(Constant* c)
+{
+    if (c->is_const)
+    {
+        if (c->is_lvalue)
+            c->is_lvalue = 0;
+        else
+            *c = s_not_constant;
+    }
+}
+
 void typestr_promote_integer(struct TypeStr* rty)
 {
     if (typestr_mask(rty) & TYPE_FLAGS_PROMOTE_INT)
@@ -373,8 +401,7 @@ void typestr_from_decltype_Decl(const void* const* expr_seqs, TypeTable* tt, Typ
     {
         if (d->sym->is_enum_constant)
         {
-            Constant128 n = {.lower = d->sym->enum_value};
-            typestr_assign_constant_value(s, n);
+            typestr_assign_constant_value(s, mp_from_i64(d->sym->enum_value));
         }
         else
         {
@@ -547,6 +574,15 @@ Sizing typestr_calc_sizing(const TypeTable* types, const struct TypeStr* ts, con
 {
     return typestr_calc_sizing_i(types, ts, ts->buf.buf[0], rc);
 }
+
+enum
+{
+    TYPE_COMMON_FLAGS_CHAR = TYPE_FLAGS_CHAR | TYPE_FLAGS_INT | TYPE_FLAGS_PROMOTE_INT | TYPE_FLAGS_WIDTH1,
+    TYPE_COMMON_FLAGS_SHORT = TYPE_FLAGS_INT | TYPE_FLAGS_PROMOTE_INT | TYPE_FLAGS_WIDTH2,
+    TYPE_COMMON_FLAGS_INT = TYPE_FLAGS_INT | TYPE_FLAGS_WIDTH4,
+    TYPE_COMMON_FLAGS_LONG = TYPE_FLAGS_INT | TYPE_FLAGS_WIDTH8,
+};
+
 const unsigned int s_typestr_mask_data[256] = {
     [TYPE_BYTE_VARIADIC] = TYPE_FLAGS_VAR,
     [TYPE_BYTE_VOID] = TYPE_FLAGS_VOID,
@@ -913,7 +949,8 @@ void typestr_apply_integral_type(TypeStr* dst, const TypeStr* src)
     dst->buf = src->buf;
     if (dst->c.is_const && !dst->c.sym)
     {
-        typestr_assign_constant_value(dst, dst->c.value);
+        unsigned mask = typestr_mask(dst);
+        dst->c.value = mp_cast(dst->c.value, mask);
     }
     else
     {
@@ -925,12 +962,17 @@ void typestr_assign_constant_value(TypeStr* t, Constant128 n)
 {
     unsigned mask = typestr_mask(t);
     t->c.is_const = 1;
+    t->c.is_lvalue = 0;
+    t->c.sym = NULL;
     t->c.value = mp_cast(n, mask);
 }
 
 void typestr_assign_constant_bool(TypeStr* t, int n)
 {
-    typestr_assign_constant_value(t, n ? s_one_constant : s_zero_constant);
+    t->c.is_const = 1;
+    t->c.is_lvalue = 0;
+    t->c.sym = NULL;
+    t->c.value = n ? s_one_c128 : s_zero_c128;
 }
 
 const TypeStr* typestr_get_arg(const struct TypeTable* tt, const FnTypeInfo* info, unsigned index)

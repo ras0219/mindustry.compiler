@@ -260,6 +260,7 @@ static void elaborate_expr_ExprTernary(struct Elaborator* elab, ExprTernary* e, 
 
 static int cnst_same_base(Constant c1, Constant c2) { return c1.sym == c2.sym; }
 static int cnst_eq(Constant c1, Constant c2) { return cnst_same_base(c1, c2) && mp_is_eq(c1.value, c2.value); }
+static int cnst_cmp(Constant c1, Constant c2) { return mp_cmp(c1.value, c2.value); }
 static int cnst_truthy(Constant c1) { return c1.sym || mp_is_nonzero(c1.value); }
 
 static void elaborate_expr_ExprBinOp_impl(
@@ -471,11 +472,20 @@ static void elaborate_expr_ExprAdd(Elaborator* elab, ExprAdd* e, TypeStr* rty)
         rhs_ty = tmp_ty;
     }
     elaborate_expr_ExprAdd_impl(elab, &e->tok->rc, rty, &rhs_ty, op, &e->mult);
-    if (rty->c.is_const && rhs_ty.c.is_const && !rty->c.is_lvalue && !rhs_ty.c.is_lvalue)
+    constant_load_lvalue(&rty->c);
+    constant_load_lvalue(&rhs_ty.c);
+    if (rty->c.is_const && rhs_ty.c.is_const)
     {
         if (op != TOKEN_SYM1('-'))
         {
-            typestr_assign_constant_value(rty, mp_fma(rty->c.value, rhs_ty.c.value, e->mult));
+            if (rty->c.sym)
+            {
+                rty->c.value = mp_fma(rty->c.value, rhs_ty.c.value, e->mult);
+            }
+            else
+            {
+                typestr_assign_constant_value(rty, mp_fma(rty->c.value, rhs_ty.c.value, e->mult));
+            }
         }
         else
         {
@@ -488,7 +498,6 @@ static void elaborate_expr_ExprAdd(Elaborator* elab, ExprAdd* e, TypeStr* rty)
                                      "undefined behavior.\n");
                     return;
                 }
-                rty->c.sym = NULL;
                 typestr_assign_constant_value(rty, mp_idiv(mp_sub(rty->c.value, rhs_ty.c.value), -e->mult, e->tok));
             }
             else if (e->mult == 0)
@@ -517,18 +526,12 @@ static void elaborate_expr_ExprBinOp(struct Elaborator* elab, struct ExprBinOp* 
     elaborate_expr_decay(elab, e->rhs, &rhs_ty);
     elaborate_expr_ExprBinOp_impl(elab, rc, rty, &rhs_ty, op);
     e->is_signed = typestr_calc_sizing(elab->types, &rhs_ty, rc).is_signed;
-    if (rty->c.is_const && rhs_ty.c.is_const && !rty->c.is_lvalue && !rhs_ty.c.is_lvalue)
+    constant_load_lvalue(&rty->c);
+    constant_load_lvalue(&rhs_ty.c);
+    if (rty->c.is_const && rhs_ty.c.is_const)
     {
         switch (op)
         {
-            case TOKEN_SYM2('=', '='): typestr_assign_constant_bool(rty, cnst_eq(rty->c, rhs_ty.c)); break;
-            case TOKEN_SYM2('!', '='): typestr_assign_constant_bool(rty, !cnst_eq(rty->c, rhs_ty.c)); break;
-            case TOKEN_SYM2('&', '&'):
-                typestr_assign_constant_bool(rty, cnst_truthy(rty->c) && cnst_truthy(rhs_ty.c));
-                break;
-            case TOKEN_SYM2('|', '|'):
-                typestr_assign_constant_bool(rty, cnst_truthy(rty->c) || cnst_truthy(rhs_ty.c));
-                break;
             case TOKEN_SYM1('&'): typestr_assign_constant_value(rty, mp_band(rty->c.value, rhs_ty.c.value)); break;
             case TOKEN_SYM1('|'): typestr_assign_constant_value(rty, mp_bor(rty->c.value, rhs_ty.c.value)); break;
             case TOKEN_SYM1('^'): typestr_assign_constant_value(rty, mp_bxor(rty->c.value, rhs_ty.c.value)); break;
@@ -545,6 +548,14 @@ static void elaborate_expr_ExprBinOp(struct Elaborator* elab, struct ExprBinOp* 
             case TOKEN_SYM2('>', '>'):
                 typestr_assign_constant_value(rty, mp_shr(rty->c.value, rhs_ty.c.value, e->tok));
                 break;
+            case TOKEN_SYM2('=', '='): rty->c = constant_bool(cnst_eq(rty->c, rhs_ty.c)); break;
+            case TOKEN_SYM2('!', '='): rty->c = constant_bool(!cnst_eq(rty->c, rhs_ty.c)); break;
+            case TOKEN_SYM2('&', '&'): rty->c = constant_bool(cnst_truthy(rty->c) && cnst_truthy(rhs_ty.c)); break;
+            case TOKEN_SYM2('|', '|'): rty->c = constant_bool(cnst_truthy(rty->c) || cnst_truthy(rhs_ty.c)); break;
+            case TOKEN_SYM1('>'): rty->c = constant_bool(cnst_cmp(rty->c, rhs_ty.c) > 0); break;
+            case TOKEN_SYM2('>', '='): rty->c = constant_bool(cnst_cmp(rty->c, rhs_ty.c) >= 0); break;
+            case TOKEN_SYM1('<'): rty->c = constant_bool(cnst_cmp(rty->c, rhs_ty.c) < 0); break;
+            case TOKEN_SYM2('<', '='): rty->c = constant_bool(cnst_cmp(rty->c, rhs_ty.c) <= 0); break;
             default: rty->c = s_not_constant; break;
         }
     }
@@ -558,6 +569,7 @@ static const TypeStr s_valist_ptr = {.buf = {2, TYPE_BYTE_UUVALIST, TYPE_BYTE_PO
 
 static void elaborate_expr_ExprBuiltin(struct Elaborator* elab, struct ExprBuiltin* e, struct TypeStr* rty)
 {
+    const RowCol* const rc = token_rc(e->tok);
     switch (e->tok->type)
     {
         case LEX_SIZEOF:
@@ -571,7 +583,7 @@ static void elaborate_expr_ExprBuiltin(struct Elaborator* elab, struct ExprBuilt
                 elaborate_decl(elab, e->type);
                 typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, rty, e->type);
             }
-            e->sizeof_size = typestr_get_size(elab->types, rty, &e->tok->rc);
+            e->sizeof_size = typestr_get_size(elab->types, rty, rc);
             *rty = s_type_int;
             typestr_assign_constant_value(rty, mp_from_u64(e->sizeof_size));
             break;
@@ -581,7 +593,7 @@ static void elaborate_expr_ExprBuiltin(struct Elaborator* elab, struct ExprBuilt
             if (!typestr_match(rty, &s_valist_ptr))
             {
                 typestr_error2(
-                    &e->tok->rc,
+                    rc,
                     elab->types,
                     "error: expected variable of type '%.*s' as first argument to va_start, but got '%.*s'\n",
                     &s_valist_ptr,
@@ -604,7 +616,7 @@ static void elaborate_expr_ExprBuiltin(struct Elaborator* elab, struct ExprBuilt
         case LEX_BUILTIN_CONSTANT_P:
             *rty = s_type_int;
             rty->c.is_const = 1;
-            rty->c.value = s_zero_constant;
+            rty->c.value = s_zero_c128;
             break;
         case LEX_BUILTIN_BSWAP32:
         case LEX_BUILTIN_BSWAP64:;
@@ -614,7 +626,11 @@ static void elaborate_expr_ExprBuiltin(struct Elaborator* elab, struct ExprBuilt
                 *rty = s_type_uint;
             else
                 *rty = s_type_ulong;
-            typestr_implicit_conversion(elab->types, &e->tok->rc, &ty, rty);
+            typestr_implicit_conversion(elab->types, rc, &ty, rty);
+            break;
+        case LEX_PROVE:
+            elaborate_expr(elab, e->expr1, rty);
+            *rty = s_type_void;
             break;
         default:
             parser_tok_error(e->tok, "error: unimplemented builtin\n");
@@ -628,45 +644,38 @@ static void elaborate_expr_ExprUnOp(struct Elaborator* elab, struct ExprUnOp* e,
     elaborate_expr_decay(elab, e->lhs, rty);
     const struct TypeStr orig_lhs = *rty;
     unsigned int lhs_mask = typestr_mask(rty);
+    const RowCol* const rc = token_rc(e->tok);
     switch (e->tok->type)
     {
         case TOKEN_SYM1('+'):
             if (!(lhs_mask & TYPE_MASK_ARITH))
             {
-                typestr_error1(&e->tok->rc,
-                               elab->types,
-                               "error: expected arithmetic type in first argument but got '%.*s'\n",
-                               &orig_lhs);
+                typestr_error1(
+                    rc, elab->types, "error: expected arithmetic type in first argument but got '%.*s'\n", &orig_lhs);
                 *rty = s_type_int;
             }
             break;
         case TOKEN_SYM1('-'):
             if (!(lhs_mask & TYPE_MASK_ARITH))
             {
-                typestr_error1(&e->tok->rc,
-                               elab->types,
-                               "error: expected arithmetic type in first argument but got '%.*s'\n",
-                               &orig_lhs);
+                typestr_error1(
+                    rc, elab->types, "error: expected arithmetic type in first argument but got '%.*s'\n", &orig_lhs);
                 *rty = s_type_int;
             }
             break;
         case TOKEN_SYM1('~'):
             if (!(lhs_mask & TYPE_FLAGS_INT))
             {
-                typestr_error1(&e->tok->rc,
-                               elab->types,
-                               "error: expected integer type in first argument but got '%.*s'\n",
-                               &orig_lhs);
+                typestr_error1(
+                    rc, elab->types, "error: expected integer type in first argument but got '%.*s'\n", &orig_lhs);
             }
             typestr_apply_integral_type(rty, &s_type_int);
             break;
         case TOKEN_SYM1('!'):
             if (!(lhs_mask & TYPE_MASK_SCALAR))
             {
-                typestr_error1(&e->tok->rc,
-                               elab->types,
-                               "error: expected scalar type in first argument but got '%.*s'\n",
-                               &orig_lhs);
+                typestr_error1(
+                    rc, elab->types, "error: expected scalar type in first argument but got '%.*s'\n", &orig_lhs);
             }
             typestr_apply_integral_type(rty, &s_type_int);
             break;
@@ -678,7 +687,8 @@ static void elaborate_expr_ExprUnOp(struct Elaborator* elab, struct ExprUnOp* e,
 
     if (rty->c.is_const)
     {
-        if (!rty->c.is_lvalue && !rty->c.sym)
+        constant_load_lvalue(&rty->c);
+        if (!rty->c.sym)
         {
             switch (e->tok->type)
             {
@@ -703,7 +713,7 @@ static void elaborate_expr_ExprDeref(struct Elaborator* elab, struct ExprDeref* 
     }
     else
     {
-        typestr_error1(&e->tok->rc, elab->types, "error: cannot dereference value of type '%.*s'\n", rty);
+        typestr_error1(token_rc(e->tok), elab->types, "error: cannot dereference value of type '%.*s'\n", rty);
         *rty = s_type_unknown;
     }
 }
@@ -711,6 +721,7 @@ static void elaborate_expr_lvalue_ExprDeref(Elaborator* elab, ExprDeref* e, Type
 {
     elaborate_expr_decay(elab, e->lhs, rty);
     e->take_address = 1;
+    constant_addressof(&e->c);
 }
 static void elaborate_expr_ExprAddress(struct Elaborator* elab, struct ExprAddress* e, struct TypeStr* rty)
 {
@@ -725,12 +736,12 @@ static void elaborate_expr_ExprIncr(struct Elaborator* elab, struct ExprIncr* e,
     if (!(lhs_mask & TYPE_MASK_SCALAR))
     {
         typestr_error1(
-            &e->tok->rc, elab->types, "error: expected scalar type in first argument but got '%.*s'\n", &orig_lhs);
+            token_rc(e->tok), elab->types, "error: expected scalar type in first argument but got '%.*s'\n", &orig_lhs);
         *rty = s_type_unknown;
     }
     else if (lhs_mask & TYPE_FLAGS_POINTER)
     {
-        e->sizeof_ = typestr_get_add_size(elab->types, rty, &e->tok->rc);
+        e->sizeof_ = typestr_get_add_size(elab->types, rty, token_rc(e->tok));
     }
     else
     {
@@ -944,7 +955,7 @@ static void elaborate_init_ty_AstInit(struct Elaborator* elab, size_t offset, co
             }
         }
         if (di_end(&iter)) break;
-        const RowCol* const rc = init->init->tok ? &init->init->tok->rc : NULL;
+        const RowCol* const rc = token_rc(init->init->tok);
         DInitFrame* back = array_back(&iter.stk, sizeof(*back));
         if (init->init->kind == AST_INIT)
         {
@@ -1041,10 +1052,11 @@ static void elaborate_init_ty(struct Elaborator* elab, size_t offset, const Type
             // standard expression initialization
             struct TypeStr ts;
             elaborate_expr_decay(elab, expr, &ts);
-            typestr_implicit_conversion(elab->types, ast->tok ? &ast->tok->rc : NULL, &ts, dty);
+            typestr_implicit_conversion(elab->types, token_rc(ast->tok), &ts, dty);
             if (typestr_is_const(dty))
             {
                 *c = ts.c;
+                constant_load_lvalue(c);
             }
         }
     }
@@ -1177,8 +1189,6 @@ static void typestr_from_numlit(TypeStr* t, unsigned char byte, uint64_t numeric
 {
     t->buf.buf[0] = 1;
     t->buf.buf[1] = byte;
-    memset(&t->c, 0, sizeof(t->c));
-    t->c.is_const = 1;
     typestr_assign_constant_value(t, mp_from_u64(numeric));
 }
 
@@ -1319,6 +1329,7 @@ static void elaborate_expr(struct Elaborator* elab, struct Expr* top_expr, struc
         top_expr->sizing = typestr_calc_sizing_zero_void(elab->types, rty, token_rc(top_expr->tok));
     }
     top_expr->c = rty->c;
+    constant_load_lvalue(&top_expr->c);
     top_expr->elaborated = 1;
 }
 
@@ -1326,6 +1337,7 @@ static void expr_addressof(Expr* e, TypeStr* ty)
 {
     e->take_address = 1;
     typestr_addressof(ty);
+    constant_addressof(&e->c);
 }
 
 static void elaborate_expr_lvalue_ExprRef(Elaborator* elab, ExprRef* e, TypeStr* rty)
@@ -1355,7 +1367,8 @@ static void elaborate_expr_ExprField_lhs(struct Elaborator* elab, struct ExprFie
             if (field)
             {
                 e->sym = field;
-                typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, rty, field->def);
+                *rty = e->sym->type;
+                rty->c = s_not_constant;
                 typestr_add_cvr(rty, cvr_mask);
             }
             else
@@ -1420,8 +1433,7 @@ static void elaborate_expr_lvalue_ExprField(Elaborator* elab, ExprField* e, Type
         elaborate_expr_lvalue(elab, e->lhs, rty);
     }
     elaborate_expr_ExprField_lhs(elab, e, rty);
-    typestr_add_pointer(rty);
-    e->take_address = 1;
+    expr_addressof(&e->expr_base, rty);
 }
 
 static void elaborate_expr_lvalue(struct Elaborator* elab, struct Expr* expr, struct TypeStr* rty)
@@ -1444,6 +1456,7 @@ static void elaborate_expr_lvalue(struct Elaborator* elab, struct Expr* expr, st
     }
     expr->sizing = typestr_calc_elem_sizing(elab->types, rty, token_rc(expr->tok));
     expr->c = rty->c;
+    constant_load_lvalue(&expr->c);
     expr->elaborated = 1;
 }
 
@@ -1456,6 +1469,7 @@ static void elaborate_expr_decay(struct Elaborator* elab, struct Expr* expr, str
     }
     expr->sizing = typestr_calc_sizing_zero_void(elab->types, rty, token_rc(expr->tok));
     expr->c = rty->c;
+    constant_load_lvalue(&expr->c);
     expr->elaborated = 1;
 }
 
@@ -1471,6 +1485,7 @@ static void elaborate_expr_ExprCast(Elaborator* elab, ExprCast* e, TypeStr* rty)
 {
     TypeStr orig;
     elaborate_expr_decay(elab, e->expr, &orig);
+    constant_load_lvalue(&orig.c);
     elaborate_declspecs(elab, e->specs);
     elaborate_decl(elab, e->type);
     typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, rty, e->type);
@@ -1484,11 +1499,6 @@ static void elaborate_expr_ExprCast(Elaborator* elab, ExprCast* e, TypeStr* rty)
         }
         else if ((rty_mask & TYPE_FLAGS_POINTER) && typestr_is_constant_zero(&orig))
         {
-        }
-        else if ((rty_mask & TYPE_FLAGS_POINTER) && (orig_mask & TYPE_MASK_FN_ARR) && orig.c.is_lvalue)
-        {
-            rty->c = orig.c;
-            rty->c.is_lvalue = 0;
         }
         else if (rty_mask & orig_mask & TYPE_FLAGS_INT)
         {
@@ -1702,7 +1712,8 @@ static int elaborate_decl(Elaborator* const elab, Decl* const decl)
             {
                 Decl* prev = elab->cur_decl;
                 elab->cur_decl = decl;
-                elaborate_init_ty(elab, 0, &sym->type, &sym->type.c, decl->init);
+                elaborate_init_ty(elab, 0, &sym->type, &sym->const_init, decl->init);
+                if (!typestr_is_const(&sym->type)) sym->const_init = s_not_constant;
                 elab->cur_decl = prev;
             }
             if (tyb == TYPE_BYTE_UNK_ARRAY)
@@ -1758,13 +1769,9 @@ static int elaborate_decl(Elaborator* const elab, Decl* const decl)
                             "error: array initializer must be either a string literal or an initializer list\n"));
                     }
                 }
-                sym->type.c.is_const = 1;
-                sym->type.c.is_lvalue = 1;
-                sym->type.c.sym = sym;
             }
-
             sym->align = typestr_get_align(elab->types, &sym->type);
-            if (tyb == TYPE_BYTE_UNK_ARRAY && !decl->sym->next_field && decl->sym->parent_su)
+            if (tyb == TYPE_BYTE_UNK_ARRAY && !sym->next_field && sym->parent_su)
             {
             }
             else

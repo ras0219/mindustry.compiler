@@ -8,5 +8,6 @@ struct StrStrMap;
 struct StringSet;
 typedef struct Array StrList;
 struct Parser;
+struct Elaborator;
 struct Token;
 struct Constant;

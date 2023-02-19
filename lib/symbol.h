@@ -148,6 +148,7 @@ typedef struct Symbol
     unsigned char is_array_or_fn : 1;
     unsigned char is_complete : 1;
     TypeStr type;
+    Constant const_init;
 
     Sizing fn_ret_sizing;
     size_t field_offset;

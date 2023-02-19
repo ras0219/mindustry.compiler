@@ -156,6 +156,38 @@ static struct TACAddress be_push_tace(struct BackEnd* be, const struct TACEntry*
                 return ret;
             }
         }
+        else if (e->op == TACO_BRZ)
+        {
+            if (e->arg1.kind == TACA_IMM)
+            {
+                if (e->arg1.imm == 0)
+                {
+                    TACEntry rep = {
+                        .op = TACO_JUMP,
+                        .arg1 = e->arg2,
+                        .rc = e->rc,
+                    };
+                    be_push_tace(be, &rep, sizing);
+                }
+                return s_taca_void;
+            }
+        }
+        else if (e->op == TACO_BRNZ)
+        {
+            if (e->arg1.kind == TACA_IMM)
+            {
+                if (e->arg1.imm != 0)
+                {
+                    TACEntry rep = {
+                        .op = TACO_JUMP,
+                        .arg1 = e->arg2,
+                        .rc = e->rc,
+                    };
+                    be_push_tace(be, &rep, sizing);
+                }
+                return s_taca_void;
+            }
+        }
     }
 
     const size_t offset = array_size(&be->code, sizeof(struct TACEntry));
@@ -329,6 +361,7 @@ static TACAddress be_increment(struct BackEnd* be, const TACAddress* addr, int o
     }
     else if (!sizing_is_pointer(addr->sizing))
     {
+        fprintf(stderr, "be_increment\n");
         abort();
     }
     struct TACEntry tace = {
@@ -338,6 +371,22 @@ static TACAddress be_increment(struct BackEnd* be, const TACAddress* addr, int o
     };
     return be_push_tace(be, &tace, s_sizing_ptr);
 }
+
+static struct TACAddress be_from_constant(BackEnd* be, const Constant* c)
+{
+    if (c->is_lvalue) abort();
+    if (c->sym)
+    {
+        TACAddress addr = c->sym->addr;
+        be_take_address(be, &addr);
+        return be_increment(be, &addr, c->value.lower);
+    }
+    else
+    {
+        return taca_imm(c->value.lower);
+    }
+}
+
 static TACAddress be_umultiply(struct BackEnd* be, const TACAddress* addr, int operand)
 {
     if (operand == 0) return taca_imm(0);
@@ -475,9 +524,9 @@ static int be_compile_init(
                 assign.arg2.sizing.width = assign.arg1.sizing.width;
             }
         }
-        else if (expr->c.is_const && !expr->c.sym)
+        else if (expr->c.is_const)
         {
-            assign.arg2 = taca_imm(expr->c.value.lower);
+            assign.arg2 = be_from_constant(be, &expr->c);
         }
         be_push_tace(be, &assign, s_sizing_zero);
     }
@@ -497,9 +546,19 @@ fail:
 }
 
 static int be_compile_Decl(struct BackEnd* be, struct Decl* decl);
+static int be_compile_StmtDecls(struct BackEnd* be, struct StmtDecls* stmt);
+static int be_compile_DeclSpecs(struct BackEnd* be, struct DeclSpecs* specs)
+{
+    if (specs->enum_init)
+    {
+        return be_compile_StmtDecls(be, specs->enum_init);
+    }
+    return 0;
+}
 static int be_compile_StmtDecls(struct BackEnd* be, struct StmtDecls* stmt)
 {
     int rc = 0;
+    if (stmt->specs) UNWRAP(be_compile_DeclSpecs(be, stmt->specs));
     void* const* const decls = (void**)be->parser->expr_seqs.data + stmt->seq.off;
     for (size_t i = 0; i < stmt->seq.ext; ++i)
     {
@@ -559,7 +618,7 @@ static int be_compile_ExprLit(struct BackEnd* be, struct ExprLit* e, struct TACA
 static int be_compile_ExprRef(struct BackEnd* be, struct ExprRef* esym, struct TACAddress* out)
 {
     int rc = 0;
-    if (esym->sym->is_enum_constant)
+    if (esym->sym->is_enum_constant && 0)
     {
         out->kind = TACA_IMM;
         out->imm = esym->sym->enum_value;
@@ -721,6 +780,7 @@ static int be_compile_ExprBuiltin(struct BackEnd* be, struct ExprBuiltin* e, str
     struct TACEntry tace = {.rc = &e->tok->rc};
     switch (e->tok->type)
     {
+        case LEX_PROVE: *out = s_taca_void; break;
         case LEX_UUVA_START:
             // see https://uclibc.org/docs/psABI-x86_64.pdf
             tace.op = TACO_ASSIGN;
@@ -1064,51 +1124,14 @@ static int be_compile_ExprBinOp(struct BackEnd* be, struct ExprBinOp* e, struct 
         case TOKEN_SYM1('^'): tace.op = TACO_BXOR; goto basic_binary;
         case TOKEN_SYM2('<', '<'): tace.op = TACO_SHL; goto basic_binary;
         case TOKEN_SYM2('>', '>'): tace.op = TACO_SHR; goto basic_binary;
-        // case TOKEN_SYM2('+', '='):
-        // case TOKEN_SYM2('-', '='):
-        // case TOKEN_SYM2('/', '='):
-        // case TOKEN_SYM2('&', '='):
-        // case TOKEN_SYM2('|', '='):
-        // case TOKEN_SYM2('^', '='):
-        // case TOKEN_SYM2('*', '='):
-        // case TOKEN_SYM2('%', '='):
-        // case TOKEN_SYM3('<', '<', '='):
-        // case TOKEN_SYM3('>', '>', '='):
-        // case TOKEN_SYM1('='):
         case TOKEN_SYM1(','):
             UNWRAP(be_compile_expr(be, e->lhs, out));
             UNWRAP(be_compile_expr(be, e->rhs, out));
             break;
-        // case TOKEN_SYM1('?'):
-        // {
-        //     if (e->rhs->kind != EXPR_BINOP) abort();
-        //     struct ExprBinOp* rhs = (struct ExprBinOp*)e->rhs;
-        //     UNWRAP(be_compile_expr(be, e->lhs, &tace.arg1));
-        //     size_t on_false = be->next_label++;
-        //     size_t end = be->next_label++;
-        //     tace.op = TACO_BRZ;
-        //     tace.arg2.kind = TACA_ALABEL;
-        //     tace.arg2.alabel = on_false;
-        //     be_push_tace(be, &tace, s_sizing_zero);
-        //     *out = be_alloc_temp(be, e->sizing);
-        //     struct TACAddress ret_addr = *out;
-        //     ret_addr.is_addr = 1;
-        //     struct TACEntry assign = {
-        //         .op = TACO_ASSIGN,
-        //         .arg1 = ret_addr,
-        //     };
-        //     UNWRAP(be_compile_expr(be, rhs->lhs, &assign.arg2));
-        //     be_push_tace(be, &assign, s_sizing_zero);
-        //     be_push_jump(be, end);
-        //     be_push_label(be, on_false);
-        //     UNWRAP(be_compile_expr(be, rhs->rhs, &assign.arg2));
-        //     be_push_tace(be, &assign, s_sizing_zero);
-        //     be_push_label(be, end);
-        //     break;
-        // }
         case TOKEN_SYM2('|', '|'):
         case TOKEN_SYM2('&', '&'):
         {
+            const char is_or = e->tok->type == TOKEN_SYM2('|', '|');
             *out = be_alloc_temp(be, e->sizing);
             TACEntry assign_out = {
                 .op = TACO_ASSIGN,
@@ -1116,22 +1139,42 @@ static int be_compile_ExprBinOp(struct BackEnd* be, struct ExprBinOp* e, struct 
             };
             assign_out.arg1.is_addr = 1;
             UNWRAP(be_compile_expr(be, e->lhs, &assign_out.arg2));
-            be_push_tace(be, &assign_out, e->sizing);
-            size_t on_false = be->next_label++;
-            tace.op = e->tok->type == TOKEN_SYM2('&', '&') ? TACO_BRZ : TACO_BRNZ;
-            tace.arg2.kind = TACA_ALABEL;
-            tace.arg2.alabel = on_false;
-            tace.arg1 = assign_out.arg2;
-            be_push_tace(be, &tace, s_sizing_zero);
-            UNWRAP(be_compile_expr(be, e->rhs, &assign_out.arg2));
-            be_push_tace(be, &assign_out, e->sizing);
-            be_push_label(be, on_false);
-            const TACEntry logical = {
-                .op = TACO_NEQ,
-                .arg1 = *out,
-                .arg2 = taca_imm(0),
-            };
-            *out = be_push_tace(be, &logical, e->sizing);
+            if (assign_out.arg2.kind == TACA_IMM)
+            {
+                if (is_or == !assign_out.arg2.imm)
+                {
+                    UNWRAP(be_compile_expr(be, e->rhs, out));
+                    const TACEntry logical = {
+                        .op = TACO_NEQ,
+                        .arg1 = *out,
+                        .arg2 = taca_imm(0),
+                    };
+                    *out = be_push_tace(be, &logical, e->sizing);
+                }
+                else
+                {
+                    *out = taca_imm(is_or);
+                }
+            }
+            else
+            {
+                be_push_tace(be, &assign_out, e->sizing);
+                size_t on_false = be->next_label++;
+                tace.op = e->tok->type == TOKEN_SYM2('&', '&') ? TACO_BRZ : TACO_BRNZ;
+                tace.arg2.kind = TACA_ALABEL;
+                tace.arg2.alabel = on_false;
+                tace.arg1 = assign_out.arg2;
+                be_push_tace(be, &tace, s_sizing_zero);
+                UNWRAP(be_compile_expr(be, e->rhs, &assign_out.arg2));
+                be_push_tace(be, &assign_out, e->sizing);
+                be_push_label(be, on_false);
+                const TACEntry logical = {
+                    .op = TACO_NEQ,
+                    .arg1 = *out,
+                    .arg2 = taca_imm(0),
+                };
+                *out = be_push_tace(be, &logical, e->sizing);
+            }
             break;
         }
         default:
@@ -1153,10 +1196,7 @@ push:
     *out = be_push_tace(be, &tace, e->sizing);
     if (e->c.is_const)
     {
-        if (!e->c.sym)
-        {
-            *out = taca_imm(e->c.value.lower);
-        }
+        *out = be_from_constant(be, &e->c);
     }
 
 fail:
@@ -1336,23 +1376,36 @@ static int be_compile_StmtIf(struct BackEnd* be, struct StmtIf* stmt)
         .arg2 = {.kind = TACA_ALABEL, .alabel = else_lbl},
     };
     UNWRAP(be_compile_expr(be, stmt->cond, &e.arg1));
-    be_push_tace(be, &e, s_sizing_zero);
-    be->frame_size = start_frame_size;
-    UNWRAP(be_compile_stmt(be, stmt->if_body));
-
-    if (stmt->else_body)
+    if (stmt->cond->c.is_const)
     {
-        size_t end_lbl = be->next_label++;
-        be_push_jump(be, end_lbl);
-        be_push_label(be, else_lbl);
-        UNWRAP(be_compile_stmt(be, stmt->else_body));
-        be_push_label(be, end_lbl);
+        if (stmt->cond->c.value.lower || stmt->cond->c.sym)
+        {
+            UNWRAP(be_compile_stmt(be, stmt->if_body));
+        }
+        else
+        {
+            if (stmt->else_body) UNWRAP(be_compile_stmt(be, stmt->else_body));
+        }
     }
     else
     {
-        be_push_label(be, else_lbl);
-    }
+        be_push_tace(be, &e, s_sizing_zero);
+        be->frame_size = start_frame_size;
+        UNWRAP(be_compile_stmt(be, stmt->if_body));
 
+        if (stmt->else_body)
+        {
+            size_t end_lbl = be->next_label++;
+            be_push_jump(be, end_lbl);
+            be_push_label(be, else_lbl);
+            UNWRAP(be_compile_stmt(be, stmt->else_body));
+            be_push_label(be, end_lbl);
+        }
+        else
+        {
+            be_push_label(be, else_lbl);
+        }
+    }
 fail:
     return rc;
 }
@@ -1427,6 +1480,7 @@ static void be_compile_global(struct BackEnd* be, Decl* decl)
         {
             name = sym->name;
         }
+
         sym->addr.sizing = decl->sym->size;
         struct Decl* def = sym->def ? sym->def : decl;
         if ((decl->type->kind == AST_DECLFN && !def->init) || def->specs->is_extern)
@@ -1478,6 +1532,14 @@ static void be_compile_global(struct BackEnd* be, Decl* decl)
 
 static int be_compile_Decl(struct BackEnd* be, struct Decl* decl)
 {
+    Symbol* const sym = decl->sym;
+    if (sym->is_enum_constant)
+    {
+        sym->addr.kind = TACA_IMM;
+        sym->addr.imm = sym->enum_value;
+        sym->addr.sizing = s_sizing_int;
+        return 0;
+    }
     if (!decl->type) return 0;
 
     if (decl->specs->is_static)
@@ -1729,6 +1791,7 @@ int be_compile(struct BackEnd* be)
         if (top_seq[i]->kind != STMT_DECLS) abort();
 #endif
         struct StmtDecls* decls = (void*)top_seq[i];
+        UNWRAP(be_compile_DeclSpecs(be, decls->specs));
         if (decls->specs->is_typedef) continue;
         Decl* const* const decl_seq = (void*)(ast_seqs + decls->seq.off);
         for (size_t j = 0; j < decls->seq.ext; ++j)

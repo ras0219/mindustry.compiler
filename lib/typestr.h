@@ -25,7 +25,37 @@ typedef struct Constant
     unsigned char is_lvalue : 1;
 } Constant;
 
-static const struct Constant s_not_constant = {0};
+static const Constant s_not_constant = {0};
+static const Constant s_one_constant = {.is_const = 1, .value.lower = 1};
+static const Constant s_zero_constant = {.is_const = 1};
+
+void constant_load_lvalue(Constant* c);
+void constant_addressof(Constant* c);
+
+__forceinline Constant constant_sym_lvalue(struct Symbol* s)
+{
+    const Constant c = {
+        .sym = s,
+        .is_const = 1,
+        .is_lvalue = 1,
+    };
+    return c;
+}
+
+__forceinline Constant constant_i64(int64_t i)
+{
+    const Constant c = {
+        .is_const = 1,
+        .value = mp_from_i64(i),
+    };
+    return c;
+}
+
+__forceinline Constant constant_bool(int i)
+{
+    Constant ret = {.is_const = 1, .value.lower = !!i};
+    return ret;
+}
 
 typedef struct TypeStrBuf
 {
@@ -164,11 +194,6 @@ enum
     TYPE_MASK_OBJECT = TYPE_FLAGS_VOID | TYPE_FLAGS_INT | TYPE_FLAGS_POINTER | TYPE_FLAGS_STRUCT | TYPE_FLAGS_UNION,
     TYPE_MASK_FN_ARR = TYPE_FLAGS_FUNCTION | TYPE_FLAGS_ARRAY,
     TYPE_MASK_AGGREGATE = TYPE_FLAGS_ARRAY | TYPE_FLAGS_STRUCT | TYPE_FLAGS_UNION,
-
-    TYPE_COMMON_FLAGS_CHAR = TYPE_FLAGS_CHAR | TYPE_FLAGS_INT | TYPE_FLAGS_PROMOTE_INT | TYPE_FLAGS_WIDTH1,
-    TYPE_COMMON_FLAGS_SHORT = TYPE_FLAGS_INT | TYPE_FLAGS_PROMOTE_INT | TYPE_FLAGS_WIDTH2,
-    TYPE_COMMON_FLAGS_INT = TYPE_FLAGS_INT | TYPE_FLAGS_WIDTH4,
-    TYPE_COMMON_FLAGS_LONG = TYPE_FLAGS_INT | TYPE_FLAGS_WIDTH8,
 };
 
 __forceinline static unsigned int typestr_bits_from_flags(unsigned flags)

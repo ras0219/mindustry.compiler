@@ -336,32 +336,47 @@ typedef struct StmtIf
     // may be null
     struct Ast* else_body;
 } StmtIf;
-struct StmtSwitch
+
+typedef struct StmtProve
+{
+    INHERIT_AST;
+
+    struct Expr* cond;
+} StmtProve;
+#define AST_STRUCT_STMT_PROVE StmtProve
+#define AST_KIND_StmtProve STMT_PROVE
+
+typedef struct StmtSwitch
 {
     INHERIT_AST;
 
     struct Expr* expr;
     // body
     SeqView seq;
-};
-struct StmtCase
+} StmtSwitch;
+#define AST_STRUCT_STMT_SWITCH StmtSwitch
+#define AST_KIND_StmtSwitch STMT_SWITCH
+
+typedef struct StmtCase
 {
     INHERIT_AST;
 
     struct Expr* expr;
     // filled by elaboration to the numeric case value
     size_t value;
-};
+} StmtCase;
 #define AST_STRUCT_STMT_CASE StmtCase
 #define AST_KIND_StmtCase STMT_CASE
 
-struct StmtGoto
+typedef struct StmtGoto
 {
     INHERIT_AST;
 
     const struct Token* dst;
-};
-struct StmtLoop
+} StmtGoto;
+#define AST_STRUCT_STMT_GOTO StmtGoto
+#define AST_KIND_StmtGoto STMT_GOTO
+typedef struct StmtLoop
 {
     INHERIT_AST;
 
@@ -373,13 +388,15 @@ struct StmtLoop
     struct Expr* advance;
 
     int is_do_while : 1;
-};
-struct StmtBlock
+} StmtLoop;
+#define AST_STRUCT_STMT_LOOP StmtLoop
+#define AST_KIND_StmtLoop STMT_LOOP
+typedef struct StmtBlock
 {
     INHERIT_AST;
 
     SeqView seq;
-};
+} StmtBlock;
 #define AST_STRUCT_STMT_BLOCK StmtBlock
 #define AST_KIND_StmtBlock STMT_BLOCK
 

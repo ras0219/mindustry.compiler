@@ -12,9 +12,11 @@ void main()
 {
     enum A x = a3;
     unsigned y = (x == a2);
-    if (y & a1);
+    if (y & a1)
+        ;
     if ((unsigned int)y == a1) sizeof(enum A);
     W w, *pw = &w;
+    pw = &w;
     pw->a = a1;
 }
 struct N

@@ -7,8 +7,8 @@
 #include "errors.h"
 #include "typestr.h"
 
-const Constant128 s_zero_constant = {0};
-const Constant128 s_one_constant = {.lower = 1};
+const Constant128 s_zero_c128 = {0};
+const Constant128 s_one_c128 = {.lower = 1};
 
 static void mp_mul_i(Constant128* a, Constant128* b)
 {
@@ -91,7 +91,7 @@ Constant128 mp_div(Constant128 a, Constant128 b, const struct Token* tok)
     if (b.lower == 0)
     {
         parser_tok_error(tok, "error: divide by 0 is undefined.\n");
-        return s_zero_constant;
+        return s_zero_c128;
     }
     int neg = a.upper ^ b.upper;
     if (a.upper)
@@ -112,7 +112,7 @@ Constant128 mp_mod(Constant128 a, Constant128 b, const struct Token* tok)
     if (b.lower == 0)
     {
         parser_tok_error(tok, "error: remainder by 0 is undefined.\n");
-        return s_zero_constant;
+        return s_zero_c128;
     }
     int neg = a.upper;
     if (a.upper)
@@ -161,12 +161,12 @@ Constant128 mp_shl(Constant128 a, Constant128 b, const struct Token* tok)
     if (b.upper)
     {
         parser_tok_error(tok, "error: shifting a value by <0 is undefined behavior.\n");
-        return s_zero_constant;
+        return s_zero_c128;
     }
     if (b.lower >= 64)
     {
         parser_tok_error(tok, "error: shifting a value by >=64 is undefined behavior.\n");
-        return s_zero_constant;
+        return s_zero_c128;
     }
     a.lower <<= b.lower;
     return a;
@@ -176,13 +176,13 @@ Constant128 mp_shr(Constant128 a, Constant128 b, const struct Token* tok)
     if (b.upper)
     {
         parser_tok_error(tok, "error: shifting a value by <0 is undefined behavior.\n");
-        return s_zero_constant;
+        return s_zero_c128;
     }
     if (b.lower == 0) return a;
     if (b.lower >= 64)
     {
         parser_tok_error(tok, "error: shifting a value by >=64 is undefined behavior.\n");
-        return s_zero_constant;
+        return s_zero_c128;
     }
     a.lower >>= b.lower;
     if (a.upper) a.lower |= -1LL << (64 - b.lower);

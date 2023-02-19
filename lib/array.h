@@ -62,6 +62,7 @@ __forceinline void* arrptr_pop(struct Array* arr)
     arr->sz -= sizeof(void*);
     return ((void**)arr->data)[arr->sz / sizeof(void*)];
 }
+size_t arrptr_find(const struct Array* arr, const void* p);
 
 __forceinline size_t arrsz_at(const struct Array* arr, size_t i) { return ((size_t*)arr->data)[i]; }
 __forceinline size_t arrsz_size(const struct Array* arr) { return arr->sz / sizeof(size_t); }
