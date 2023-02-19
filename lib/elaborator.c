@@ -264,7 +264,7 @@ static int cnst_cmp(Constant c1, Constant c2) { return mp_cmp(c1.value, c2.value
 static int cnst_truthy(Constant c1) { return c1.sym || mp_is_nonzero(c1.value); }
 
 static void elaborate_expr_ExprBinOp_impl(
-    Elaborator* elab, const RowCol* rc, TypeStr* rty, TypeStr* rhs, unsigned int op)
+    Elaborator* elab, const RowCol* rc, TypeStr* rty, TypeStr* rhs, unsigned int op, Sizing* common_sz)
 {
     const unsigned int binmask = binop_mask(op);
     unsigned int lhs_mask = typestr_mask(rty);
@@ -327,6 +327,7 @@ static void elaborate_expr_ExprBinOp_impl(
             promote_common_type(rty, rhs);
         }
     }
+    *common_sz = typestr_calc_sizing(elab->types, rty, rc);
     switch (op)
     {
         case TOKEN_SYM1('&'):
@@ -431,20 +432,22 @@ static void elaborate_expr_ExprAssign(struct Elaborator* elab, struct ExprAssign
                     rc, elab->types, "error: expected integer type on right-hand side, but got '%.*s'\n", &rhs_ty);
             }
             elaborate_expr_ExprAdd_impl(elab, rc, rty, &rhs_ty, TOKEN_SLICE_SYM1(op), &e->mult);
+            e->common_sz = typestr_calc_sizing(elab->types, rty, rc);
             break;
         case TOKEN_SYM2('*', '='):
         case TOKEN_SYM2('%', '='):
         case TOKEN_SYM2('/', '='):
         case TOKEN_SYM2('^', '='):
         case TOKEN_SYM2('&', '='):
-        case TOKEN_SYM2('|', '='): elaborate_expr_ExprBinOp_impl(elab, rc, rty, &rhs_ty, TOKEN_SLICE_SYM1(op)); break;
+        case TOKEN_SYM2('|', '='):
+            elaborate_expr_ExprBinOp_impl(elab, rc, rty, &rhs_ty, TOKEN_SLICE_SYM1(op), &e->common_sz);
+            break;
         case TOKEN_SYM3('<', '<', '='):
         case TOKEN_SYM3('>', '>', '='):
-            elaborate_expr_ExprBinOp_impl(elab, rc, rty, &rhs_ty, TOKEN_SLICE_SYM2(op));
+            elaborate_expr_ExprBinOp_impl(elab, rc, rty, &rhs_ty, TOKEN_SLICE_SYM2(op), &e->common_sz);
             break;
         default: abort();
     }
-    e->is_signed = typestr_calc_sizing(elab->types, &rhs_ty, rc).is_signed;
     *rty = orig_lhs;
 }
 
@@ -524,10 +527,15 @@ static void elaborate_expr_ExprBinOp(struct Elaborator* elab, struct ExprBinOp* 
     elaborate_expr_decay(elab, e->lhs, rty);
     struct TypeStr rhs_ty;
     elaborate_expr_decay(elab, e->rhs, &rhs_ty);
-    elaborate_expr_ExprBinOp_impl(elab, rc, rty, &rhs_ty, op);
-    e->is_signed = typestr_calc_sizing(elab->types, &rhs_ty, rc).is_signed;
+    elaborate_expr_ExprBinOp_impl(elab, rc, rty, &rhs_ty, op, &e->common_sz);
     constant_load_lvalue(&rty->c);
     constant_load_lvalue(&rhs_ty.c);
+    if (op == TOKEN_SYM1(','))
+    {
+        rty->c = rhs_ty.c;
+        return;
+    }
+
     if (rty->c.is_const && rhs_ty.c.is_const)
     {
         switch (op)

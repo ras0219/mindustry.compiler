@@ -8,6 +8,13 @@ typedef struct Sizing
 } Sizing;
 
 static const Sizing s_sizing_ptr = {.width = 8};
+static const Sizing s_sizing_int = {
+    .is_signed = 1,
+    .width = 4,
+};
+static const Sizing s_sizing_uint = {
+    .width = 4,
+};
 
 static const uint64_t s_umax_sizing[] = {
     [1] = UINT8_MAX,

@@ -35,9 +35,14 @@ static const Interval s_intervals_pos_sz[] = {
     [8] = {.base = 1, .maxoff = INT64_MAX - 1},
 };
 
+static const Interval s_interval_zero = {.base = 0, .maxoff = 0, .sz.width = 4, .sz.is_signed = 1};
+static const Interval s_interval_one = {.base = 1, .maxoff = 0, .sz.width = 4, .sz.is_signed = 1};
+static const Interval s_interval_zero_one = {.base = 0, .maxoff = 1, .sz.width = 4, .sz.is_signed = 1};
+
 static __forceinline int interval_wrapped(Interval i) { return UINT64_MAX - i.maxoff < i.base; }
 
 int interval_contains_0(Interval i);
+int interval_contains_nonzero(Interval i);
 
 static __forceinline int interval_contains(Interval i, uint64_t j) { return i.maxoff >= j - i.base; }
 
@@ -65,3 +70,24 @@ Interval interval_div(Interval i, Interval j);
 
 int64_t interval_signed_min(Interval i);
 int64_t interval_signed_max(Interval i);
+
+typedef struct IntervalLimitsI64
+{
+    int64_t min;
+    int64_t max;
+} IntervalLimitsI64;
+IntervalLimitsI64 interval_signed_limits(Interval i);
+
+typedef struct IntervalLimitsU64
+{
+    uint64_t min;
+    uint64_t max;
+} IntervalLimitsU64;
+IntervalLimitsU64 interval_unsigned_limits(Interval i);
+
+Interval interval_lt(Interval a, Interval b);
+Interval interval_ltu(Interval a, Interval b);
+Interval interval_lte(Interval a, Interval b);
+Interval interval_lteu(Interval a, Interval b);
+Interval interval_eq(Interval a, Interval b);
+Interval interval_equ(Interval a, Interval b);

@@ -180,7 +180,7 @@ typedef struct ExprBinOp
     struct Expr* lhs;
     struct Expr* rhs;
 
-    char is_signed;
+    Sizing common_sz;
 } ExprBinOp;
 #define AST_STRUCT_EXPR_BINOP ExprBinOp
 #define AST_KIND_ExprBinOp EXPR_BINOP
@@ -208,7 +208,7 @@ typedef struct ExprAssign
     // for addition and subtraction, multiplier (positive) or divisor (negative)
     int32_t mult;
     // whether the op should be performed with signed numbers
-    char is_signed;
+    Sizing common_sz;
 } ExprAssign;
 #define AST_STRUCT_EXPR_ASSIGN ExprAssign
 #define AST_KIND_ExprAssign EXPR_ASSIGN

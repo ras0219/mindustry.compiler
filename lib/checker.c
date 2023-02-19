@@ -28,6 +28,55 @@ typedef struct ValueInfo
 static const ValueInfo s_valueinfo_void = {0};
 static const ValueInfo s_valueinfo_uninit = {.or_uninitialized = 1};
 static const ValueInfo s_valueinfo_any = {.or_any = 1};
+// static const ValueInfo s_valueinfo_null = {.or_null = 1};
+
+static void valinfo_init_interval(ValueInfo* info, Interval v)
+{
+    memset(info, 0, sizeof(ValueInfo));
+    info->or_integer = 1;
+    info->val = v;
+}
+static void valinfo_init_symaddr(ValueInfo* info, const Symbol* sym)
+{
+    memset(info, 0, sizeof(ValueInfo));
+    info->or_symaddr = 1;
+    info->sym = sym;
+}
+static void valinfo_init_integer(ValueInfo* info, Sizing sz, uint64_t value)
+{
+    memset(info, 0, sizeof(ValueInfo));
+    info->or_integer = 1;
+    info->val.sz = sz;
+    info->val.base = value;
+}
+
+static int value_is_truthy(ValueInfo* result)
+{
+    return result->or_any || result->or_symaddr || (result->or_integer && interval_contains_nonzero(result->val));
+}
+static int value_is_falsy(ValueInfo* result)
+{
+    return result->or_any || result->or_null || (result->or_integer && interval_contains_0(result->val));
+}
+
+static void value_cast_to_bool(ValueInfo* result)
+{
+    if (result->or_any)
+    {
+        *result = s_valueinfo_any;
+    }
+    else
+    {
+        int tru = value_is_truthy(result);
+        int fal = value_is_falsy(result);
+        if (!fal)
+            valinfo_init_interval(result, s_interval_one);
+        else if (!tru)
+            valinfo_init_interval(result, s_interval_zero);
+        else
+            valinfo_init_interval(result, s_interval_zero_one);
+    }
+}
 
 typedef struct CheckContext
 {
@@ -49,6 +98,40 @@ struct Checker
     Array fmt_tmp;
     CheckContext ctx;
 };
+
+void check_merge_values(Checker* chk, ValueInfo* v, const ValueInfo* w)
+{
+    if (v->or_any || w->or_any)
+    {
+        *v = s_valueinfo_any;
+        return;
+    }
+
+    if (w->or_integer)
+    {
+        if (v->or_integer)
+        {
+            v->val = interval_merge(v->val, w->val);
+        }
+        else
+        {
+            v->val = w->val;
+            v->or_integer = 1;
+        }
+    }
+    if (w->or_null) v->or_null = 1;
+    if (w->or_symaddr)
+    {
+        if (v->or_symaddr && v->sym != w->sym)
+            v->sym = NULL;
+        else
+        {
+            v->or_symaddr = 1;
+            v->sym = w->sym;
+        }
+    }
+    if (w->or_uninitialized) v->or_uninitialized = 1;
+}
 
 static Interval chk_neg_ofchk(Checker* chk, Interval i, const Token* tok)
 {
@@ -101,26 +184,6 @@ static ValueInfo* chkctx_get_info(CheckContext* ctx, const Symbol* sym)
         return NULL;
     }
     return (ValueInfo*)ctx->info.data + i;
-}
-
-static void valinfo_init_integer(ValueInfo* info, Sizing sz, uint64_t value)
-{
-    memset(info, 0, sizeof(ValueInfo));
-    info->or_integer = 1;
-    info->val.sz = sz;
-    info->val.base = value;
-}
-static void valinfo_init_interval(ValueInfo* info, Interval v)
-{
-    memset(info, 0, sizeof(ValueInfo));
-    info->or_integer = 1;
-    info->val = v;
-}
-static void valinfo_init_symaddr(ValueInfo* info, const Symbol* sym)
-{
-    memset(info, 0, sizeof(ValueInfo));
-    info->or_symaddr = 1;
-    info->sym = sym;
 }
 
 // static void valinfo_cast_int(ValueInfo* info, Sizing sz)
@@ -265,10 +328,41 @@ static void check_ExprAddress(Checker* chk, const ExprAddress* e, ValueInfo* res
 {
     check_expr(chk, e->lhs, result);
 }
+
+static void check_ExprBinOp_or_and(Checker* chk, const ExprBinOp* e, ValueInfo* result)
+{
+    if (result->or_any) return;
+    value_cast_to_bool(result);
+    if (!result->or_integer) abort();
+    int nonzero = interval_contains_nonzero(result->val);
+    int zero = interval_contains_0(result->val);
+    if (e->tok->type == TOKEN_SYM2('&', '&'))
+    {
+        if (nonzero)
+        {
+            check_expr(chk, e->rhs, result);
+            value_cast_to_bool(result);
+            if (zero) result->val = interval_merge(s_interval_zero, result->val);
+        }
+    }
+    if (e->tok->type == TOKEN_SYM2('|', '|'))
+    {
+        if (zero)
+        {
+            check_expr(chk, e->rhs, result);
+            value_cast_to_bool(result);
+            if (nonzero) result->val = interval_merge(s_interval_one, result->val);
+        }
+    }
+}
+
 static void check_ExprBinOp(Checker* chk, const ExprBinOp* e, ValueInfo* result)
 {
-    ValueInfo rhs;
     check_expr(chk, e->lhs, result);
+    if (e->tok->type == TOKEN_SYM1(',')) return check_expr(chk, e->rhs, result);
+    if (e->tok->type == TOKEN_SYM2('&', '&') || e->tok->type == TOKEN_SYM2('|', '|'))
+        return check_ExprBinOp_or_and(chk, e, result);
+    ValueInfo rhs;
     check_expr(chk, e->rhs, &rhs);
     if (rhs.or_any) *result = s_valueinfo_any;
     if (result->or_any) return;
@@ -278,6 +372,8 @@ static void check_ExprBinOp(Checker* chk, const ExprBinOp* e, ValueInfo* result)
         *result = s_valueinfo_any;
         return;
     }
+    result->val = interval_cast(result->val, e->common_sz);
+    rhs.val = interval_cast(rhs.val, e->common_sz);
     switch (e->tok->type)
     {
         case TOKEN_SYM1('/'):
@@ -318,6 +414,31 @@ static void check_ExprBinOp(Checker* chk, const ExprBinOp* e, ValueInfo* result)
             }
             break;
         case TOKEN_SYM1('*'): valinfo_init_interval(result, interval_mult(result->val, rhs.val)); break;
+        case TOKEN_SYM1('<'):
+            valinfo_init_interval(result,
+                                  result->val.sz.is_signed ? interval_lt(result->val, rhs.val)
+                                                           : interval_ltu(result->val, rhs.val));
+            break;
+        case TOKEN_SYM1('>'):
+            valinfo_init_interval(result,
+                                  result->val.sz.is_signed ? interval_lt(rhs.val, result->val)
+                                                           : interval_ltu(rhs.val, result->val));
+            break;
+        case TOKEN_SYM2('<', '='):
+            valinfo_init_interval(result,
+                                  result->val.sz.is_signed ? interval_lte(result->val, rhs.val)
+                                                           : interval_lteu(result->val, rhs.val));
+            break;
+        case TOKEN_SYM2('>', '='):
+            valinfo_init_interval(result,
+                                  result->val.sz.is_signed ? interval_lte(rhs.val, result->val)
+                                                           : interval_lteu(rhs.val, result->val));
+            break;
+        case TOKEN_SYM2('=', '='):
+            valinfo_init_interval(result,
+                                  result->val.sz.is_signed ? interval_eq(result->val, rhs.val)
+                                                           : interval_equ(result->val, rhs.val));
+            break;
         default:
             parser_tok_error(e->tok, "error: unimplemented ExprBinOp type (%s)\n", token_str(chk->p, e->tok));
             *result = s_valueinfo_any;

@@ -326,13 +326,6 @@ static void be_push_jump(struct BackEnd* be, size_t n)
     entry->arg1.alabel = n;
 }
 
-static const Sizing s_sizing_int = {
-    .is_signed = 1,
-    .width = 4,
-};
-static const Sizing s_sizing_uint = {
-    .width = 4,
-};
 static const Sizing s_sizing_zero = {0};
 
 static int sizing_is_pointer(Sizing s) { return s.width == 8 && s.is_signed == 0; }
@@ -1057,8 +1050,8 @@ static int be_compile_ExprAssign(struct BackEnd* be, struct ExprAssign* e, struc
         case TOKEN_SYM2('+', '='): tace.op = TACO_ADD; goto binary_op_assign;
         case TOKEN_SYM2('-', '='): tace.op = TACO_SUB; goto binary_op_assign;
         case TOKEN_SYM2('*', '='): tace.op = TACO_MUL; goto binary_op_assign;
-        case TOKEN_SYM2('/', '='): tace.op = e->is_signed ? TACO_IDIV : TACO_DIV; goto binary_op_assign;
-        case TOKEN_SYM2('%', '='): tace.op = e->is_signed ? TACO_IMOD : TACO_MOD; goto binary_op_assign;
+        case TOKEN_SYM2('/', '='): tace.op = e->common_sz.is_signed ? TACO_IDIV : TACO_DIV; goto binary_op_assign;
+        case TOKEN_SYM2('%', '='): tace.op = e->common_sz.is_signed ? TACO_IMOD : TACO_MOD; goto binary_op_assign;
         case TOKEN_SYM2('&', '='): tace.op = TACO_BAND; goto binary_op_assign;
         case TOKEN_SYM2('|', '='): tace.op = TACO_BOR; goto binary_op_assign;
         case TOKEN_SYM2('^', '='): tace.op = TACO_BXOR; goto binary_op_assign;
@@ -1110,15 +1103,15 @@ static int be_compile_ExprBinOp(struct BackEnd* be, struct ExprBinOp* e, struct 
     tace.rc = &e->tok->rc;
     switch (e->tok->type)
     {
-        case TOKEN_SYM2('>', '='): tace.op = e->is_signed ? TACO_LTEQ : TACO_LTEQU; goto swapped_binary;
-        case TOKEN_SYM1('>'): tace.op = e->is_signed ? TACO_LT : TACO_LTU; goto swapped_binary;
-        case TOKEN_SYM2('<', '='): tace.op = e->is_signed ? TACO_LTEQ : TACO_LTEQU; goto basic_binary;
-        case TOKEN_SYM1('<'): tace.op = e->is_signed ? TACO_LT : TACO_LTU; goto basic_binary;
+        case TOKEN_SYM2('>', '='): tace.op = e->common_sz.is_signed ? TACO_LTEQ : TACO_LTEQU; goto swapped_binary;
+        case TOKEN_SYM1('>'): tace.op = e->common_sz.is_signed ? TACO_LT : TACO_LTU; goto swapped_binary;
+        case TOKEN_SYM2('<', '='): tace.op = e->common_sz.is_signed ? TACO_LTEQ : TACO_LTEQU; goto basic_binary;
+        case TOKEN_SYM1('<'): tace.op = e->common_sz.is_signed ? TACO_LT : TACO_LTU; goto basic_binary;
         case TOKEN_SYM2('=', '='): tace.op = TACO_EQ; goto basic_binary;
         case TOKEN_SYM2('!', '='): tace.op = TACO_NEQ; goto basic_binary;
         case TOKEN_SYM1('*'): tace.op = TACO_MUL; goto basic_binary;
-        case TOKEN_SYM1('/'): tace.op = e->is_signed ? TACO_IDIV : TACO_DIV; goto basic_binary;
-        case TOKEN_SYM1('%'): tace.op = e->is_signed ? TACO_IMOD : TACO_MOD; goto basic_binary;
+        case TOKEN_SYM1('/'): tace.op = e->common_sz.is_signed ? TACO_IDIV : TACO_DIV; goto basic_binary;
+        case TOKEN_SYM1('%'): tace.op = e->common_sz.is_signed ? TACO_IMOD : TACO_MOD; goto basic_binary;
         case TOKEN_SYM1('|'): tace.op = TACO_BOR; goto basic_binary;
         case TOKEN_SYM1('&'): tace.op = TACO_BAND; goto basic_binary;
         case TOKEN_SYM1('^'): tace.op = TACO_BXOR; goto basic_binary;

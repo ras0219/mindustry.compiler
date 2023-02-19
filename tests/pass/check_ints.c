@@ -1,5 +1,6 @@
+#define UINT32_MAX 2147483647U
 #define INT32_MAX 2147483647
-#define INT32_MIN (-INT32_MAX-1)
+#define INT32_MIN (-INT32_MAX - 1)
 
 int main()
 {
@@ -12,6 +13,8 @@ int main()
     __prove(&z);
     (-INT32_MAX) - 10;
     __prove(-INT32_MAX);
-    __prove(INT32_MAX + INT32_MIN);
+    __prove(INT32_MIN);
     __prove(INT32_MAX > INT32_MIN);
+    __prove(UINT32_MAX > 0);
+    __prove(1 || z);
 }

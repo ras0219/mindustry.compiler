@@ -29,6 +29,7 @@ int interval_contains_0(Interval i)
 {
     return i.base == 0 || ((i.base + i.maxoff) & s_umax_sizing[i.sz.width]) < i.base;
 }
+int interval_contains_nonzero(Interval i) { return i.base || i.maxoff; }
 
 static __forceinline uint64_t u64_sat_add(uint64_t a, uint64_t b) { return UINT64_MAX - a < b ? UINT64_MAX : a + b; }
 
@@ -358,6 +359,35 @@ int64_t interval_signed_max(Interval i)
     else
         return interval_signed_to_i64(i.base + i.maxoff, i.sz.width);
 }
+static __forceinline int interval_is_unsigned_wrap(Interval i) { return s_umax_sizing[i.sz.width] - i.maxoff < i.base; }
+static uint64_t interval_unsigned_min(Interval i)
+{
+    if (interval_is_unsigned_wrap(i))
+        return 0;
+    else
+        return i.base;
+}
+static uint64_t interval_unsigned_max(Interval i)
+{
+    return interval_sat_add(i.base, i.maxoff, s_umax_sizing[i.sz.width]);
+}
+IntervalLimitsI64 interval_signed_limits(Interval i)
+{
+    IntervalLimitsI64 r = {
+        .max = interval_signed_max(i),
+        .min = interval_signed_min(i),
+    };
+    return r;
+}
+IntervalLimitsU64 interval_unsigned_limits(Interval i)
+{
+    IntervalLimitsU64 r = {
+        .max = interval_unsigned_max(i),
+        .min = interval_unsigned_min(i),
+    };
+    return r;
+}
+
 static Interval interval_from_signed_limits(int64_t imin, int64_t imax, uint32_t width)
 {
     Interval i = {
@@ -370,22 +400,6 @@ static Interval interval_from_signed_limits(int64_t imin, int64_t imax, uint32_t
     return i;
 }
 
-// static __forceinline int interval_is_unsigned_wrap(Interval i) { return s_umax_sizing[i.sz.width] - i.maxoff <
-// i.base; }
-//  static uint64_t interval_unsigned_min(Interval i)
-//  {
-//      if (interval_is_unsigned_wrap(i))
-//          return 0;
-//      else
-//          return i.base;
-//  }
-//  static uint64_t interval_unsigned_max(Interval i)
-//  {
-//      if (interval_is_unsigned_wrap(i))
-//          return UINT64_MAX;
-//      else
-//          return interval_signed_to_i64(i.base + i.maxoff, i.sz.width);
-//  }
 //  static Interval interval_from_unsigned_limits(uint64_t umin, uint64_t umax, uint32_t width)
 //  {
 //      Interval i = {
@@ -494,4 +508,68 @@ Interval interval_div(Interval i, Interval j)
     }
     if (first) abort();
     return result;
+}
+Interval interval_lt(Interval a, Interval b)
+{
+    IntervalLimitsI64 l = interval_signed_limits(a);
+    IntervalLimitsI64 r = interval_signed_limits(b);
+    if (l.max < r.min)
+        return s_interval_one;
+    else if (l.min >= r.max)
+        return s_interval_zero;
+    else
+        return s_interval_zero_one;
+}
+Interval interval_ltu(Interval a, Interval b)
+{
+    IntervalLimitsU64 l = interval_unsigned_limits(a);
+    IntervalLimitsU64 r = interval_unsigned_limits(b);
+    if (l.max < r.min)
+        return s_interval_one;
+    else if (l.min >= r.max)
+        return s_interval_zero;
+    else
+        return s_interval_zero_one;
+}
+Interval interval_lte(Interval a, Interval b)
+{
+    IntervalLimitsI64 l = interval_signed_limits(a);
+    IntervalLimitsI64 r = interval_signed_limits(b);
+    if (l.max <= r.min)
+        return s_interval_one;
+    else if (l.min > r.max)
+        return s_interval_zero;
+    else
+        return s_interval_zero_one;
+}
+Interval interval_lteu(Interval a, Interval b)
+{
+    IntervalLimitsU64 l = interval_unsigned_limits(a);
+    IntervalLimitsU64 r = interval_unsigned_limits(b);
+    if (l.max <= r.min)
+        return s_interval_one;
+    else if (l.min > r.max)
+        return s_interval_zero;
+    else
+        return s_interval_zero_one;
+}
+Interval interval_eq(Interval a, Interval b)
+{
+    if (a.maxoff == 0 && b.maxoff == 0 && a.base == b.base) return s_interval_one;
+    IntervalLimitsI64 l = interval_signed_limits(a);
+    IntervalLimitsI64 r = interval_signed_limits(b);
+    if (l.max < r.min || l.min > r.max)
+        return s_interval_zero;
+    else
+        return s_interval_zero_one;
+}
+Interval interval_equ(Interval a, Interval b)
+{
+    if (a.maxoff == 0 && b.maxoff == 0 && a.base == b.base) return s_interval_one;
+    IntervalLimitsU64 l = interval_unsigned_limits(a);
+    IntervalLimitsU64 r = interval_unsigned_limits(b);
+    if (l.max < r.min || l.min > r.max)
+        return s_interval_zero;
+    else
+        return s_interval_zero_one;
 }
