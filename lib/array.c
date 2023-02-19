@@ -59,7 +59,7 @@ void array_assign_zeroes(struct Array* arr, size_t size)
     memset(arr->data, 0, size);
 }
 void array_pop(struct Array* arr, size_t sz) { arr->sz -= sz; }
-void array_destroy(struct Array* arr) { free(arr->data); }
+void array_destroy(struct Array* arr) { my_free(arr->data); }
 
 size_t array_appends(struct Array* arr, const char* s)
 {

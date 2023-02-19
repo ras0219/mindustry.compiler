@@ -2,6 +2,11 @@
 #define INT32_MAX 2147483647
 #define INT32_MIN (-INT32_MAX - 1)
 
+void foo(int* f)
+{
+    *f;
+}
+
 int main()
 {
     int x = 0 + 2 - 3;

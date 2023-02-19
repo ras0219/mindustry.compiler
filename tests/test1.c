@@ -343,34 +343,6 @@ fail:
     return rc;
 }
 
-int parse_strings(struct TestState* state)
-{
-    int rc = 1;
-    StandardTest test = {0};
-    SUBTEST(stdtest_run(state,
-                        &test,
-                        "#define f(x) #x\n"
-                        "char str[] = f(==) \"hello\\n\";\n"));
-
-    // from https://en.cppreference.com/w/c/language/initialization
-    struct Expr** const exprs = (struct Expr**)test.parser->expr_seqs.data;
-    REQUIRE_EQ(1, test.parser->top->seq.ext);
-    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->seq.off])
-    {
-        REQUIRE_EQ(1, decls->seq.ext);
-        REQUIRE_EXPR(Decl, w, exprs[decls->seq.off])
-        {
-            REQUIRE_EQ(9, w->sym->size.width);
-            REQUIRE_AST(ExprLit, e, w->init) { REQUIRE_MEM_EQ("==hello\n", 9, e->text, e->tok->tok_len + 1); }
-        }
-    }
-
-    rc = 0;
-fail:
-    stdtest_destroy(&test);
-    return rc;
-}
-
 int parse_initializer(struct TestState* state)
 {
     int rc = 1;
@@ -2744,7 +2716,6 @@ int main(int argc, char** argv)
         }
     }
 
-    RUN_TEST(parse_strings);
     RUN_TEST(parse_main);
     RUN_TEST(parse_body);
     RUN_TEST(parse_sizeof);

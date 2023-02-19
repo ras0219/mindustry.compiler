@@ -5,6 +5,7 @@
 
 #include "compilermacros.h"
 #include "freevar.h"
+#include "fwd.h"
 #include "litsuffix.h"
 #include "seqview.h"
 #include "sizing.h"

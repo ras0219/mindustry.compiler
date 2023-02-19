@@ -99,6 +99,12 @@ struct Checker
     CheckContext ctx;
 };
 
+static void check_any_from_type(Checker* chk, ValueInfo* out, const TypeStrBuf* ty, const RowCol* rc)
+{
+    tsb_error1(rc, chk->elab->types, "error: cannot determine range from type: %*.s\n", ty);
+    *out = s_valueinfo_any;
+}
+
 void check_merge_values(Checker* chk, ValueInfo* v, const ValueInfo* w)
 {
     if (v->or_any || w->or_any)
@@ -488,6 +494,52 @@ static void check_ExprAdd(Checker* chk, const ExprAdd* e, ValueInfo* result)
     }
 }
 
+static void check_ExprDeref(Checker* chk, const ExprDeref* e, ValueInfo* result)
+{
+    check_expr(chk, e->lhs, result);
+    if (result->or_any) return;
+
+    if (result->or_null)
+    {
+        parser_tok_error(e->tok, "error: possible null pointer dereference\n");
+        *result = s_valueinfo_any;
+        return;
+    }
+    if (!e->take_address)
+    {
+        if (!result->or_symaddr)
+        {
+            parser_tok_error(e->tok, "error: expected pointer value\n");
+            *result = s_valueinfo_any;
+            return;
+        }
+
+        if (result->sym)
+        {
+            ValueInfo* info = chkctx_get_info(&chk->ctx, result->sym);
+            if (info)
+            {
+                if (info->or_uninitialized)
+                {
+                    parser_tok_error(e->tok, "error: possible uninitialized read: %s\n", result->sym->name);
+                    *result = s_valueinfo_any;
+                }
+                else
+                    *result = *info;
+            }
+            else
+            {
+                parser_tok_error(e->tok, "error: no info for symbol: %s\n", result->sym->name);
+                *result = s_valueinfo_any;
+            }
+        }
+        else
+        {
+            (void)check_any_from_type(chk, result, NULL, &e->tok->rc);
+        }
+    }
+}
+
 static void check_ExprRef(Checker* chk, const ExprRef* e, ValueInfo* result)
 {
     if (e->take_address)
@@ -525,6 +577,7 @@ static void check_expr(Checker* chk, const Expr* e, ValueInfo* result)
         DISPATCH_CHECK(ExprAddress);
         DISPATCH_CHECK(ExprBinOp);
         DISPATCH_CHECK(ExprAdd);
+        DISPATCH_CHECK(ExprDeref);
         DISPATCH_CHECK(ExprBuiltin);
         DISPATCH_CHECK(ExprUnOp);
 #undef DISPATCH_CHECK

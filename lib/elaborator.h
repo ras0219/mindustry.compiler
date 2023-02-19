@@ -6,8 +6,6 @@
 #include "array.h"
 #include "fwd.h"
 
-struct TypeStr;
-
 typedef struct Elaborator
 {
     struct Parser* p;

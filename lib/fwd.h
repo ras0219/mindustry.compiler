@@ -1,13 +1,21 @@
 #pragma once
 
 struct Array;
-struct Decl;
-struct TACAddress;
+struct AstType;
 struct BStringMap;
+struct Constant;
+struct Decl;
+struct DeclSpecs;
+struct Elaborator;
+struct Parser;
+struct RowCol;
 struct StrStrMap;
 struct StringSet;
-typedef struct Array StrList;
-struct Parser;
-struct Elaborator;
+struct TACAddress;
 struct Token;
-struct Constant;
+struct TypeSymbol;
+struct TypeStr;
+struct TypeStrBuf;
+struct TypeTable;
+
+typedef struct Array StrList;

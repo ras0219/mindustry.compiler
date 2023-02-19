@@ -183,7 +183,7 @@ static void elaborate_expr_ExprTernary(struct Elaborator* elab, ExprTernary* e, 
         promote_common_type(&etrue_ty, &efalse_ty);
         *rty = etrue_ty;
     }
-    else if (typestr_match(&etrue_ty, &efalse_ty))
+    else if (tsb_match(&etrue_ty.buf, &efalse_ty.buf))
     {
         *rty = etrue_ty;
     }
@@ -194,19 +194,19 @@ static void elaborate_expr_ExprTernary(struct Elaborator* elab, ExprTernary* e, 
         typestr_dereference(&efalse_ty);
         unsigned int combined_cvr = typestr_strip_cvr(&etrue_ty) | typestr_strip_cvr(&efalse_ty);
         etrue_ty.c = ct, efalse_ty.c = cf;
-        if (typestr_match(&etrue_ty, &s_type_void))
+        if (tsb_match(&etrue_ty.buf, &s_type_void.buf))
         {
             *rty = efalse_ty;
             typestr_add_cvr(rty, combined_cvr);
             typestr_add_pointer(rty);
         }
-        else if (typestr_match(&efalse_ty, &s_type_void))
+        else if (tsb_match(&efalse_ty.buf, &s_type_void.buf))
         {
             *rty = etrue_ty;
             typestr_add_cvr(rty, combined_cvr);
             typestr_add_pointer(rty);
         }
-        else if (typestr_match(&efalse_ty, &etrue_ty))
+        else if (tsb_match(&efalse_ty.buf, &etrue_ty.buf))
         {
             *rty = etrue_ty;
             typestr_add_cvr(rty, combined_cvr);
@@ -598,7 +598,7 @@ static void elaborate_expr_ExprBuiltin(struct Elaborator* elab, struct ExprBuilt
         case LEX_UUVA_START:
             elaborate_expr(elab, e->expr2, rty);
             elaborate_expr_lvalue(elab, e->expr1, rty);
-            if (!typestr_match(rty, &s_valist_ptr))
+            if (!tsb_match(&rty->buf, &s_valist_ptr.buf))
             {
                 typestr_error2(
                     rc,
@@ -715,7 +715,7 @@ static void elaborate_expr_ExprUnOp(struct Elaborator* elab, struct ExprUnOp* e,
 static void elaborate_expr_ExprDeref(struct Elaborator* elab, struct ExprDeref* e, struct TypeStr* rty)
 {
     elaborate_expr_decay(elab, e->lhs, rty);
-    if (typestr_is_pointer(rty))
+    if (typestr_byte(rty) == TYPE_BYTE_POINTER)
     {
         typestr_dereference(rty);
     }
@@ -988,9 +988,9 @@ static void elaborate_init_ty_AstInit(struct Elaborator* elab, size_t offset, co
 
             while (typestr_is_aggregate(&back->ty))
             {
-                if (typestr_match(&back->ty, &ts)) break;
+                if (tsb_match(&back->ty.buf, &ts.buf)) break;
                 if (ts_is_strlit && typestr_is_char_array(&back->ty)) goto skip_conversion;
-                if (typestr_match(&back->ty, &ts_decay))
+                if (tsb_match(&back->ty.buf, &ts_decay.buf))
                 {
                     expr->take_address = ts_decay_addr_taken;
                     break;
@@ -1033,7 +1033,7 @@ static void elaborate_init_ty(struct Elaborator* elab, size_t offset, const Type
             TypeStr ts = *dty;
             typestr_remove_array(&ts);
             typestr_strip_cvr(&ts);
-            if (!typestr_match(&ts, &s_type_char))
+            if (!tsb_match(&ts.buf, &s_type_char.buf))
             {
                 parser_tok_error(ast->tok, "error: array initializer must be an initializer list\n");
                 break;
@@ -1205,8 +1205,9 @@ static void typestr_from_strlit(TypeStr* t, ExprLit* lit)
     Symbol* sym = lit->sym;
     if (sym->string_constant == lit)
     {
+        // definition
         sym->type = s_type_char;
-        typestr_add_array(&sym->type, lit->tok->tok_len + 1);
+        tsb_add_array(&sym->type.buf, lit->tok->tok_len + 1);
         sym->type.c.is_const = 1;
         sym->type.c.is_lvalue = 1;
         sym->type.c.sym = sym;
@@ -1286,13 +1287,13 @@ static void elaborate_expr_ExprCall(struct Elaborator* elab,
         if (arg_expr == NULL) abort();
         elaborate_expr_decay(elab, arg_expr, &arg_expr_ty);
         struct TypeStr orig_arg_expr_ty = arg_expr_ty;
-        const RowCol* const rc = arg_expr->tok ? &arg_expr->tok->rc : NULL;
+        const RowCol* const rc = token_rc(arg_expr->tok);
         if (i < fn_info.extent)
         {
-            const struct TypeStr* orig_tt_arg = typestr_get_arg(elab->types, &fn_info, i);
-            typestr_implicit_conversion(elab->types, rc, &arg_expr_ty, orig_tt_arg);
-            param->sizing = typestr_calc_sizing(elab->types, orig_tt_arg, rc);
-            param->align = typestr_get_align(elab->types, orig_tt_arg);
+            const struct TypeStrBuf* orig_tt_arg = typestr_get_arg(elab->types, &fn_info, i);
+            typestr_implicit_conversion2(elab->types, rc, &arg_expr_ty, orig_tt_arg);
+            param->sizing = tsb_calc_sizing(elab->types, orig_tt_arg, rc);
+            param->align = tsb_get_align(elab->types, orig_tt_arg);
         }
         else
         {
@@ -1733,7 +1734,7 @@ static int elaborate_decl(Elaborator* const elab, Decl* const decl)
                 {
                     if (!decl->sym->next_field && decl->sym->parent_su)
                     {
-                        typestr_append_offset(&sym->type, 0, TYPE_BYTE_ARRAY);
+                        tsb_append_offset(&sym->type.buf, 0, TYPE_BYTE_ARRAY);
                     }
                     else
                     {
@@ -1762,13 +1763,13 @@ static int elaborate_decl(Elaborator* const elab, Decl* const decl)
                                 if (new_max > max_assign) max_assign = new_max;
                             }
                             if (max_assign == UINT32_MAX) abort();
-                            typestr_append_offset(&sym->type, max_assign + 1, TYPE_BYTE_ARRAY);
+                            tsb_append_offset(&sym->type.buf, max_assign + 1, TYPE_BYTE_ARRAY);
                         }
                     }
                     else if (init->kind == EXPR_LIT && init->tok->type == LEX_STRING)
                     {
                     strlit_init:
-                        typestr_append_offset(&sym->type, init->tok->tok_len + 1, TYPE_BYTE_ARRAY);
+                        tsb_append_offset(&sym->type.buf, init->tok->tok_len + 1, TYPE_BYTE_ARRAY);
                     }
                     else
                     {

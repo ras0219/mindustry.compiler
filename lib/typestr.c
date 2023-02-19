@@ -13,9 +13,9 @@
 
 typedef struct TypeTable
 {
-    struct Array typesyms;
-    struct Array fn_args_ends;
-    struct Array fn_args;
+    Array typesyms;
+    Array fn_args_ends;
+    Array fn_args;
 } TypeTable;
 
 static __forceinline uint32_t tsb_get_offset_i(const TypeStrBuf* ts, int i)
@@ -43,7 +43,7 @@ __forceinline static TypeSymbol* tt_get(const TypeTable* tt, unsigned int i)
 {
     return ((TypeSymbol**)tt->typesyms.data)[i];
 }
-unsigned int tt_register(struct TypeTable* tt, struct TypeSymbol* tsym)
+unsigned int tt_register(TypeTable* tt, struct TypeSymbol* tsym)
 {
     unsigned int ret = array_size(&tt->typesyms, sizeof(void*));
     arrptr_push(&tt->typesyms, tsym);
@@ -78,7 +78,7 @@ void constant_addressof(Constant* c)
     }
 }
 
-void typestr_promote_integer(struct TypeStr* rty)
+void typestr_promote_integer(TypeStr* rty)
 {
     if (typestr_mask(rty) & TYPE_FLAGS_PROMOTE_INT)
     {
@@ -86,33 +86,34 @@ void typestr_promote_integer(struct TypeStr* rty)
     }
 }
 
-void typestr_implicit_conversion(TypeTable* types,
-                                 const struct RowCol* rc,
-                                 const struct TypeStr* orig_from,
-                                 const struct TypeStr* orig_to)
+void typestr_implicit_conversion2(TypeTable* types,
+                                  const struct RowCol* rc,
+                                  const TypeStr* orig_from,
+                                  const TypeStrBuf* orig_to)
 {
-    if (typestr_match(orig_from, orig_to)) return;
+    if (tsb_match(&orig_from->buf, orig_to)) return;
 
     // first, value transformations
-    struct TypeStr from = *orig_from, to = *orig_to;
+    TypeStr from = *orig_from;
+    TypeStrBuf to = *orig_to;
     typestr_decay(&from);
-    typestr_strip_cvr(&to);
-    if (typestr_match(&from, &to)) return;
+    tsb_strip_cvr(&to);
+    if (tsb_match(&from.buf, &to)) return;
 
     // then, check secondary conversions
-    const unsigned from_mask = typestr_mask(&from), to_mask = typestr_mask(&to);
+    const unsigned from_mask = typestr_mask(&from), to_mask = tsb_mask(&to);
     if (from_mask & to_mask & TYPE_FLAGS_POINTER)
     {
         --from.buf.buf[0];
-        --to.buf.buf[0];
+        --to.buf[0];
         unsigned int cvr_from = typestr_strip_cvr(&from);
-        unsigned int cvr_to = typestr_strip_cvr(&to);
+        unsigned int cvr_to = tsb_strip_cvr(&to);
         if ((cvr_from & cvr_to) == cvr_from)
         {
             // cvr_to contains cvr_from
-            if (typestr_match(&to, &from)) return;
-            if (typestr_match(&s_type_void, &to)) return;
-            if (typestr_match(&s_type_void, &from)) return;
+            if (tsb_match(&to, &from.buf)) return;
+            if (tsb_match(&s_type_void.buf, &to)) return;
+            if (tsb_match(&s_type_void.buf, &from.buf)) return;
         }
     }
     else if (from_mask & TYPE_FLAGS_INT)
@@ -120,43 +121,48 @@ void typestr_implicit_conversion(TypeTable* types,
         if (to_mask & TYPE_FLAGS_INT) return;
         if ((to_mask & TYPE_FLAGS_POINTER) && typestr_is_constant_zero(orig_from)) return;
     }
-    typestr_error2(rc, types, "error: could not implicitly convert '%.*s' to '%.*s'\n", orig_from, orig_to);
+    TypeStr ty_to = {.buf = *orig_to};
+    typestr_error2(rc, types, "error: could not implicitly convert '%.*s' to '%.*s'\n", orig_from, &ty_to);
 }
 
-void typestr_append_offset(struct TypeStr* s, uint32_t offset, char offset_type)
+void tsb_append_offset(TypeStrBuf* s, uint32_t offset, char offset_type)
 {
-    if (s->buf.buf[0] < 0) abort();
-    if (TYPESTR_BUF_SIZE <= s->buf.buf[0] + sizeof(uint32_t) + 1) abort();
+    if (s->buf[0] < 0) abort();
+    if (TYPESTR_BUF_SIZE <= s->buf[0] + sizeof(uint32_t) + 1) abort();
 
-    int i = s->buf.buf[0] + 1;
-    memcpy(s->buf.buf + i, &offset, sizeof(offset));
+    int i = s->buf[0] + 1;
+    memcpy(s->buf + i, &offset, sizeof(offset));
     i += sizeof(offset);
-    s->buf.buf[i] = offset_type;
-    s->buf.buf[0] = i;
+    s->buf[i] = offset_type;
+    s->buf[0] = i;
 }
 
-void typestr_add_array(struct TypeStr* s, unsigned int n)
+void tsb_add_array(TypeStrBuf* s, unsigned int n)
 {
-    if (s->buf.buf[0] == 0) return;
+    if (s->buf[0] == 0) return;
     if (n == 0)
     {
         // unbounded array
-        int i = ++s->buf.buf[0];
+        int i = ++s->buf[0];
         if (i >= TYPESTR_BUF_SIZE) abort();
-        s->buf.buf[i] = TYPE_BYTE_UNK_ARRAY;
+        s->buf[i] = TYPE_BYTE_UNK_ARRAY;
     }
     else
-        typestr_append_offset(s, n, TYPE_BYTE_ARRAY);
+        tsb_append_offset(s, n, TYPE_BYTE_ARRAY);
 }
 
-void typestr_add_pointer(TypeStr* s)
+void tsb_add_pointer(TypeStrBuf* s)
 {
-    unsigned i = s->buf.buf[0];
+    unsigned i = s->buf[0];
     if (i == 0) return;
     ++i;
     if (i >= TYPESTR_BUF_SIZE) abort();
-    s->buf.buf[i] = TYPE_BYTE_POINTER;
-    s->buf.buf[0] = i;
+    s->buf[i] = TYPE_BYTE_POINTER;
+    s->buf[0] = i;
+}
+void typestr_add_pointer(TypeStr* s)
+{
+    tsb_add_pointer(&s->buf);
     if (s->c.is_const && s->c.is_lvalue)
     {
         s->c.is_lvalue = 0;
@@ -167,7 +173,7 @@ void typestr_add_pointer(TypeStr* s)
     }
 }
 
-void typestr_addressof(struct TypeStr* s)
+void typestr_addressof(TypeStr* s)
 {
     int i = s->buf.buf[0];
     if (i == 0) return;
@@ -201,42 +207,42 @@ void typestr_addressof(struct TypeStr* s)
     }
 }
 
-void typestr_add_cvr(struct TypeStr* s, unsigned int mask)
+void tsb_add_cvr(TypeStrBuf* s, unsigned int mask)
 {
-    if (s->buf.buf[0] == 0) return;
-    unsigned int m = typestr_strip_cvr(s);
-    int i = s->buf.buf[0];
+    if (s->buf[0] == 0) return;
+    unsigned int m = tsb_strip_cvr(s);
+    int i = s->buf[0];
     if (i == 0) return;
     if (i + 3 >= TYPESTR_BUF_SIZE) abort();
     if (!(mask & ~m)) return;
     m |= mask;
-    if (m & TYPESTR_CVR_C) s->buf.buf[++i] = TYPE_BYTE_CONST;
-    if (m & TYPESTR_CVR_V) s->buf.buf[++i] = TYPE_BYTE_VOLATILE;
-    if (m & TYPESTR_CVR_R) s->buf.buf[++i] = TYPE_BYTE_RESTRICT;
-    s->buf.buf[0] = i;
+    if (m & TYPESTR_CVR_C) s->buf[++i] = TYPE_BYTE_CONST;
+    if (m & TYPESTR_CVR_V) s->buf[++i] = TYPE_BYTE_VOLATILE;
+    if (m & TYPESTR_CVR_R) s->buf[++i] = TYPE_BYTE_RESTRICT;
+    s->buf[0] = i;
 }
 
-static void typestr_append_decltype(const void* const* expr_seqs, TypeTable* tt, TypeStr* s, const AstType* e);
+static void tsb_append_decltype(const void* const* expr_seqs, TypeTable* tt, TypeStrBuf* s, const AstType* e);
 
-static void typestr_append_typestr(TypeStr* out, const TypeStr* in)
+static void tsb_append_tsb(TypeStrBuf* out, const TypeStrBuf* in)
 {
 #if defined(TRACING_ELAB)
     fprintf(stderr, "typestr_append_typestr\n");
 #endif
-    if (out->buf.buf[0] < 0 || in->buf.buf[0] < 0) abort();
-    if (out->buf.buf[0] + in->buf.buf[0] + 1 >= sizeof(out->buf)) abort();
-    memcpy(out->buf.buf + out->buf.buf[0] + 1, in->buf.buf + 1, in->buf.buf[0]);
-    out->buf.buf[0] += in->buf.buf[0];
+    if (out->buf[0] < 0 || in->buf[0] < 0) abort();
+    if (out->buf[0] + in->buf[0] + 1 >= sizeof(out->buf)) abort();
+    memcpy(out->buf + out->buf[0] + 1, in->buf + 1, in->buf[0]);
+    out->buf[0] += in->buf[0];
 }
 
-static void typestr_append_decltype_DeclSpecs(TypeTable* tt, struct TypeStr* s, const DeclSpecs* d)
+static void tsb_append_decltype_DeclSpecs(TypeTable* tt, TypeStrBuf* s, const DeclSpecs* d)
 {
 #if defined(TRACING_ELAB)
     fprintf(stderr, "typestr_append_decltype_DeclSpecs\n");
 #endif
     if (d->_typedef)
     {
-        typestr_append_typestr(s, &d->_typedef->type);
+        tsb_append_tsb(s, &d->_typedef->type.buf);
     }
     else if (d->sym)
     {
@@ -258,13 +264,13 @@ static void typestr_append_decltype_DeclSpecs(TypeTable* tt, struct TypeStr* s, 
         }
         else
             abort();
-        typestr_append_offset(s, d->sym->idx, ch);
+        tsb_append_offset(s, d->sym->idx, ch);
     }
     else if (d->tok->type == LEX_UUVALIST)
     {
-        if (s->buf.buf[0] < 0 || s->buf.buf[0] >= TYPESTR_BUF_SIZE - 1) abort();
-        s->buf.buf[++s->buf.buf[0]] = TYPE_BYTE_UUVALIST;
-        typestr_append_offset(s, 1, TYPE_BYTE_ARRAY);
+        if (s->buf[0] < 0 || s->buf[0] >= TYPESTR_BUF_SIZE - 1) abort();
+        s->buf[++s->buf[0]] = TYPE_BYTE_UUVALIST;
+        tsb_append_offset(s, 1, TYPE_BYTE_ARRAY);
     }
     else
     {
@@ -297,21 +303,21 @@ static void typestr_append_decltype_DeclSpecs(TypeTable* tt, struct TypeStr* s, 
                 break;
             default: abort();
         }
-        s->buf.buf[++s->buf.buf[0]] = ch;
+        s->buf[++s->buf[0]] = ch;
     }
 
     unsigned int m = 0;
     if (d->is_const) m |= TYPESTR_CVR_C;
     if (d->is_volatile) m |= TYPESTR_CVR_V;
-    typestr_add_cvr(s, m);
+    tsb_add_cvr(s, m);
     return;
 }
 
 static size_t tt_insert_fnargs(TypeTable* tt, const Array* args)
 {
     size_t i = 0;
-    const size_t args_sz = array_size(args, sizeof(struct TypeStr));
-    struct TypeStr* tt_fn_args = tt->fn_args.data;
+    const size_t args_sz = array_size(args, sizeof(TypeStrBuf));
+    TypeStrBuf* tt_fn_args = tt->fn_args.data;
     size_t fn_args_ends_sz = arrsz_size(&tt->fn_args_ends);
     size_t prev_end = 0;
     for (; i < fn_args_ends_sz; ++i)
@@ -325,41 +331,41 @@ static size_t tt_insert_fnargs(TypeTable* tt, const Array* args)
     }
     // not found, insert seq at end
     array_push(&tt->fn_args, args->data, args->sz);
-    arrsz_push(&tt->fn_args_ends, array_size(&tt->fn_args, sizeof(struct TypeStr)));
+    arrsz_push(&tt->fn_args_ends, array_size(&tt->fn_args, sizeof(TypeStrBuf)));
 found:
     return i;
 }
 
-static void typestr_append_decltype(const void* const* expr_seqs, TypeTable* tt, TypeStr* s, const AstType* e)
+static void tsb_append_decltype(const void* const* expr_seqs, TypeTable* tt, TypeStrBuf* s, const AstType* e)
 {
     if (!e) abort();
     switch (e->kind)
     {
-        case AST_DECLSPEC: typestr_append_decltype_DeclSpecs(tt, s, (struct DeclSpecs*)e); break;
+        case AST_DECLSPEC: tsb_append_decltype_DeclSpecs(tt, s, (struct DeclSpecs*)e); break;
         case AST_DECLPTR:
         {
             struct DeclPtr* d = (struct DeclPtr*)e;
-            typestr_append_decltype(expr_seqs, tt, s, d->type);
-            typestr_add_pointer(s);
+            tsb_append_decltype(expr_seqs, tt, s, d->type);
+            tsb_add_pointer(s);
             unsigned int m = 0;
             if (d->is_const) m |= TYPESTR_CVR_C;
             if (d->is_volatile) m |= TYPESTR_CVR_V;
             if (d->is_restrict) m |= TYPESTR_CVR_R;
-            typestr_add_cvr(s, m);
+            tsb_add_cvr(s, m);
             break;
         }
         case AST_DECLARR:
         {
             struct DeclArr* d = (struct DeclArr*)e;
-            typestr_append_decltype(expr_seqs, tt, s, d->type);
-            typestr_add_array(s, d->integer_arity);
+            tsb_append_decltype(expr_seqs, tt, s, d->type);
+            tsb_add_array(s, d->integer_arity);
             break;
         }
         case AST_DECLFN:
         {
             struct DeclFn* d = (struct DeclFn*)e;
-            typestr_append_decltype(expr_seqs, tt, s, d->type);
-            struct Array args = {0};
+            tsb_append_decltype(expr_seqs, tt, s, d->type);
+            Array args = {0};
             if (d->is_param_list)
             {
                 // ?
@@ -369,34 +375,40 @@ static void typestr_append_decltype(const void* const* expr_seqs, TypeTable* tt,
                 const StmtDecls* const* const d_seq = (void*)(expr_seqs + d->seq.off);
                 for (size_t i = 0; i < d->seq.ext; ++i)
                 {
-                    struct TypeStr* arg_ts = array_alloc(&args, sizeof(struct TypeStr));
+                    TypeStrBuf* arg_ts = array_alloc(&args, sizeof(TypeStrBuf));
                     const struct StmtDecls* arg_decls = d_seq[i];
                     if (arg_decls->seq.ext != 1) abort();
-                    typestr_from_decltype_Decl(expr_seqs, tt, arg_ts, expr_seqs[arg_decls->seq.off]);
-                    arg_ts->c = s_not_constant;
+                    tsb_from_decltype_Decl(expr_seqs, tt, arg_ts, expr_seqs[arg_decls->seq.off]);
+                    tsb_decay(arg_ts);
                 }
                 if (d->is_varargs)
                 {
-                    struct TypeStr var = {.buf = {1, TYPE_BYTE_VARIADIC}};
+                    TypeStrBuf var = {1, TYPE_BYTE_VARIADIC};
                     array_push(&args, &var, sizeof(var));
                 }
             }
-            typestr_append_offset(s, tt_insert_fnargs(tt, &args), TYPE_BYTE_FUNCTION);
+            tsb_append_offset(s, tt_insert_fnargs(tt, &args), TYPE_BYTE_FUNCTION);
             array_destroy(&args);
             break;
         }
         default:
             parser_tok_error(e->tok, "error: typestr_append_decltype(, %s) failed\n", ast_kind_to_string(e->kind));
-            *s = s_type_unknown;
+            memset(s, 0, sizeof(*s));
             break;
     }
+}
+
+void tsb_from_decltype_Decl(const void* const* expr_seqs, TypeTable* tt, TypeStrBuf* s, const Decl* d)
+{
+    memset(s, 0, sizeof(*s));
+    tsb_append_decltype(expr_seqs, tt, s, d->type);
 }
 
 void typestr_from_decltype_Decl(const void* const* expr_seqs, TypeTable* tt, TypeStr* s, const Decl* d)
 {
     // initialize type
     *s = s_type_unknown;
-    typestr_append_decltype(expr_seqs, tt, s, d->type);
+    tsb_append_decltype(expr_seqs, tt, &s->buf, d->type);
     if (d->sym)
     {
         if (d->sym->is_enum_constant)
@@ -417,7 +429,7 @@ void typestr_from_decltype_Decl(const void* const* expr_seqs, TypeTable* tt, Typ
     }
 }
 
-static __forceinline size_t typestr_get_size_i_inner(const TypeTable* types, const TypeStrBuf* buf, int i)
+static __forceinline size_t tsb_get_size_i_inner(const TypeTable* types, const TypeStrBuf* buf, int i)
 {
     switch (buf->buf[i])
     {
@@ -443,40 +455,38 @@ static __forceinline size_t typestr_get_size_i_inner(const TypeTable* types, con
     }
 }
 
-unsigned long long typestr_get_size_i(const TypeTable* types, const TypeStr* ts, int i, const RowCol* rc)
+unsigned long long tsb_get_size_i(const TypeTable* types, const TypeStrBuf* buf, int i, const RowCol* rc)
 {
     size_t multiplier = 1;
-    const TypeStrBuf* const buf = &ts->buf;
     for (tsb_skip_cvr_i(buf, &i); buf->buf[i] == TYPE_BYTE_ARRAY; tsb_skip_cvr_i(buf, &i))
     {
         multiplier *= tsb_get_offset_i(buf, i);
         if (multiplier > UINT32_MAX)
         {
-            typestr_error1(rc, types, "error: type too large: %.*s\n", ts);
+            tsb_error1(rc, types, "error: type too large: %.*s\n", buf);
             return 1;
         }
         i -= sizeof(uint32_t) + 1;
     }
-    multiplier *= typestr_get_size_i_inner(types, buf, i);
+    multiplier *= tsb_get_size_i_inner(types, buf, i);
     if (multiplier == 0)
     {
-        typestr_error1(rc, types, "error: unable to get size of incomplete type: %.*s\n", ts);
+        tsb_error1(rc, types, "error: unable to get size of incomplete type: %.*s\n", buf);
         return 1;
     }
     else if (multiplier > UINT32_MAX)
     {
-        typestr_error1(rc, types, "error: type too large: %.*s\n", ts);
+        tsb_error1(rc, types, "error: type too large: %.*s\n", buf);
         return 1;
     }
     return multiplier;
 }
 
-unsigned long long typestr_get_align_i(const TypeTable* types, const struct TypeStr* ts, int i)
+unsigned long long tsb_get_align_i(const TypeTable* types, const TypeStrBuf* buf, int i)
 {
-    const TypeStrBuf* buf = &ts->buf;
 top:
     tsb_skip_cvr_i(buf, &i);
-    switch (ts->buf.buf[i])
+    switch (buf->buf[i])
     {
         case TYPE_BYTE_UNK_ARRAY:
         {
@@ -494,7 +504,7 @@ top:
             TypeSymbol* sym = tt_get(types, tsb_get_offset_i(buf, i));
             if (!sym->align)
             {
-                typestr_error1(NULL, types, "error: unable to get align of incomplete type: %.*s\n", ts);
+                tsb_error1(NULL, types, "error: unable to get align of incomplete type: %.*s\n", buf);
                 return 1;
             }
             return sym->align;
@@ -517,62 +527,65 @@ top:
         case TYPE_BYTE_FUNCTION: return 1;
         default:
         {
-            typestr_error1(NULL, types, "error: unable to get align of type: %.*s\n", ts);
+            tsb_error1(NULL, types, "error: unable to get align of type: %.*s\n", buf);
             return 1;
         }
     }
 }
 
-unsigned long long typestr_get_add_size(const TypeTable* types, const TypeStr* ts, const RowCol* rc)
+unsigned long long tsb_get_add_size(const TypeTable* types, const TypeStrBuf* ts, const RowCol* rc)
 {
-    int i = ts->buf.buf[0];
-    tsb_skip_cvr_i(&ts->buf, &i);
-    return ts->buf.buf[i] == TYPE_BYTE_POINTER ? typestr_get_size_i(types, ts, i - 1, rc) : 1;
+    int i = ts->buf[0];
+    tsb_skip_cvr_i(ts, &i);
+    return ts->buf[i] == TYPE_BYTE_POINTER ? tsb_get_size_i(types, ts, i - 1, rc) : 1;
 }
 
 static const Sizing s_sizing_zero = {0};
 // static const Sizing s_sizing_one = {.width = 1};
 
-static Sizing typestr_calc_sizing_i(const TypeTable* types, const TypeStr* ts, int i, const RowCol* rc)
+static Sizing tsb_calc_sizing_i(const TypeTable* types, const TypeStrBuf* ts, int i, const RowCol* rc)
 {
-    tsb_skip_cvr_i(&ts->buf, &i);
-    const size_t sz = typestr_get_size_i(types, ts, i, rc);
+    tsb_skip_cvr_i(ts, &i);
+    const size_t sz = tsb_get_size_i(types, ts, i, rc);
     if (sz > INT32_MAX) abort();
-    const Sizing ret = {.width = sz, .is_signed = !!(s_typestr_mask_data[ts->buf.buf[i]] & TYPE_FLAGS_SIGNED)};
+    const Sizing ret = {
+        .width = sz,
+        .is_signed = !!(s_typestr_mask_data[ts->buf[i]] & TYPE_FLAGS_SIGNED),
+    };
     return ret;
 }
 
-Sizing typestr_calc_elem_sizing(const TypeTable* types, const TypeStr* ts, const RowCol* rc)
+Sizing tsb_calc_elem_sizing(const TypeTable* types, const TypeStrBuf* ts, const RowCol* rc)
 {
-    int i = ts->buf.buf[0];
+    int i = ts->buf[0];
     if (i == 0) return s_sizing_zero;
 
-    tsb_skip_cvr_i(&ts->buf, &i);
-    if (ts->buf.buf[i] == TYPE_BYTE_POINTER)
+    tsb_skip_cvr_i(ts, &i);
+    if (ts->buf[i] == TYPE_BYTE_POINTER)
     {
         --i;
-        return typestr_calc_sizing_i(types, ts, i, rc);
+        return tsb_calc_sizing_i(types, ts, i, rc);
     }
     else
     {
-        typestr_error1(rc, types, "error: expected pointer type: %.*s\n", ts);
+        tsb_error1(rc, types, "error: expected pointer type: %.*s\n", ts);
         return s_sizing_zero;
     }
 }
 
-Sizing typestr_calc_sizing_zero_void(const TypeTable* types, const TypeStr* ts, const RowCol* rc)
+Sizing tsb_calc_sizing_zero_void(const TypeTable* types, const TypeStrBuf* ts, const RowCol* rc)
 {
-    int i = ts->buf.buf[0];
-    tsb_skip_cvr_i(&ts->buf, &i);
-    if ((i == 1 && ts->buf.buf[1] == TYPE_BYTE_VOID) || ts->buf.buf[i] == TYPE_BYTE_UNK_ARRAY)
+    int i = ts->buf[0];
+    tsb_skip_cvr_i(ts, &i);
+    if ((i == 1 && ts->buf[1] == TYPE_BYTE_VOID) || ts->buf[i] == TYPE_BYTE_UNK_ARRAY)
     {
         return s_sizing_zero;
     }
-    return typestr_calc_sizing_i(types, ts, i, rc);
+    return tsb_calc_sizing_i(types, ts, i, rc);
 }
-Sizing typestr_calc_sizing(const TypeTable* types, const struct TypeStr* ts, const RowCol* rc)
+Sizing tsb_calc_sizing(const TypeTable* types, const TypeStrBuf* ts, const RowCol* rc)
 {
-    return typestr_calc_sizing_i(types, ts, ts->buf.buf[0], rc);
+    return tsb_calc_sizing_i(types, ts, ts->buf[0], rc);
 }
 
 enum
@@ -616,14 +629,14 @@ const unsigned int s_typestr_mask_data[256] = {
     [TYPE_BYTE_UUVALIST] = TYPE_FLAGS_STRUCT,
 };
 
-unsigned char typestr_byte(const struct TypeStr* ts)
+unsigned char tsb_byte(const TypeStrBuf* ts)
 {
-    int i = ts->buf.buf[0];
-    tsb_skip_cvr_i(&ts->buf, &i);
-    return ts->buf.buf[i];
+    int i = ts->buf[0];
+    tsb_skip_cvr_i(ts, &i);
+    return ts->buf[i];
 }
 
-unsigned int typestr_get_offset(const struct TypeStr* ts) { return tsb_get_offset_i(&ts->buf, ts->buf.buf[0]); }
+unsigned int tsb_get_offset(const TypeStrBuf* ts) { return tsb_get_offset_i(ts, ts->buf[0]); }
 
 static const char* const s_typestr_fmt_strs[128] = {
     [TYPE_BYTE_INVALID] = "invalid type",
@@ -690,12 +703,12 @@ static const unsigned char s_typestr_fmt_ctrl[128] = {
     [TYPE_BYTE_FUNCTION] = TYPESTR_FMT_FN,
 };
 
-static void typestr_fmt_i(const struct TypeTable* tt, const struct TypeStr* ts, size_t i, struct Array* buf)
+static void tsb_fmt_i(const TypeTable* tt, const TypeStrBuf* ts, size_t i, Array* buf)
 {
     while (1)
     {
         if (i == 0) abort();
-        const unsigned char ch = ts->buf.buf[i];
+        const unsigned char ch = ts->buf[i];
         array_appends(buf, s_typestr_fmt_strs[ch]);
 
         const unsigned char ctrl = s_typestr_fmt_ctrl[ch];
@@ -708,7 +721,7 @@ static void typestr_fmt_i(const struct TypeTable* tt, const struct TypeStr* ts, 
         {
             continue;
         }
-        const uint32_t u = tsb_get_offset_i(&ts->buf, i + 1);
+        const uint32_t u = tsb_get_offset_i(ts, i + 1);
         i -= sizeof(u);
         if (ctrl == TYPESTR_FMT_ARR)
         {
@@ -728,14 +741,14 @@ static void typestr_fmt_i(const struct TypeTable* tt, const struct TypeStr* ts, 
         {
             size_t begin = u ? arrsz_at(&tt->fn_args_ends, u - 1) : 0;
             size_t end = arrsz_at(&tt->fn_args_ends, u);
-            const struct TypeStr* argtys = tt->fn_args.data;
+            const TypeStrBuf* argtys = tt->fn_args.data;
             if (begin != end)
             {
-                typestr_fmt(tt, argtys + begin, buf);
+                tsb_fmt(tt, argtys + begin, buf);
                 for (++begin; begin != end; ++begin)
                 {
                     array_appends(buf, ", ");
-                    typestr_fmt(tt, argtys + begin, buf);
+                    tsb_fmt(tt, argtys + begin, buf);
                 }
             }
             array_appends(buf, ") returning ");
@@ -745,14 +758,17 @@ static void typestr_fmt_i(const struct TypeTable* tt, const struct TypeStr* ts, 
     }
 }
 
-void typestr_fmt(const struct TypeTable* tt, const struct TypeStr* ts, struct Array* buf)
+void tsb_fmt(const TypeTable* tt, const TypeStrBuf* ts, Array* buf)
 {
-    if (ts->buf.buf[0] == 0)
-    {
+    if (ts->buf[0] == 0)
         array_appends(buf, "invalid type");
-        return;
-    }
-    typestr_fmt_i(tt, ts, ts->buf.buf[0], buf);
+    else
+        tsb_fmt_i(tt, ts, ts->buf[0], buf);
+}
+
+void typestr_fmt(const TypeTable* tt, const TypeStr* ts, Array* buf)
+{
+    tsb_fmt(tt, &ts->buf, buf);
     if (ts->c.is_const && !ts->c.is_lvalue && !ts->c.sym)
     {
         array_appendf(buf, " (constant %zu)", ts->c.value.lower);
@@ -777,20 +793,20 @@ int typestr_is_char_array(const TypeStr* ts)
     }
     return 0;
 }
-unsigned int typestr_get_cvr(const TypeStr* ts)
+unsigned int tsb_get_cvr(const TypeStrBuf* ts)
 {
-    int i = ts->buf.buf[0];
-    return tsb_skip_cvr_i(&ts->buf, &i);
+    int i = ts->buf[0];
+    return tsb_skip_cvr_i(ts, &i);
 }
-unsigned int typestr_strip_cvr(struct TypeStr* ts)
+unsigned int tsb_strip_cvr(TypeStrBuf* ts)
 {
-    int i = ts->buf.buf[0];
-    unsigned int m = tsb_skip_cvr_i(&ts->buf, &i);
-    ts->buf.buf[0] = i;
+    int i = ts->buf[0];
+    unsigned int m = tsb_skip_cvr_i(ts, &i);
+    ts->buf[0] = i;
     return m;
 }
 
-void typestr_remove_array(struct TypeStr* ts)
+void typestr_remove_array(TypeStr* ts)
 {
     typestr_strip_cvr(ts);
     if (ts->buf.buf[ts->buf.buf[0]] == TYPE_BYTE_ARRAY)
@@ -804,7 +820,7 @@ void typestr_remove_array(struct TypeStr* ts)
     memset(&ts->c, 0, sizeof(ts->c));
 }
 
-void typestr_dereference(struct TypeStr* ts)
+void typestr_dereference(TypeStr* ts)
 {
     typestr_strip_cvr(ts);
     if (ts->buf.buf[ts->buf.buf[0]] == TYPE_BYTE_POINTER)
@@ -828,39 +844,54 @@ void typestr_dereference(struct TypeStr* ts)
     }
 }
 
-void typestr_error1(const struct RowCol* rc, const struct TypeTable* e, const char* fmt, const struct TypeStr* ts)
+void typestr_error1(const struct RowCol* rc, const TypeTable* e, const char* fmt, const TypeStr* ts)
 {
-    struct Array arr = {};
+    Array arr = {};
     typestr_fmt(e, ts, &arr);
     parser_ferror(rc, fmt, arr.sz, arr.data);
     array_destroy(&arr);
 }
 
-void typestr_error2(const struct RowCol* rc,
-                    const struct TypeTable* e,
-                    const char* fmt,
-                    const struct TypeStr* t1,
-                    const struct TypeStr* t2)
+void typestr_error2(const struct RowCol* rc, const TypeTable* e, const char* fmt, const TypeStr* t1, const TypeStr* t2)
 {
-    struct Array arr = {}, arr2 = {};
+    Array arr = {};
     typestr_fmt(e, t1, &arr);
-    typestr_fmt(e, t2, &arr2);
-    parser_ferror(rc, fmt, arr.sz, arr.data, arr2.sz, arr2.data);
-    array_destroy(&arr2);
+    const size_t sz = arr.sz;
+    typestr_fmt(e, t2, &arr);
+    parser_ferror(rc, fmt, sz, arr.data, arr.sz - sz, (char*)arr.data + sz);
     array_destroy(&arr);
 }
 
-int typestr_match(const struct TypeStr* tgt, const struct TypeStr* src)
+void tsb_error1(const struct RowCol* rc, const TypeTable* e, const char* fmt, const TypeStrBuf* ts)
 {
-    return memcmp(tgt->buf.buf, src->buf.buf, tgt->buf.buf[0] + 1) == 0;
+    Array arr = {};
+    tsb_fmt(e, ts, &arr);
+    parser_ferror(rc, fmt, arr.sz, arr.data);
+    array_destroy(&arr);
 }
 
-uint32_t typestr_pop_offset(struct TypeStr* ts)
+void tsb_error2(
+    const struct RowCol* rc, const TypeTable* e, const char* fmt, const TypeStrBuf* t1, const TypeStrBuf* t2)
 {
-    uint32_t r = typestr_get_offset(ts);
+    Array arr = {};
+    tsb_fmt(e, t1, &arr);
+    const size_t sz = arr.sz;
+    tsb_fmt(e, t2, &arr);
+    parser_ferror(rc, fmt, sz, arr.data, arr.sz - sz, (char*)arr.data + sz);
+    array_destroy(&arr);
+}
+
+int tsb_match(const TypeStrBuf* a, const TypeStrBuf* b)
+{
+    return a->buf[0] == b->buf[0] && 0 == memcmp(a->buf, b->buf, a->buf[0] + 1);
+}
+
+uint32_t tsb_pop_offset(TypeStrBuf* ts)
+{
+    uint32_t r = tsb_get_offset(ts);
     if (r < UINT32_MAX)
     {
-        ts->buf.buf[0] -= 1 + sizeof(r);
+        ts->buf[0] -= 1 + sizeof(r);
     }
     return r;
 }
@@ -872,52 +903,49 @@ uint32_t typestr_pop_offset(struct TypeStr* ts)
     {                                                                                                                  \
         abort();                                                                                                       \
     }
-TypeSymbol* typestr_get_decl(struct TypeTable* tt, const struct TypeStr* ts)
+TypeSymbol* tsb_get_decl(TypeTable* tt, const TypeStrBuf* ts)
 {
-    char ch = ts->buf.buf[ts->buf.buf[0]];
+    char ch = ts->buf[ts->buf[0]];
     if (ch == TYPE_BYTE_STRUCT || ch == TYPE_BYTE_UNION)
     {
-        TypeSymbol* r = tt_get(tt, typestr_get_offset(ts));
+        TypeSymbol* r = tt_get(tt, tsb_get_offset(ts));
         CC_ASSERT(r);
         return r;
     }
     return NULL;
 }
 
-int typestr_decay(struct TypeStr* t)
+int tsb_decay(TypeStrBuf* t)
 {
-    typestr_strip_cvr(t);
-    char ch = t->buf.buf[t->buf.buf[0]];
-    switch (ch)
+    tsb_strip_cvr(t);
+    switch (t->buf[t->buf[0]])
     {
-        case TYPE_BYTE_ARRAY: t->buf.buf[0] -= 4; // passthrough
-        case TYPE_BYTE_UNK_ARRAY:
-            t->buf.buf[t->buf.buf[0]] = TYPE_BYTE_POINTER;
-            if (t->c.is_const)
-            {
-                if (!t->c.is_lvalue) abort();
-                if (!t->c.sym) abort();
-                t->c.is_lvalue = 0;
-            }
-            return 1;
+        case TYPE_BYTE_ARRAY: t->buf[0] -= 4; // passthrough
+        case TYPE_BYTE_UNK_ARRAY: t->buf[t->buf[0]] = TYPE_BYTE_POINTER; return 1;
         case TYPE_BYTE_FUNCTION:
         {
-            t->buf.buf[0]++;
-            if (t->buf.buf[0] == TYPESTR_BUF_SIZE) abort();
-            t->buf.buf[t->buf.buf[0]] = TYPE_BYTE_POINTER;
-            if (t->c.is_const)
-            {
-                if (!t->c.is_lvalue) abort();
-                if (!t->c.sym) abort();
-                t->c.is_lvalue = 0;
-            }
+            t->buf[0]++;
+            if (t->buf[0] == TYPESTR_BUF_SIZE) abort();
+            t->buf[t->buf[0]] = TYPE_BYTE_POINTER;
             return 1;
         }
         default: return 0;
     }
 }
 
-FnTypeInfo typestr_strip_fn(const struct TypeTable* tt, struct TypeStr* t)
+int typestr_decay(TypeStr* t)
+{
+    int r = tsb_decay(&t->buf);
+    if (r && t->c.is_const)
+    {
+        if (!t->c.is_lvalue) abort();
+        if (!t->c.sym) abort();
+        t->c.is_lvalue = 0;
+    }
+    return r;
+}
+
+FnTypeInfo typestr_strip_fn(const TypeTable* tt, TypeStr* t)
 {
     FnTypeInfo ret = {0};
     if (t->buf.buf[t->buf.buf[0]] == TYPE_BYTE_POINTER)
@@ -933,7 +961,8 @@ FnTypeInfo typestr_strip_fn(const struct TypeTable* tt, struct TypeStr* t)
         ret.extent = arrsz_at(&tt->fn_args_ends, x) - ret.offset;
         if (ret.extent > 0)
         {
-            ret.is_variadic = typestr_is_variadic((struct TypeStr*)tt->fn_args.data + ret.offset + ret.extent - 1);
+            ret.is_variadic =
+                tsb_byte((TypeStrBuf*)tt->fn_args.data + ret.offset + ret.extent - 1) == TYPE_BYTE_VARIADIC;
             ret.extent -= ret.is_variadic;
         }
     }
@@ -975,19 +1004,19 @@ void typestr_assign_constant_bool(TypeStr* t, int n)
     t->c.value = n ? s_one_c128 : s_zero_c128;
 }
 
-const TypeStr* typestr_get_arg(const struct TypeTable* tt, const FnTypeInfo* info, unsigned index)
+const TypeStrBuf* typestr_get_arg(const TypeTable* tt, const FnTypeInfo* info, unsigned index)
 {
     if (index >= info->extent) abort();
-    return (struct TypeStr*)tt->fn_args.data + index + info->offset;
+    return (TypeStrBuf*)tt->fn_args.data + index + info->offset;
 }
 
-struct TypeTable* tt_alloc()
+TypeTable* tt_alloc()
 {
-    struct TypeTable* types = my_malloc(sizeof(struct TypeTable));
-    memset(types, 0, sizeof(struct TypeTable));
+    TypeTable* types = my_malloc(sizeof(TypeTable));
+    memset(types, 0, sizeof(TypeTable));
     return types;
 }
-void tt_free(struct TypeTable* tt)
+void tt_free(TypeTable* tt)
 {
     if (tt == NULL) return;
     array_destroy(&tt->fn_args);
