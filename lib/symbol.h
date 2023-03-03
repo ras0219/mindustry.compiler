@@ -94,6 +94,7 @@ typedef struct DeclFn
     // parameter list
     unsigned char is_param_list : 1;
 
+    // SeqView<StmtDecls>
     SeqView seq;
 } DeclFn;
 

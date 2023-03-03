@@ -160,6 +160,19 @@ void tsb_add_pointer(TypeStrBuf* s)
     s->buf[i] = TYPE_BYTE_POINTER;
     s->buf[0] = i;
 }
+void tsb_remove_pointer(TypeStrBuf* s)
+{
+    int i = s->buf[0];
+    tsb_skip_cvr_i(s, &i);
+    if (i == 0) return;
+    if (s->buf[i] != TYPE_BYTE_POINTER)
+    {
+        s->buf[0] = 0;
+        return;
+    }
+    --i;
+    s->buf[0] = i;
+}
 void typestr_add_pointer(TypeStr* s)
 {
     tsb_add_pointer(&s->buf);

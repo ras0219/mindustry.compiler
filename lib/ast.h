@@ -17,6 +17,7 @@
     Y(EXPR_LIT)                                                                                                        \
     Y(EXPR_CAST)                                                                                                       \
     Y(EXPR_BINOP)                                                                                                      \
+    Y(EXPR_ANDOR)                                                                                                      \
     Y(EXPR_ADD)                                                                                                        \
     Y(EXPR_ASSIGN)                                                                                                     \
     Y(EXPR_TERNARY)                                                                                                    \
@@ -186,6 +187,16 @@ typedef struct ExprBinOp
 #define AST_STRUCT_EXPR_BINOP ExprBinOp
 #define AST_KIND_ExprBinOp EXPR_BINOP
 
+typedef struct ExprAndOr
+{
+    INHERIT_EXPR;
+
+    struct Expr* lhs;
+    struct Expr* rhs;
+} ExprAndOr;
+#define AST_STRUCT_EXPR_ANDOR ExprAndOr
+#define AST_KIND_ExprAndOr EXPR_ANDOR
+
 typedef struct ExprAdd
 {
     INHERIT_EXPR;
@@ -323,6 +334,7 @@ typedef struct StmtDecls
 
     struct DeclSpecs* specs;
 
+    // SeqView<Decl>
     SeqView seq;
 } StmtDecls;
 #define AST_STRUCT_STMT_DECLS StmtDecls
@@ -337,6 +349,8 @@ typedef struct StmtIf
     // may be null
     struct Ast* else_body;
 } StmtIf;
+#define AST_STRUCT_STMT_IF StmtIf
+#define AST_KIND_StmtIf STMT_IF
 
 typedef struct StmtProve
 {

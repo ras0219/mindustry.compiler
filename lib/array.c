@@ -58,6 +58,11 @@ void array_assign_zeroes(struct Array* arr, size_t size)
     array_resize(arr, size);
     memset(arr->data, 0, size);
 }
+void array_assign(struct Array* arr, const void* src, size_t n)
+{
+    arr->sz = 0;
+    array_push(arr, src, n);
+}
 void array_pop(struct Array* arr, size_t sz) { arr->sz -= sz; }
 void array_destroy(struct Array* arr) { my_free(arr->data); }
 

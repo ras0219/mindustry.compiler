@@ -28,18 +28,18 @@ void* array_push_zeroes(struct Array* arr, size_t sz) __attribute__((alloc_size(
 __forceinline void array_clear(struct Array* arr) { arr->sz = 0; }
 // UB if n > previous size
 __forceinline void array_shrink(struct Array* arr, size_t n, size_t sz) { arr->sz = n * sz; }
-__forceinline void array_assign(struct Array* arr, const void* src, size_t n)
-{
-    arr->sz = 0;
-    array_push(arr, src, n);
-}
-
 /// postcondition: arr->cap >= cap
 void array_reserve(struct Array* arr, size_t cap);
 /// postcondition: arr->sz == size
 void array_resize(struct Array* arr, size_t size);
 /// postcondition: arr->sz == size
 void array_assign_zeroes(struct Array* arr, size_t size);
+/// postcondition: arr->sz == size
+void array_assign(struct Array* arr, const void* data, size_t size);
+__forceinline void array_copy(struct Array* arr, const struct Array* other)
+{
+    array_assign(arr, other->data, other->sz);
+}
 void array_pop(struct Array* arr, size_t sz);
 void array_destroy(struct Array* arr);
 
@@ -74,3 +74,6 @@ __forceinline size_t arrsz_pop(struct Array* arr)
 }
 __forceinline void arrsz_shrink(struct Array* arr, size_t n) { arr->sz = n * sizeof(size_t); }
 __forceinline size_t* arrsz_push(struct Array* arr, size_t data) { return array_push(arr, &data, sizeof(data)); }
+
+#define ARRPTR_FOREACH(type, i, arr)                                                                                   \
+    for (type** i = (arr)->data, __end##i = i ? i + arrptr_size(arr) : NULL; i != __end##i; ++i)

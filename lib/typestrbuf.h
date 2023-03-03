@@ -105,6 +105,7 @@ static __forceinline int tsb_is_unknown(const TypeStrBuf* ts) { return ts->buf[0
 void tsb_append_offset(TypeStrBuf* s, unsigned int offset, char offset_type);
 void tsb_add_array(TypeStrBuf* s, unsigned int n);
 void tsb_add_pointer(TypeStrBuf* s);
+void tsb_remove_pointer(TypeStrBuf* s);
 void tsb_add_cvr(TypeStrBuf* s, unsigned int mask);
 unsigned int tsb_get_cvr(const TypeStrBuf* ts);
 unsigned int tsb_strip_cvr(TypeStrBuf* ts);

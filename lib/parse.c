@@ -106,6 +106,7 @@ static void* parse_alloc_expr(Parser* p, const struct Token* tok, int tag, size_
         return e_;                                                                                                     \
     }
 
+DEFINE_PARSE_ALLOC2(ExprAndOr, Expr*, lhs, Expr*, rhs);
 DEFINE_PARSE_ALLOC2(ExprBinOp, Expr*, lhs, Expr*, rhs);
 DEFINE_PARSE_ALLOC2(ExprAdd, Expr*, lhs, Expr*, rhs);
 DEFINE_PARSE_ALLOC1(ExprAssign, Expr*, lhs);
@@ -546,6 +547,12 @@ static const struct Token* parse_expr_continue(
             else if (op_prec == PRECEDENCE_ADD)
             {
                 ExprAdd* e = parse_alloc_ExprAdd(p, tok_op, lhs, NULL);
+                op_expr = &e->expr_base;
+                rhs = &e->rhs;
+            }
+            else if (op_prec == PRECEDENCE_OR || op_prec == PRECEDENCE_AND)
+            {
+                ExprAndOr* e = parse_alloc_ExprAndOr(p, tok_op, lhs, NULL);
                 op_expr = &e->expr_base;
                 rhs = &e->rhs;
             }

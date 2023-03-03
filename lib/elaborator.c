@@ -355,6 +355,26 @@ static void elaborate_expr_ExprBinOp_impl(
     }
 }
 
+static void elaborate_expr_ExprAndOr_impl(
+    Elaborator* elab, const RowCol* rc, TypeStr* rty, TypeStr* rhs, unsigned int op)
+{
+    unsigned int lhs_mask = typestr_mask(rty);
+    unsigned int rhs_mask = typestr_mask(rhs);
+    if (!(lhs_mask & TYPE_MASK_SCALAR))
+    {
+        typestr_error1(rc, elab->types, "error: expected scalar type in first argument but got '%.*s'\n", rty);
+        *rty = s_type_int;
+        return;
+    }
+    if (!(rhs_mask & TYPE_MASK_SCALAR))
+    {
+        typestr_error1(rc, elab->types, "error: expected scalar type in second argument but got '%.*s'\n", rhs);
+        *rty = s_type_int;
+        return;
+    }
+    rty->buf = s_type_int.buf;
+}
+
 static void elaborate_expr_ExprAdd_impl(
     Elaborator* elab, const RowCol* rc, TypeStr* rty, TypeStr* rhs, unsigned int op, int* info)
 {
@@ -570,6 +590,32 @@ static void elaborate_expr_ExprBinOp(struct Elaborator* elab, struct ExprBinOp* 
     else
     {
         rty->c = s_not_constant;
+    }
+}
+
+static void elaborate_expr_ExprAndOr(struct Elaborator* elab, struct ExprAndOr* e, struct TypeStr* rty)
+{
+    const RowCol* const rc = &e->tok->rc;
+    const unsigned op = e->tok->type;
+    elaborate_expr_decay(elab, e->lhs, rty);
+    struct TypeStr rhs_ty;
+    elaborate_expr_decay(elab, e->rhs, &rhs_ty);
+    elaborate_expr_ExprAndOr_impl(elab, rc, rty, &rhs_ty, op);
+    constant_load_lvalue(&rty->c);
+    constant_load_lvalue(&rhs_ty.c);
+    if (rty->c.is_const)
+    {
+        if (rhs_ty.c.is_const)
+        {
+            int a = cnst_truthy(rty->c);
+            int b = cnst_truthy(rhs_ty.c);
+            int c = op == TOKEN_SYM2('&', '&') ? a && b : a || b;
+            rty->c = constant_bool(c);
+        }
+        else
+        {
+            rty->c = s_not_constant;
+        }
     }
 }
 
@@ -1540,6 +1586,7 @@ static void elaborate_expr_impl(struct Elaborator* elab, struct Expr* expr, stru
         DISPATCH_EXPR(ExprCall);
         DISPATCH_EXPR(ExprField);
         DISPATCH_EXPR(ExprBinOp);
+        DISPATCH_EXPR(ExprAndOr);
         DISPATCH_EXPR(ExprTernary);
         DISPATCH_EXPR(ExprUnOp);
         DISPATCH_EXPR(ExprDeref);

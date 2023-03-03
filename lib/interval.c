@@ -103,6 +103,77 @@ int interval_intersection(Interval i, Interval j, Interval* out)
         return 0;
 }
 
+enum interval_intersection_result interval_intersect_lti(Interval i, int64_t j, Interval* inner, Interval* outer)
+{
+    *inner = i;
+    *outer = i;
+    if (i.sz.is_signed)
+    {
+        int64_t n = interval_signed_min(i);
+        int64_t m = interval_signed_max(i);
+        if (m < j)
+        {
+            return interval_only_inner;
+        }
+        else if (n >= j)
+        {
+            return interval_only_outer;
+        }
+        else
+        {
+            inner->base = n;
+            inner->maxoff = j - n - 1;
+            outer->base = j;
+            outer->maxoff = m - j;
+            return interval_outer_inner;
+        }
+    }
+    else
+    {
+        if (j <= 0)
+        {
+            return interval_only_outer;
+        }
+        return interval_intersect_ltu(i, j, inner, outer);
+    }
+}
+enum interval_intersection_result interval_intersect_ltu(Interval i, uint64_t j, Interval* inner, Interval* outer)
+{
+    *inner = i;
+    *outer = i;
+    if (i.sz.is_signed)
+    {
+        if (j > INT64_MAX)
+        {
+            return interval_only_inner;
+        }
+        return interval_intersect_lti(i, j, inner, outer);
+    }
+    else
+    {
+        uint64_t n = interval_unsigned_min(i);
+        uint64_t m = interval_unsigned_max(i);
+        if (m < j)
+        {
+            return interval_only_inner;
+        }
+        else if (n >= j)
+        {
+            return interval_only_outer;
+        }
+        else
+        {
+            inner->base = n;
+            inner->maxoff = j - n - 1;
+            outer->base = j;
+            outer->maxoff = m - j;
+            return interval_outer_inner;
+        }
+    }
+}
+enum interval_intersection_result interval_intersect_eq(Interval i, uint64_t j, Interval* inner, Interval* outer);
+enum interval_intersection_result interval_intersect_false(Interval i, Interval* inner, Interval* outer);
+
 // static int interval_split_nonneg(Interval i, Interval* out)
 // {
 //     return interval_intersection(i, s_intervals_nonneg_sz[i.sz.width], out);
@@ -360,14 +431,14 @@ int64_t interval_signed_max(Interval i)
         return interval_signed_to_i64(i.base + i.maxoff, i.sz.width);
 }
 static __forceinline int interval_is_unsigned_wrap(Interval i) { return s_umax_sizing[i.sz.width] - i.maxoff < i.base; }
-static uint64_t interval_unsigned_min(Interval i)
+uint64_t interval_unsigned_min(Interval i)
 {
     if (interval_is_unsigned_wrap(i))
         return 0;
     else
         return i.base;
 }
-static uint64_t interval_unsigned_max(Interval i)
+uint64_t interval_unsigned_max(Interval i)
 {
     return interval_sat_add(i.base, i.maxoff, s_umax_sizing[i.sz.width]);
 }

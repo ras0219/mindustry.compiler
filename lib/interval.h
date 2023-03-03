@@ -39,6 +39,18 @@ static const Interval s_interval_zero = {.base = 0, .maxoff = 0, .sz.width = 4, 
 static const Interval s_interval_one = {.base = 1, .maxoff = 0, .sz.width = 4, .sz.is_signed = 1};
 static const Interval s_interval_zero_one = {.base = 0, .maxoff = 1, .sz.width = 4, .sz.is_signed = 1};
 
+static const Interval s_interval_i64 = {.base = INT64_MIN, .maxoff = UINT64_MAX, .sz.width = 8, .sz.is_signed = 1};
+static const Interval s_interval_i32 = {
+    .base = INT32_MAX + 1ULL, .maxoff = UINT32_MAX, .sz.width = 4, .sz.is_signed = 1};
+static const Interval s_interval_i16 = {
+    .base = INT16_MAX + 1ULL, .maxoff = UINT16_MAX, .sz.width = 2, .sz.is_signed = 1};
+static const Interval s_interval_i8 = {.base = INT8_MAX + 1ULL, .maxoff = UINT8_MAX, .sz.width = 1, .sz.is_signed = 1};
+
+static const Interval s_interval_u64 = {.base = 0, .maxoff = UINT64_MAX, .sz.width = 8};
+static const Interval s_interval_u32 = {.base = 0, .maxoff = UINT32_MAX, .sz.width = 4};
+static const Interval s_interval_u16 = {.base = 0, .maxoff = UINT16_MAX, .sz.width = 2};
+static const Interval s_interval_u8 = {.base = 0, .maxoff = UINT8_MAX, .sz.width = 1};
+
 static __forceinline int interval_wrapped(Interval i) { return UINT64_MAX - i.maxoff < i.base; }
 
 int interval_contains_0(Interval i);
@@ -56,6 +68,17 @@ void interval_fmt(struct Array* buf, Interval i);
 Interval interval_merge(Interval i, Interval j);
 int interval_intersection(Interval i, Interval j, Interval* out);
 
+enum interval_intersection_result
+{
+    interval_only_inner,
+    interval_only_outer,
+    interval_outer_inner,
+};
+enum interval_intersection_result interval_intersect_lti(Interval i, int64_t j, Interval* inner, Interval* outer);
+enum interval_intersection_result interval_intersect_ltu(Interval i, uint64_t j, Interval* inner, Interval* outer);
+enum interval_intersection_result interval_intersect_eq(Interval i, uint64_t j, Interval* inner, Interval* outer);
+enum interval_intersection_result interval_intersect_false(Interval i, Interval* inner, Interval* outer);
+
 Interval interval_cast(Interval i, Sizing sz);
 
 Interval interval_sub(Interval i, Interval j);
@@ -70,6 +93,8 @@ Interval interval_div(Interval i, Interval j);
 
 int64_t interval_signed_min(Interval i);
 int64_t interval_signed_max(Interval i);
+uint64_t interval_unsigned_min(Interval i);
+uint64_t interval_unsigned_max(Interval i);
 
 typedef struct IntervalLimitsI64
 {

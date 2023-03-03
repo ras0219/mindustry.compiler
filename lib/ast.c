@@ -6,33 +6,19 @@
 
 int ast_kind_is_expr(enum AstKind k)
 {
-    switch (k)
-    {
-        case EXPR_REF:
-        case EXPR_FIELD:
-        case EXPR_LIT:
-        case EXPR_CAST:
-        case EXPR_BINOP:
-        case EXPR_UNOP:
-        case EXPR_DEREF:
-        case EXPR_ADDRESS:
-        case EXPR_INCR:
-        case EXPR_BUILTIN:
-        case EXPR_TERNARY:
-        case EXPR_ADD:
-        case EXPR_ASSIGN:
-        case EXPR_CALL: return 1;
-        default: return 0;
-    }
+    static const unsigned char s_is_expr[AST_KIND_COUNT] = {
+#define Y(A) [A] = 1,
+        X_FOREACH_EXPR(Y)
+#undef Y
+    };
+    return s_is_expr[k];
 }
 
-#define Y_CASE_TO_STR(Z)                                                                                               \
-    case Z: return #Z;
+#define Y_CASE_TO_STR(Z) [Z] = #Z,
+
 const char* ast_kind_to_string(enum AstKind k)
 {
-    switch (k)
-    {
-        X_AST_KIND(Y_CASE_TO_STR)
-        default: return "unknown";
-    }
+    static const char s_strings[AST_KIND_COUNT][32] = {X_AST_KIND(Y_CASE_TO_STR)};
+    return s_strings[k];
+#undef Y_CASE_TO_STR
 }

@@ -2,9 +2,13 @@
 #define INT32_MAX 2147483647
 #define INT32_MIN (-INT32_MAX - 1)
 
-void foo(int* f)
+void foo(int* f, int* p)
 {
-    *f;
+    if (f && p)
+    {
+        int z = *f, w = *p;
+        if (z < 0 && w > 0) z + w;
+    }
 }
 
 int main()
