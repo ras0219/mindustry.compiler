@@ -81,7 +81,7 @@ const char* token_str(const struct Parser* p, const struct Token* tk);
 void parser_debug_check(struct Parser* p);
 void parser_dump(struct Parser* p, FILE* f);
 
-static __forceinline CallParam* parser_params(Parser* p, ExprCall* call)
+static __forceinline CallParam* parser_params(Parser* p, const ExprCall* call)
 {
     if (!p->callparams.data) return NULL;
     return (CallParam*)p->callparams.data + call->param_offset;

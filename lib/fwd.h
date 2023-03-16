@@ -17,5 +17,6 @@ struct TypeSymbol;
 struct TypeStr;
 struct TypeStrBuf;
 struct TypeTable;
+struct PtrMap;
 
 typedef struct Array StrList;

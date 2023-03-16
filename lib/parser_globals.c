@@ -65,6 +65,31 @@ int parser_vferror(const struct RowCol* rc, const char* fmt, va_list argp)
     return parser_vfmsg_impl(&s_error, rc, fmt, argp);
 }
 
+int parser_tok_warn(const struct Token* tok, const char* fmt, ...)
+{
+    va_list argp;
+    va_start(argp, fmt);
+
+    parser_vwarn(token_rc(tok), fmt, argp);
+
+    va_end(argp);
+    return 1;
+}
+int parser_warn(const struct RowCol* rc, const char* fmt, ...)
+{
+    va_list argp;
+    va_start(argp, fmt);
+
+    parser_vwarn(rc, fmt, argp);
+
+    va_end(argp);
+    return 1;
+}
+int parser_vwarn(const struct RowCol* rc, const char* fmt, va_list argp)
+{
+    return parser_vfmsg_impl(&s_warn, rc, fmt, argp);
+}
+
 int parser_fmsg(enum LogChannel chan, const struct RowCol* rc, const char* fmt, ...)
 {
     va_list argp;

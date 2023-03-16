@@ -56,6 +56,9 @@ static __forceinline int interval_wrapped(Interval i) { return UINT64_MAX - i.ma
 int interval_contains_0(Interval i);
 int interval_contains_nonzero(Interval i);
 
+int interval_remove_0(Interval* out, Interval i);
+int interval_remove_nonzero(Interval* out, Interval i);
+
 static __forceinline int interval_contains(Interval i, uint64_t j) { return i.maxoff >= j - i.base; }
 
 // static int interval_is_intersect(Interval i, Interval j)
@@ -76,8 +79,22 @@ enum interval_intersection_result
 };
 enum interval_intersection_result interval_intersect_lti(Interval i, int64_t j, Interval* inner, Interval* outer);
 enum interval_intersection_result interval_intersect_ltu(Interval i, uint64_t j, Interval* inner, Interval* outer);
+enum interval_intersection_result interval_intersect_ltei(Interval i, int64_t j, Interval* inner, Interval* outer);
+enum interval_intersection_result interval_intersect_lteu(Interval i, uint64_t j, Interval* inner, Interval* outer);
 enum interval_intersection_result interval_intersect_eq(Interval i, uint64_t j, Interval* inner, Interval* outer);
 enum interval_intersection_result interval_intersect_false(Interval i, Interval* inner, Interval* outer);
+
+int interval_relation_lti(Interval* out, int64_t j);
+int interval_relation_ltu(Interval* out, uint64_t j);
+int interval_relation_ltei(Interval* out, int64_t j);
+int interval_relation_lteu(Interval* out, uint64_t j);
+int interval_relation_gti(Interval* out, int64_t j);
+int interval_relation_gtu(Interval* out, uint64_t j);
+int interval_relation_gtei(Interval* out, int64_t j);
+int interval_relation_gteu(Interval* out, uint64_t j);
+
+int interval_relation_eq(Interval* out, Interval i);
+int interval_relation_neq(Interval* out, Interval j);
 
 Interval interval_cast(Interval i, Sizing sz);
 
@@ -102,6 +119,7 @@ typedef struct IntervalLimitsI64
     int64_t max;
 } IntervalLimitsI64;
 IntervalLimitsI64 interval_signed_limits(Interval i);
+Interval interval_from_signed_limits(int64_t imin, int64_t imax, uint32_t width);
 
 typedef struct IntervalLimitsU64
 {
@@ -109,6 +127,7 @@ typedef struct IntervalLimitsU64
     uint64_t max;
 } IntervalLimitsU64;
 IntervalLimitsU64 interval_unsigned_limits(Interval i);
+Interval interval_from_unsigned_limits(uint64_t umin, uint64_t umax, uint32_t width);
 
 Interval interval_lt(Interval a, Interval b);
 Interval interval_ltu(Interval a, Interval b);

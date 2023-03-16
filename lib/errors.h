@@ -18,6 +18,7 @@ int parser_tok_error(const struct Token* tok, const char* fmt, ...);
 int parser_ferror(const struct RowCol* rc, const char* fmt, ...);
 int parser_vferror(const struct RowCol* rc, const char* fmt, va_list);
 
+int parser_tok_warn(const struct Token* tok, const char* fmt, ...);
 int parser_warn(const struct RowCol* rc, const char* fmt, ...);
 int parser_vwarn(const struct RowCol* rc, const char* fmt, va_list);
 

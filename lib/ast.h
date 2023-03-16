@@ -327,6 +327,8 @@ typedef struct StmtReturn
     // may be null
     struct Expr* expr;
 } StmtReturn;
+#define AST_STRUCT_STMT_RETURN StmtReturn
+#define AST_KIND_StmtReturn STMT_RETURN
 
 typedef struct StmtDecls
 {

@@ -598,58 +598,103 @@ enum AttrKind
     ATTR_NONREENTRANT,
 };
 
-#if 0
-static const struct Token* parse_attribute(Parser* p, const struct Token* cur_tok, struct Attribute* attr)
+static const struct Token* parse_until_comma_or_cparen(Parser* p, const struct Token* cur_tok)
 {
-    enum AttrKind kind;
-    if (cur_tok->type != LEX_IDENT) goto error;
-    struct Token* attrkind = cur_tok++;
-    const char* attrkind_str = token_str(p, attrkind);
-    if (strcmp(attrkind_str, "sym") == 0)
+    int depth = 1;
+    while (1)
     {
-        kind = ATTR_SYM;
+        switch (cur_tok->type)
+        {
+            case LEX_EOF: return NULL;
+            case TOKEN_SYM1(','): return cur_tok;
+            case TOKEN_SYM1('('): ++depth; break;
+            case TOKEN_SYM1(')'):
+                if (--depth == 0) return cur_tok;
+                break;
+        }
+        ++cur_tok;
     }
-    else if (strcmp(attrkind_str, "asmstr") == 0)
+}
+
+static const Token* parse_attribute_numlist(
+    Parser* p, const Token* cur_tok, unsigned char* xs, size_t n_xs, const char* in_attr)
+{
+    if (cur_tok->type == TOKEN_SYM1(')')) return cur_tok + 1;
+    do
     {
-        kind = ATTR_ASM;
-    }
-    else if (strcmp(attrkind_str, "nonreentrant") == 0)
+        if (cur_tok->type != LEX_NUMBER)
+        {
+            parser_tok_warn(cur_tok, "warning: attribute %s expected a list of numbers\n", in_attr);
+            goto error;
+        }
+        const char* text = token_str(p, cur_tok);
+        uint64_t numeric;
+        LitSuffix suffix;
+        if (lit_to_uint64(text, &numeric, &suffix, token_rc(cur_tok))) goto error;
+        if (numeric >= n_xs)
+        {
+            parser_tok_warn(cur_tok, "warning: attribute %s only supports indexes less than %zu\n", in_attr, n_xs);
+            goto error;
+        }
+        xs[numeric] = 1;
+        ++cur_tok;
+        if (cur_tok->type == TOKEN_SYM1(','))
+        {
+            ++cur_tok;
+            continue;
+        }
+        else if (cur_tok->type == TOKEN_SYM1(')'))
+            return cur_tok + 1;
+        else
+            goto error;
+    } while (1);
+error:
+    if (cur_tok) cur_tok = parse_until_comma_or_cparen(p, cur_tok);
+    if (cur_tok && cur_tok->type == TOKEN_SYM1(')')) ++cur_tok;
+    return cur_tok;
+}
+
+static const Token* parse_attribute(Parser* p, const Token* cur_tok, struct Attribute* attr)
+{
+    if (cur_tok->type != LEX_IDENT)
     {
-        attr->is_nonreentrant = 1;
-        return cur_tok;
-    }
-    else
-    {
+        parser_tok_warn(cur_tok, "warning: ill-formed attribute. expected identifier.\n");
         goto error;
     }
-
-    if (!token_is_sym(p, cur_tok, '(')) goto error;
-    ++cur_tok;
-    if (cur_tok->type != LEX_STRING)
+    const Token* attrkind = cur_tok++;
+    const char* attrkind_str = token_str(p, attrkind);
+    if (strcmp(attrkind_str, "nonnull") == 0)
     {
-        return parser_ferror(&cur_tok->rc, "error: expected attribute parameter\n"), NULL;
-    }
-    if (kind == ATTR_SYM)
-    {
-        attr->symname = token_str(p, cur_tok);
-    }
-    else if (kind == ATTR_ASM)
-    {
-        attr->asmstr = token_str(p, cur_tok);
+        attr->is_nonnull = 1;
+        // impl nonnull
+        if (token_is_sym(p, cur_tok, ',') || token_is_sym(p, cur_tok, ')'))
+        {
+            memset(attr->nonnull_addrs, 1, sizeof(attr->nonnull_addrs));
+            goto done;
+        }
+        else if (token_is_sym(p, cur_tok, '('))
+        {
+            cur_tok =
+                parse_attribute_numlist(p, cur_tok + 1, attr->nonnull_addrs, sizeof(attr->nonnull_addrs), attrkind_str);
+        }
+        else
+        {
+            parser_tok_warn(cur_tok, "warning: ill-formed attribute. expected ','.\n");
+            goto error;
+        }
     }
     else
     {
-        abort();
+        parser_tok_warn(cur_tok, "warning: ill-formed attribute. unrecognized identifier '%s'.\n", attrkind_str);
+        goto error;
     }
-    ++cur_tok;
-    if (!token_is_sym(p, cur_tok, ')')) goto error;
-    ++cur_tok;
     return cur_tok;
 
 error:
-    return parser_ferror(&cur_tok->rc, "error: ill-formed attribute\n"), NULL;
+    if (cur_tok) cur_tok = parse_until_comma_or_cparen(p, cur_tok);
+done:
+    return cur_tok;
 }
-#endif
 static const struct Token* parse_msdeclspec(Parser* p, const struct Token* cur_tok, struct Attribute* attr)
 {
     PARSER_DO(token_consume_sym(p, cur_tok, '(', " in __declspec"));
@@ -671,44 +716,22 @@ fail:
 }
 static const struct Token* parse_attribute_plist(Parser* p, const struct Token* cur_tok, struct Attribute* attr)
 {
-    if (!(cur_tok = token_consume_sym(p, cur_tok, '(', " in __attribute__"))) return NULL;
-    if (!(cur_tok = token_consume_sym(p, cur_tok, '(', " in __attribute__"))) return NULL;
-#if 0
+    PARSER_DO(token_consume_sym(p, cur_tok, '(', " in __attribute__"));
+    PARSER_DO(token_consume_sym(p, cur_tok, '(', " in __attribute__"));
     if (!token_is_sym(p, cur_tok, ')'))
     {
-        do
+        PARSER_DO(parse_attribute(p, cur_tok, attr));
+        while (token_is_sym(p, cur_tok, ','))
         {
-            if (!(cur_tok = parse_attribute(p, cur_tok, attr))) return NULL;
-            char ch = token_expect_comma_or_cparen(p, cur_tok);
-            if (ch == ')') break;
-            if (ch == ',')
-            {
-                cur_tok++;
-                continue;
-            }
-            if (ch == '\0') return NULL;
-        } while (1);
-    }
-#else
-    int depth = 0;
-    while (cur_tok->type != LEX_EOF)
-    {
-        if (token_is_sym(p, cur_tok, ')'))
-        {
-            if (depth == 0)
-                break;
-            else
-                --depth;
+            ++cur_tok;
+            PARSER_DO(parse_attribute(p, cur_tok, attr));
         }
-        else if (token_is_sym(p, cur_tok, '('))
-        {
-            ++depth;
-        }
-        ++cur_tok;
     }
-#endif
     if (!(cur_tok = token_consume_sym(p, cur_tok, ')', " in __attribute__"))) return NULL;
     return token_consume_sym(p, cur_tok, ')', " in __attribute__");
+
+fail:
+    return cur_tok;
 }
 
 static const struct Token* parse_su_body(struct Parser* p, const struct Token* cur_tok, struct DeclSpecs* specs);

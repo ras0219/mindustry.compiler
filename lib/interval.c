@@ -31,6 +31,40 @@ int interval_contains_0(Interval i)
 }
 int interval_contains_nonzero(Interval i) { return i.base || i.maxoff; }
 
+int interval_remove_0(Interval* out, Interval i)
+{
+    *out = i;
+    if (out->maxoff == s_umax_sizing[out->sz.width])
+    {
+        out->maxoff = s_umax_sizing[out->sz.width] - 1;
+        out->base = 1;
+        return 1;
+    }
+    else if (out->base == 0)
+    {
+        if (out->maxoff)
+        {
+            ++out->base;
+            --out->maxoff;
+            return 1;
+        }
+        else
+            return 0;
+    }
+    else
+    {
+        return 1;
+    }
+}
+
+int interval_remove_nonzero(Interval* out, Interval i)
+{
+    *out = i;
+    out->base = 0;
+    out->maxoff = 0;
+    return interval_contains_0(i);
+}
+
 static __forceinline uint64_t u64_sat_add(uint64_t a, uint64_t b) { return UINT64_MAX - a < b ? UINT64_MAX : a + b; }
 
 // static __forceinline int64_t interval_signed_base_to_i64(Interval i)
@@ -50,10 +84,11 @@ static __forceinline int64_t interval_signed_from_i64(uint64_t i, uint32_t width
 void interval_fmt(Array* buf, Interval i)
 {
     if (i.sz.is_signed)
-        array_appendf(buf,
-                      "%lld to %lld",
-                      interval_signed_to_i64(i.base, i.sz.width),
-                      interval_signed_to_i64(i.base + i.maxoff, i.sz.width));
+        // array_appendf(buf,
+        //               "%lld to %lld",
+        //               interval_signed_min(i),
+        //               interval_signed_max(i));
+        array_appendf(buf, "%llu (+%llu)", i.base, i.maxoff);
     else
         array_appendf(buf, "%llu to %llu", i.base, (i.base + i.maxoff) & s_umax_sizing[i.sz.width]);
 }
@@ -101,6 +136,131 @@ int interval_intersection(Interval i, Interval j, Interval* out)
     }
     else
         return 0;
+}
+
+int interval_relation_lti(Interval* out, int64_t j)
+{
+    int64_t n = interval_signed_min(*out);
+    int64_t m = interval_signed_max(*out);
+    if (n >= j)
+    {
+        return 0;
+    }
+    else if (m >= j)
+    {
+        *out = interval_from_signed_limits(n, j - 1, out->sz.width);
+    }
+    return 1;
+}
+int interval_relation_ltu(Interval* out, uint64_t j)
+{
+    uint64_t n = interval_unsigned_min(*out);
+    uint64_t m = interval_unsigned_max(*out);
+    if (n >= j)
+    {
+        return 0;
+    }
+    else if (m >= j)
+    {
+        *out = interval_from_unsigned_limits(n, j - 1, out->sz.width);
+    }
+    return 1;
+}
+
+int interval_relation_ltei(Interval* out, int64_t j)
+{
+    int64_t n = interval_signed_min(*out);
+    int64_t m = interval_signed_max(*out);
+    if (n > j)
+    {
+        return 0;
+    }
+    else if (m > j)
+    {
+        *out = interval_from_signed_limits(n, j, out->sz.width);
+    }
+    return 1;
+}
+int interval_relation_lteu(Interval* out, uint64_t j)
+{
+    uint64_t n = interval_unsigned_min(*out);
+    uint64_t m = interval_unsigned_max(*out);
+    if (m > j)
+    {
+        return 0;
+    }
+    else if (n > j)
+    {
+        *out = interval_from_unsigned_limits(n, j, out->sz.width);
+    }
+    return 1;
+}
+int interval_relation_gti(Interval* out, int64_t j)
+{
+    int64_t n = interval_signed_min(*out);
+    int64_t m = interval_signed_max(*out);
+    if (m <= j)
+    {
+        return 0;
+    }
+    else if (n <= j)
+    {
+        *out = interval_from_signed_limits(j + 1, m, out->sz.width);
+    }
+    return 1;
+}
+int interval_relation_gtu(Interval* out, uint64_t j)
+{
+    uint64_t n = interval_unsigned_min(*out);
+    uint64_t m = interval_unsigned_max(*out);
+    if (m <= j)
+    {
+        return 0;
+    }
+    else if (n <= j)
+    {
+        *out = interval_from_unsigned_limits(j + 1, m, out->sz.width);
+    }
+    return 1;
+}
+
+int interval_relation_gtei(Interval* out, int64_t j)
+{
+    int64_t n = interval_signed_min(*out);
+    int64_t m = interval_signed_max(*out);
+    if (m < j)
+    {
+        return 0;
+    }
+    else if (n < j)
+    {
+        *out = interval_from_signed_limits(j, m, out->sz.width);
+    }
+    return 1;
+}
+int interval_relation_gteu(Interval* out, uint64_t j)
+{
+    uint64_t n = interval_unsigned_min(*out);
+    uint64_t m = interval_unsigned_max(*out);
+    if (m < j)
+    {
+        return 0;
+    }
+    else if (n < j)
+    {
+        *out = interval_from_unsigned_limits(j, m, out->sz.width);
+    }
+    return 1;
+}
+
+int interval_relation_eq(Interval* out, Interval j) { return interval_intersection(*out, j, out); }
+int interval_relation_neq(Interval* out, Interval j)
+{
+    if (j.maxoff == 0 && j.base == 0)
+    {
+        return interval_remove_0(out, *out);
+    }
+    return 1;
 }
 
 enum interval_intersection_result interval_intersect_lti(Interval i, int64_t j, Interval* inner, Interval* outer)
@@ -418,6 +578,7 @@ static __forceinline int interval_is_signed_wrap(Interval i)
 }
 int64_t interval_signed_min(Interval i)
 {
+    if (!i.sz.is_signed) abort();
     if (interval_is_signed_wrap(i))
         return s_i64_imin_sizing[i.sz.width];
     else
@@ -433,15 +594,13 @@ int64_t interval_signed_max(Interval i)
 static __forceinline int interval_is_unsigned_wrap(Interval i) { return s_umax_sizing[i.sz.width] - i.maxoff < i.base; }
 uint64_t interval_unsigned_min(Interval i)
 {
+    if (i.sz.is_signed) abort();
     if (interval_is_unsigned_wrap(i))
         return 0;
     else
         return i.base;
 }
-uint64_t interval_unsigned_max(Interval i)
-{
-    return interval_sat_add(i.base, i.maxoff, s_umax_sizing[i.sz.width]);
-}
+uint64_t interval_unsigned_max(Interval i) { return interval_sat_add(i.base, i.maxoff, s_umax_sizing[i.sz.width]); }
 IntervalLimitsI64 interval_signed_limits(Interval i)
 {
     IntervalLimitsI64 r = {
@@ -459,7 +618,7 @@ IntervalLimitsU64 interval_unsigned_limits(Interval i)
     return r;
 }
 
-static Interval interval_from_signed_limits(int64_t imin, int64_t imax, uint32_t width)
+Interval interval_from_signed_limits(int64_t imin, int64_t imax, uint32_t width)
 {
     Interval i = {
         .base = interval_signed_from_i64(imin, width),
@@ -471,16 +630,16 @@ static Interval interval_from_signed_limits(int64_t imin, int64_t imax, uint32_t
     return i;
 }
 
-//  static Interval interval_from_unsigned_limits(uint64_t umin, uint64_t umax, uint32_t width)
-//  {
-//      Interval i = {
-//          .base = umin,
-//          .maxoff = umax - umin,
-//          .sz.width = width,
-//      };
-//      if (i.maxoff > s_umax_sizing[width]) i.maxoff = s_umax_sizing[width];
-//      return i;
-//  }
+Interval interval_from_unsigned_limits(uint64_t umin, uint64_t umax, uint32_t width)
+{
+    Interval i = {
+        .base = umin,
+        .maxoff = umax - umin,
+        .sz.width = width,
+    };
+    if (i.maxoff > s_umax_sizing[width]) i.maxoff = s_umax_sizing[width];
+    return i;
+}
 
 static __forceinline int64_t i64_sat_mult(int64_t a, int64_t b)
 {

@@ -1017,6 +1017,16 @@ void typestr_assign_constant_bool(TypeStr* t, int n)
     t->c.value = n ? s_one_c128 : s_zero_c128;
 }
 
+void tsb_copy_elem_type(TypeStrBuf* out, const TypeStrBuf* in)
+{
+    memset(out, 0, sizeof(*out));
+    int i = in->buf[0];
+    tsb_skip_cvr_i(in, &i);
+    if (i == 0 || in->buf[i] != TYPE_BYTE_POINTER) return;
+    out->buf[0] = i - 1;
+    memcpy(out->buf + 1, in->buf + 1, i - 1);
+}
+
 const TypeStrBuf* typestr_get_arg(const TypeTable* tt, const FnTypeInfo* info, unsigned index)
 {
     if (index >= info->extent) abort();

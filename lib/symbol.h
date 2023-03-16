@@ -9,7 +9,8 @@ struct Decl;
 
 typedef struct Attribute
 {
-    char ch;
+    unsigned char is_nonnull;
+    unsigned char nonnull_addrs[10];
 } Attribute;
 
 typedef struct TypeSymbol
