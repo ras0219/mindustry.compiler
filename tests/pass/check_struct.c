@@ -21,8 +21,16 @@ int foo(const struct Foo* f)
     return 0;
 }
 
+void bar(struct Foo* f) __attribute__((nonnull))
+{
+    struct Foo g;
+    f->a = 5;
+    __prove(f->b);
+}
+
 int main()
 {
     struct Foo f = {0};
+    bar(&f);
     return foo(&f);
 }

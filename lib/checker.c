@@ -13,31 +13,33 @@
 #include "stdlibe.h"
 #include "symbol.h"
 #include "token.h"
+#include "xmacro.h"
+
+#define FOREACH_ValueInfoKind(X)                                                                                       \
+    X(value_info_bottom)                                                                                               \
+    X(value_info_uninitialized)                                                                                        \
+    X(value_info_integer)                                                                                              \
+    X(value_info_null)                                                                                                 \
+    X(value_info_sym)                                                                                                  \
+    X(value_info_sym_null)                                                                                             \
+    X(value_info_addr_obj)                                                                                             \
+    X(value_info_addr_any)                                                                                             \
+    X(value_info_aggregate)                                                                                            \
+    X(value_info_void)
 
 enum ValueInfoKind
 {
-    value_info_bottom,
-    value_info_void,
-    value_info_uninitialized,
-    value_info_integer,
-    value_info_address,
-    value_info_aggregate,
+    FOREACH_ValueInfoKind(X_COMMA)
+};
+enum
+{
+    value_info_count = (0 FOREACH_ValueInfoKind(X_PLUS_ONES))
 };
 
 static const char* value_info_kind_to_string(enum ValueInfoKind k)
 {
-#define case_str(x)                                                                                                    \
-    case x: return #x
-    switch (k)
-    {
-        case_str(value_info_bottom);
-        case_str(value_info_void);
-        case_str(value_info_uninitialized);
-        case_str(value_info_integer);
-        case_str(value_info_address);
-        case_str(value_info_aggregate);
-        default: abort();
-    }
+    static const char* const value_info_kind_to_string_data[] = {FOREACH_ValueInfoKind(X_DINIT_STRING)};
+    return value_info_kind_to_string_data[k];
 }
 
 typedef struct ValueInfo
@@ -50,10 +52,12 @@ typedef struct ValueInfo
         {
             const Symbol* sym;
             size_t sym_offset;
+        } sym;
+        struct
+        {
             TypeStrBuf sym_type;
-            unsigned char or_null : 1;
-            unsigned char or_obj : 1;
-        };
+            unsigned char or_uninit : 1;
+        } addr;
         Interval val;
         struct
         {
@@ -65,8 +69,8 @@ typedef struct ValueInfo
 
 static const ValueInfo s_valueinfo_void = {.kind = value_info_void};
 static const ValueInfo s_valueinfo_uninit = {.kind = value_info_uninitialized};
-static const ValueInfo s_valueinfo_any = {.kind = value_info_bottom};
-// static const ValueInfo s_valueinfo_null = {.or_null = 1};
+static const ValueInfo s_valueinfo_bottom = {.kind = value_info_bottom};
+static const ValueInfo s_valueinfo_null = {.kind = value_info_null};
 
 static void valinfo_init_interval(ValueInfo* info, Interval v)
 {
@@ -77,9 +81,15 @@ static void valinfo_init_interval(ValueInfo* info, Interval v)
 static void valinfo_init_symaddr(ValueInfo* info, const Symbol* sym)
 {
     memset(info, 0, sizeof(ValueInfo));
-    info->kind = value_info_address;
-    info->sym = sym;
-    info->sym_type = sym->type.buf;
+    info->kind = value_info_sym;
+    info->sym.sym = sym;
+}
+static void valinfo_init_addr(ValueInfo* info, const TypeStrBuf* tsb)
+{
+    memset(info, 0, sizeof(ValueInfo));
+    info->kind = value_info_addr_any;
+    info->addr.sym_type = *tsb;
+    info->addr.or_uninit = 1;
 }
 static void valinfo_init_integer(ValueInfo* info, Sizing sz, uint64_t value)
 {
@@ -88,122 +98,31 @@ static void valinfo_init_integer(ValueInfo* info, Sizing sz, uint64_t value)
     info->val.sz = sz;
     info->val.base = value;
 }
-#if 0
-static void valinfo_lt(ValueInfo* out, const ValueInfo* lhs, const ValueInfo* rhs, const RowCol* rc)
-{
-    if (lhs->kind == value_info_bottom || rhs->kind == value_info_bottom) *out = s_valueinfo_any;
-    if (lhs->kind == value_info_integer && rhs->kind == value_info_integer)
-    {
-        valinfo_init_interval(out, interval_lt(lhs->val, rhs->val));
-    }
-    else
-    {
-        parser_ferror(rc, "error: cannot compare non-integer values\n");
-        *out = s_valueinfo_any;
-    }
-}
-
-static void valinfo_lte(ValueInfo* out, const ValueInfo* lhs, const ValueInfo* rhs, const RowCol* rc)
-{
-    if (lhs->kind == value_info_bottom || rhs->kind == value_info_bottom) *out = s_valueinfo_any;
-    if (lhs->kind == value_info_integer && rhs->kind == value_info_integer)
-    {
-        valinfo_init_interval(out, interval_lte(lhs->val, rhs->val));
-    }
-    else
-    {
-        parser_ferror(rc, "error: cannot compare non-integer values\n");
-        *out = s_valueinfo_any;
-    }
-}
-
-static int value_is_truthy(ValueInfo* result)
-{
-    switch (result->kind)
-    {
-        case value_info_integer: return interval_contains_nonzero(result->val);
-        case value_info_address: return result->or_obj;
-        default: return 0;
-    }
-}
-static int value_is_falsy(ValueInfo* result)
-{
-    switch (result->kind)
-    {
-        case value_info_integer: return interval_contains_0(result->val);
-        case value_info_address: return result->or_null;
-        default: return 0;
-    }
-}
-static void value_split_true_false(const ValueInfo* src, ValueInfo* true_info, ValueInfo* false_info)
-{
-    *true_info = *src;
-    *false_info = *src;
-    switch (src->kind)
-    {
-        case value_info_void:
-        case value_info_bottom:
-        case value_info_uninitialized: break;
-        case value_info_integer:
-            if (interval_contains_0(src->val))
-            {
-                false_info->val.base = 0;
-                false_info->val.maxoff = 0;
-            }
-            else
-                *false_info = s_valueinfo_any;
-
-            if (interval_contains_nonzero(src->val))
-            {
-                interval_remove_0(&true_info->val, true_info->val);
-            }
-            else
-                *true_info = s_valueinfo_any;
-            break;
-        case value_info_address:
-            if (src->or_null)
-                false_info->or_obj = 0;
-            else
-                *false_info = s_valueinfo_any;
-            if (src->or_obj)
-                true_info->or_null = 0;
-            else
-                *true_info = s_valueinfo_any;
-            break;
-    }
-}
-#endif
 static void value_cast_to_bool(ValueInfo* result)
 {
+    int n = 0;
     switch (result->kind)
     {
+        case value_info_bottom: break;
         case value_info_void:
-        case value_info_bottom:
-        case value_info_uninitialized: *result = s_valueinfo_any; break;
+        case value_info_uninitialized: abort(); break;
         case value_info_integer:
             if (!interval_contains_0(result->val))
-            {
-                valinfo_init_interval(result, s_interval_one);
-            }
+                n = 1;
             else if (!interval_contains_nonzero(result->val))
-            {
-                valinfo_init_interval(result, s_interval_zero);
-            }
+                n = 0;
             else
-            {
-                valinfo_init_interval(result, s_interval_zero_one);
-            }
+                n = 2;
             break;
-        case value_info_address:
-            if (!result->or_null)
-                valinfo_init_interval(result, s_interval_one);
-            else if (!result->or_obj)
-                valinfo_init_interval(result, s_interval_zero);
-            else
-                valinfo_init_interval(result, s_interval_zero_one);
-            break;
+        case value_info_null: n = 0; break;
+        case value_info_addr_obj:
+        case value_info_sym: n = 1; break;
+        case value_info_addr_any:
+        case value_info_sym_null: n = 2; break;
         case value_info_aggregate: abort();
     }
+    static const Interval* const i[] = {&s_interval_zero, &s_interval_one, &s_interval_zero_one};
+    valinfo_init_interval(result, *i[n]);
 }
 
 typedef struct Invalidation
@@ -240,13 +159,14 @@ struct Checker
     Array ssa_rc;
     CheckContext* ctx;
 };
+void checker_free(struct Checker* chk)
+{
+    array_destroy(&chk->fmt_tmp);
+    array_destroy(&chk->ssa_info);
+    array_destroy(&chk->ssa_rc);
+    my_free(chk);
+}
 
-// static __forceinline const ValueInfo* check_ssa_info(Checker* chk, size_t ssa)
-// {
-//     if (ssa == 0) abort();
-//     --ssa;
-//     return (const ValueInfo*)chk->ssa_info.data + ssa;
-// }
 static __forceinline size_t check_push_ssa(Checker* chk, const ValueInfo* info, const RowCol* rc)
 {
     if (info->kind == value_info_integer && info->val.sz.width == 0) abort();
@@ -257,34 +177,16 @@ static __forceinline size_t check_push_ssa(Checker* chk, const ValueInfo* info, 
 
 static void check_any_from_type(Checker* chk, ValueInfo* out, const TypeStrBuf* ty, const RowCol* rc)
 {
-    memset(out, 0, sizeof(*out));
     switch (tsb_byte(ty))
     {
-        case TYPE_BYTE_POINTER:
-            out->kind = value_info_address;
-            out->sym_type = *ty;
-            out->or_null = 1;
-            out->or_obj = 1;
-            break;
-        case TYPE_BYTE_INT:
-            out->kind = value_info_integer;
-            out->val = s_interval_i32;
-            break;
-        case TYPE_BYTE_UINT:
-            out->kind = value_info_integer;
-            out->val = s_interval_u32;
-            break;
-        case TYPE_BYTE_LLONG:
-            out->kind = value_info_integer;
-            out->val = s_interval_i64;
-            break;
-        case TYPE_BYTE_ULLONG:
-            out->kind = value_info_integer;
-            out->val = s_interval_u64;
-            break;
+        case TYPE_BYTE_POINTER: valinfo_init_addr(out, ty); break;
+        case TYPE_BYTE_INT: valinfo_init_interval(out, s_interval_i32); break;
+        case TYPE_BYTE_UINT: valinfo_init_interval(out, s_interval_u32); break;
+        case TYPE_BYTE_LLONG: valinfo_init_interval(out, s_interval_i64); break;
+        case TYPE_BYTE_ULLONG: valinfo_init_interval(out, s_interval_u64); break;
         default:
             tsb_error1(rc, chk->elab->types, "error: cannot determine range from type: %.*s\n", ty);
-            *out = s_valueinfo_any;
+            *out = s_valueinfo_bottom;
     }
 }
 static void check_any_from_decl(Checker* chk, ValueInfo* out, const Decl* decl, const RowCol* rc)
@@ -306,6 +208,18 @@ static ValueInfo* chkctx_get_ssa_info(const CheckContext* ctx, size_t ssa)
         }
     }
     return NULL;
+}
+
+/// @return 0 on failure
+static size_t chkctx_get_ssa_rec(const CheckContext* ctx, const Symbol* sym)
+{
+    do
+    {
+        const size_t* p = ptrmap_find(&ctx->sym_to_ssa, sym);
+        if (p) return *p;
+        ctx = ctx->parent;
+    } while (ctx);
+    return 0;
 }
 
 static const ValueInfo* check_get_ssa_info_rec(const Checker* chk, const CheckContext* ctx, size_t ssa)
@@ -332,57 +246,224 @@ found:
     return info;
 }
 
-// static ValueInfo* chkctx_get_info(CheckContext* ctx, const Symbol* sym)
-// {
-//     size_t* ssa = ptrmap_find(&ctx->sym_to_ssa, sym);
-//     return ssa ? chkctx_get_ssa_info(ctx, *ssa) : NULL;
-// }
+static void check_generalize_sym(Checker* chk, ValueInfo* v, const RowCol* rc)
+{
+    if (v->kind != value_info_sym && v->kind != value_info_sym_null) abort();
+    if (v->sym.sym_offset)
+    {
+        PARSER_UNIMPLEMENTED(rc, "error: unimplemented generalize of offsets\n");
+        *v = s_valueinfo_bottom;
+        return;
+    }
+    const Symbol* sym = v->sym.sym;
+    size_t ssa = chkctx_get_ssa_rec(chk->ctx, v->sym.sym);
+    const ValueInfo* info = check_get_ssa_info_rec(chk, chk->ctx, ssa);
+    if (v->kind == value_info_sym)
+        v->kind = value_info_addr_obj;
+    else
+        v->kind = value_info_addr_any;
+    v->addr.sym_type = sym->type.buf;
+    v->addr.or_uninit = info->kind == value_info_uninitialized;
+}
+
+enum ValueInfoTraits
+{
+    // val field is active
+    value_traits_val = 1,
+    // can this be treated as a pointer
+    value_traits_ptr = 2,
+    // can this be null
+    value_traits_null = 4,
+    // can this only be null
+    value_traits_only_null = 8,
+    // sym field is active
+    value_traits_sym = 16,
+    // addr field is active
+    value_traits_addr = 32,
+};
+
+static unsigned valinfo_get_traits(const ValueInfo* v)
+{
+    switch (v->kind)
+    {
+        case value_info_integer:
+            if (v->val.base == 0 && v->val.maxoff == 0)
+                return value_traits_val | value_traits_ptr | value_traits_null | value_traits_only_null;
+            return value_traits_val;
+        case value_info_null: return value_traits_ptr | value_traits_only_null | value_traits_null;
+        case value_info_sym: return value_traits_ptr | value_traits_sym;
+        case value_info_sym_null: return value_traits_ptr | value_traits_null | value_traits_sym;
+        case value_info_addr_obj: return value_traits_ptr | value_traits_addr;
+        case value_info_addr_any: return value_traits_ptr | value_traits_null | value_traits_addr;
+        default: return 0;
+    }
+}
 
 static void check_merge_values(Checker* chk, ValueInfo* v, const ValueInfo* w, const RowCol* rc)
 {
-    if (w->kind == value_info_bottom) *v = s_valueinfo_any;
+    if (w->kind == value_info_bottom) *v = s_valueinfo_bottom;
     if (v->kind == value_info_bottom) return;
+    if (v->ref_ssa == w->ref_ssa) return;
+    v->ref_ssa = 0;
 
-    if (v->kind != w->kind)
+    if (v->kind == w->kind && v->kind == value_info_integer)
     {
-        parser_ferror(rc,
-                      "error: cannot merge values of different types (%s vs %s)\n",
-                      value_info_kind_to_string(v->kind),
-                      value_info_kind_to_string(w->kind));
-        *v = s_valueinfo_any;
+        v->val = interval_merge(v->val, w->val);
         return;
     }
 
-    switch (v->kind)
+    unsigned v_traits = valinfo_get_traits(v);
+    unsigned w_traits = valinfo_get_traits(w);
+    unsigned nullable = (v_traits | w_traits) & value_traits_null;
+    if (v_traits & w_traits & value_traits_ptr)
     {
-        case value_info_address:
-            if (!tsb_match(&v->sym_type, &w->sym_type))
+        if (w_traits & value_traits_null)
+        {
+            if (v->kind == value_info_sym)
+                v->kind = value_info_sym_null;
+            else if (v->kind == value_info_addr_obj)
+                v->kind = value_info_addr_any;
+        }
+        if (w_traits & value_traits_sym)
+        {
+            switch (v->kind) {
+                case 
+            }
+            if (v_traits & value_traits_sym)
             {
-                parser_ferror(rc, "error: cannot merge pointers to different types\n");
-                *v = s_valueinfo_any;
+            }
+            else if (v_traits & value_traits_addr)
+            {
             }
             else
             {
-                if (w->or_obj)
+            }
+            if (v->sym.sym == w->sym.sym && v->sym.sym_offset == w->sym.sym_offset)
+            {
+                v->kind = nullable ? value_info_sym_null : value_info_sym;
+                return;
+            }
+            if (v_traits & value_traits_sym) check_generalize_sym(chk, v, rc);
+        }
+        if (w_traits & value_traits_addr)
+        {
+            if (v_traits & value_traits_sym) check_generalize_sym(chk, v, rc);
+        }
+        if (v_traits & w_traits & value_traits_only_null)
+        {
+            *v = s_valueinfo_null;
+            return;
+        }
+        if (v_traits & w_traits & value_traits_sym)
+        {
+            if (v->sym.sym == w->sym.sym && v->sym.sym_offset == w->sym.sym_offset)
+            {
+                v->kind = nullable ? value_info_sym_null : value_info_sym;
+                return;
+            }
+        }
+        ValueInfo w2 = *w;
+        if (v_traits & value_traits_sym) check_generalize_sym(chk, v, rc);
+        if (w_traits & value_traits_sym) check_generalize_sym(chk, &w2, rc);
+    }
+    if (v->kind == w->kind)
+    {
+        if (v->kind == value_info_integer)
+        {
+            v->val = interval_merge(v->val, w->val);
+            return;
+        }
+        else if (v->kind == value_info_null)
+        {
+            return;
+        }
+        else if (v->kind == value_info_sym)
+        {
+            return;
+        }
+    }
+
+    if (v_traits & w_traits) ValueInfo w2 = *w;
+    switch (v->kind)
+    {
+        case value_info_null:
+            switch (w2.kind)
+            {
+                case value_info_integer:
+                    if (w2.val.base != 0 || w2.val.maxoff != 0) goto fail_to_merge;
+                case value_info_null: break;
+                case value_info_sym:
+                case value_info_sym_null:
+                    v->kind = value_info_sym_null;
+                    v->sym = w2.sym;
+                    break;
+                default: goto fail_to_merge;
+            }
+            break;
+        case value_info_sym:
+        case value_info_sym_null:
+            switch (w2.kind)
+            {
+                case value_info_integer:
+                    if (w2.val.base != 0 || w2.val.maxoff != 0) goto fail_to_merge;
+                case value_info_null: v->kind = value_info_sym_null; break;
+                case value_info_sym_null: v->kind = value_info_sym_null;
+                // fallthrough
+                case value_info_sym:
+                    if (v->sym.sym == w2.sym.sym && v->sym.sym_offset == w2.sym.sym_offset) break;
+                    check_generalize_sym(chk, &w2, rc);
+                    // fallthrough
+                case value_info_addr_obj:
+                case value_info_addr_obj:
+                    // symbols aren't exactly the same -- generalize
+                    if (!tsb_match(&v->sym.sym->type.buf, &w2.sym.sym->type.buf))
+                    {
+                        parser_ferror(rc, "error: cannot merge pointers to different types\n");
+                        goto fail_to_merge2;
+                    }
+                    check_generalize_sym(chk, v, rc);
+
+                    break;
+                default: goto fail_to_merge;
+            }
+            break;
+            if (!tsb_match(&v->sym_type, &w2.sym_type))
+            {
+                parser_ferror(rc, "error: cannot merge pointers to different types\n");
+                *v = s_valueinfo_bottom;
+            }
+            else
+            {
+                if (w2.or_obj)
                 {
                     if (v->or_obj)
                     {
-                        if (w->sym != v->sym) v->sym = NULL;
+                        if (w2.sym != v->sym) v->sym = NULL;
                     }
                     else
                     {
                         v->or_obj = 1;
-                        v->sym = w->sym;
+                        v->sym = w2.sym;
                     }
                 }
-                if (w->or_null) v->or_null = 1;
+                if (w2.or_null) v->or_null = 1;
             }
             break;
-        case value_info_integer: v->val = interval_merge(v->val, w->val); break;
+        case value_info_integer: v->val = interval_merge(v->val, w2.val); break;
         case value_info_uninitialized:
         case value_info_void: break;
-        default: parser_ferror(rc, "error: unimplemented merge\n"); *v = s_valueinfo_any;
     }
+
+    return;
+
+fail_to_merge:
+    parser_ferror(rc,
+                  "error: cannot merge values of types (%s vs %s)\n",
+                  value_info_kind_to_string(v->kind),
+                  value_info_kind_to_string(w2.kind));
+fail_to_merge2:
+    *v = s_valueinfo_bottom;
+    return;
 }
 
 static int can_alias(const TypeStrBuf* dst, const TypeStrBuf* src)
@@ -417,21 +498,6 @@ static void check_invalidate_tbaa(Checker* chk, const TypeStrBuf* tsb, const Val
     }
     array_push(&chk->ctx->invalidations, &inv, sizeof(inv));
 }
-
-// static void chkctx_intersect_value(CheckContext* ctx, const Symbol* sym, const ValueInfo* v)
-// {
-//     const size_t i = arrptr_find(&ctx->syms, sym);
-//     if (i == arrptr_size(&ctx->syms))
-//     {
-//         arrptr_push(&ctx->syms, sym);
-//         array_push(&ctx->info, v, sizeof(*v));
-//     }
-//     else
-//     {
-//         if (ctx->info.data == NULL) abort();
-//         ((ValueInfo*)ctx->info.data)[i] = *v;
-//     }
-// }
 
 static void check_assign_value(Checker* chk, const Symbol* sym, const ValueInfo* v, const RowCol* rc)
 {
@@ -486,25 +552,6 @@ static void chkctx_clone(CheckContext* chk, const CheckContext* other)
     chk->parent = other->parent;
     array_copy(&chk->info, &other->info);
     ptrmap_copy(&chk->sym_to_ssa, &other->sym_to_ssa);
-}
-
-// /// @return 0 on failure
-// static size_t chkctx_get_ssa(const CheckContext* ctx, const Symbol* sym)
-// {
-//     const size_t* p = ptrmap_find(&ctx->sym_to_ssa, sym);
-//     return p ? *p : 0;
-// }
-
-/// @return 0 on failure
-static size_t chkctx_get_ssa_rec(const CheckContext* ctx, const Symbol* sym)
-{
-    do
-    {
-        const size_t* p = ptrmap_find(&ctx->sym_to_ssa, sym);
-        if (p) return *p;
-        ctx = ctx->parent;
-    } while (ctx);
-    return 0;
 }
 
 static void check_merge_context_matching(Checker* chk, CheckContext* ctx1, const CheckContext* ctx2, const RowCol* rc)
@@ -623,11 +670,6 @@ static ValueInfo* check_refine_ssa(Checker* chk, CheckContext* ctx, size_t ssa)
     }
     return info;
 }
-
-// static ValueInfo* check_refine_sym(Checker* chk, CheckContext* ctx, const Symbol* sym)
-// {
-//     return check_refine_ssa(chk, ctx, chkctx_get_ssa(ctx, sym));
-// }
 
 static void check_refine_ssa_true(Checker* chk, CheckContext* ctx, size_t ssa)
 {
@@ -798,7 +840,7 @@ static void check_read_sym(Checker* chk, const Symbol* sym, ValueInfo* result, c
         if (info->kind == value_info_uninitialized)
         {
             parser_ferror(rc, "error: possible uninitialized read: %s\n", sym->name);
-            *result = s_valueinfo_any;
+            *result = s_valueinfo_bottom;
         }
         else
         {
@@ -808,52 +850,9 @@ static void check_read_sym(Checker* chk, const Symbol* sym, ValueInfo* result, c
     else
     {
         parser_ferror(rc, "error: no info for symbol: %s\n", sym->name);
-        *result = s_valueinfo_any;
+        *result = s_valueinfo_bottom;
     }
 }
-
-// static void valinfo_cast_int(ValueInfo* info, Sizing sz)
-// {
-//     static const unsigned long long s_imin_for_sizing[9] = {0, INT8_MIN, INT16_MIN, 0, INT32_MIN, 0, 0, 0,
-//     INT64_MIN}; static const unsigned long long s_imax_for_sizing[9] = {0, INT8_MAX, INT16_MAX, 0, INT32_MAX, 0, 0,
-//     0, INT64_MAX}; static const unsigned long long s_umin_for_sizing[9] = {
-//         0, UINT8_MIN, UINT16_MIN, 0, UINT32_MIN, 0, 0, 0, UINT64_MIN};
-//     static const unsigned long long s_umax_for_sizing[9] = {
-//         0, UINT8_MIN, UINT16_MIN, 0, UINT32_MIN, 0, 0, 0, UINT64_MIN};
-
-//     if (!info->or_integer) return;
-//     const Sizing p = info->val_sizing;
-//     const unsigned long long wrap = info->val_maxoff + info->val_base;
-//     if (p.is_signed)
-//     {
-//         if (info->val_base <= s_imax_for_sizing[p.width])
-//         {
-//             // do nothing
-//         }
-//         else
-//         {
-
-//         }
-
-//         if (wrap > s_imax_for_sizing[p.width])
-//         {
-//             wrap - s_imax_for_sizing[p.width] + s_imax
-//         }
-//         if (sz.width >= info->val_sizing.width)
-//         {
-//         }
-//     }
-//     if (sz.is_signed)
-//     {
-//     }
-//     else
-//     {
-//         if (sz.width == 4)
-//         {
-//         }
-//     }
-//     info->val_sizing = sz;
-// }
 
 struct Checker* checker_alloc(const struct Elaborator* elab)
 {
@@ -883,16 +882,17 @@ static void check_ExprLit(Checker* chk, const ExprLit* e, ValueInfo* result)
         if (!e->take_address)
         {
             parser_tok_error(e->tok, "error: unimplemented literal type (%d)\n", e->tok->type);
-            *result = s_valueinfo_any;
+            *result = s_valueinfo_bottom;
         }
         else
         {
+            valinfo_init_symaddr(result, e->sym);
         }
     }
     else
     {
         parser_tok_error(e->tok, "error: unimplemented literal type (%d)\n", e->tok->type);
-        *result = s_valueinfo_any;
+        *result = s_valueinfo_bottom;
     }
 }
 
@@ -931,7 +931,9 @@ static void check_ExprBuiltin(Checker* chk, const ExprBuiltin* e, ValueInfo* res
                         parser_tok_error(e->tok, "error: cannot prove non-zero\n    Range: %s\n", chk->fmt_tmp.data);
                     }
                 case value_info_bottom: break;
-                default: parser_tok_error(e->tok, "error: cannot prove value\n");
+                default:
+                    parser_tok_error(
+                        e->tok, "error: cannot prove value of kind %s\n", value_info_kind_to_string(result->kind));
             }
             break;
         default:
@@ -1035,12 +1037,12 @@ fail:
 
 static void check_ExprBinOp_finish(Checker* chk, const ExprBinOp* e, ValueInfo* result, ValueInfo* rhs)
 {
-    if (rhs->kind == value_info_bottom) *result = s_valueinfo_any;
+    if (rhs->kind == value_info_bottom) *result = s_valueinfo_bottom;
     if (result->kind == value_info_bottom) return;
     if (rhs->kind != value_info_integer || result->kind != value_info_integer)
     {
         parser_tok_error(e->tok, "error: unimplemented ExprBinOp on non-integers\n");
-        *result = s_valueinfo_any;
+        *result = s_valueinfo_bottom;
         return;
     }
     result->val = interval_cast(result->val, e->common_sz);
@@ -1057,7 +1059,7 @@ static void check_ExprBinOp_finish(Checker* chk, const ExprBinOp* e, ValueInfo* 
                                  "error: possible divide by zero\n"
                                  "    Divisor range: %s\n",
                                  chk->fmt_tmp.data);
-                *result = s_valueinfo_any;
+                *result = s_valueinfo_bottom;
                 return;
             }
             else if (e->sizing.is_signed && interval_contains(result->val, INT64_MIN) &&
@@ -1070,7 +1072,7 @@ static void check_ExprBinOp_finish(Checker* chk, const ExprBinOp* e, ValueInfo* 
                                  "error: possible signed overflow\n"
                                  "    Divisor range: %s\n",
                                  chk->fmt_tmp.data);
-                *result = s_valueinfo_any;
+                *result = s_valueinfo_bottom;
                 return;
             }
             else
@@ -1113,7 +1115,7 @@ static void check_ExprBinOp_finish(Checker* chk, const ExprBinOp* e, ValueInfo* 
             break;
         default:
             parser_tok_error(e->tok, "error: unimplemented ExprBinOp type (%s)\n", token_str(chk->p, e->tok));
-            *result = s_valueinfo_any;
+            *result = s_valueinfo_bottom;
     }
 }
 
@@ -1178,12 +1180,12 @@ static void check_ExprUnOp(Checker* chk, const ExprUnOp* e, ValueInfo* result)
                 case TOKEN_SYM1('-'): result->val = chk_neg_ofchk(chk, result->val, e->tok); return;
                 default:
                     parser_tok_error(e->tok, "error: unimplemented ExprUnOp type (%s)\n", token_str(chk->p, e->tok));
-                    *result = s_valueinfo_any;
+                    *result = s_valueinfo_bottom;
             }
             break;
         default:
             parser_tok_error(e->tok, "error: unimplemented ExprUnOp on non-integers\n");
-            *result = s_valueinfo_any;
+            *result = s_valueinfo_bottom;
             return;
     }
 }
@@ -1193,18 +1195,18 @@ static void check_ExprAdd(Checker* chk, const ExprAdd* e, ValueInfo* result)
     ValueInfo rhs;
     check_expr(chk, e->lhs, result);
     check_expr(chk, e->rhs, &rhs);
-    if (rhs.kind == value_info_bottom) *result = s_valueinfo_any;
+    if (rhs.kind == value_info_bottom) *result = s_valueinfo_bottom;
     if (result->kind == value_info_bottom) return;
     if (result->kind != value_info_integer)
     {
         parser_tok_error(e->lhs->tok, "error: expected integer in ExprAdd check\n");
-        *result = s_valueinfo_any;
+        *result = s_valueinfo_bottom;
         return;
     }
     if (rhs.kind != value_info_integer)
     {
         parser_tok_error(e->rhs->tok, "error: expected integer in ExprAdd check\n");
-        *result = s_valueinfo_any;
+        *result = s_valueinfo_bottom;
         return;
     }
     if (e->tok->type == TOKEN_SYM1('-'))
@@ -1231,7 +1233,7 @@ static void check_ExprDeref(Checker* chk, const ExprDeref* e, ValueInfo* result)
                 parser_tok_error(e->tok,
                                  result->or_obj ? "error: possible null pointer dereference\n"
                                                 : "error: definite null pointer dereference\n");
-                *result = s_valueinfo_any;
+                *result = s_valueinfo_bottom;
                 return;
             }
             if (!e->take_address)
@@ -1282,7 +1284,7 @@ static void check_ExprAssign(Checker* chk, const ExprAssign* e, ValueInfo* resul
             if (tsb_is_unknown(&pointed_ty))
             {
                 parser_tok_error(e->tok, "error: cannot track assignment through unknown pointer\n");
-                *result = s_valueinfo_any;
+                *result = s_valueinfo_bottom;
                 chk->ctx->is_void = 1;
             }
             else
@@ -1303,16 +1305,34 @@ static void check_ExprField(Checker* chk, const ExprField* e, ValueInfo* result)
             parser_tok_error(e->tok,
                              result->or_obj ? "error: possible null pointer dereference\n"
                                             : "error: definite null pointer dereference\n");
-            *result = s_valueinfo_any;
+            *result = s_valueinfo_bottom;
             return;
         }
 
-        result->sym_offset += e->field_offset;
+        if (e->take_address)
+        {
+            result->sym_offset += e->field_offset;
+            result->sym_type = e->sym->type.buf;
+            tsb_add_pointer(&result->sym_type);
+        }
+        else
+        {
+            // dereference value?
+            if (result->sym)
+            {
+                check_read_sym(chk, result->sym, result, token_rc(e->tok));
+            }
+            else
+            {
+                parser_tok_error(e->tok, "error: unimplemented read of field\n");
+                *result = s_valueinfo_bottom;
+            }
+        }
     }
     else if (result->kind != value_info_bottom)
     {
         parser_tok_error(e->tok, "error: cannot dereference non-pointer value\n");
-        *result = s_valueinfo_any;
+        *result = s_valueinfo_bottom;
     }
 }
 
@@ -1357,7 +1377,7 @@ static void check_ExprCall(Checker* chk, const ExprCall* e, ValueInfo* result)
             parser_tok_error(e->tok,
                              result->or_obj ? "error: possible null pointer dereference\n"
                                             : "error: definite null pointer dereference\n");
-            *result = s_valueinfo_any;
+            *result = s_valueinfo_bottom;
             return;
         }
 
@@ -1379,7 +1399,7 @@ static void check_ExprCall(Checker* chk, const ExprCall* e, ValueInfo* result)
     else if (result->kind != value_info_bottom)
     {
         parser_tok_error(e->tok, "error: cannot dereference non-pointer value\n");
-        *result = s_valueinfo_any;
+        *result = s_valueinfo_bottom;
     }
 }
 
@@ -1403,13 +1423,14 @@ static void check_expr_impl(Checker* chk, const Expr* e, ValueInfo* result)
 #undef DISPATCH_CHECK
         default:
             parser_tok_error(e->tok, "error: unimplemented ast to check: %s\n", ast_kind_to_string(e->kind));
-            *result = s_valueinfo_any;
+            *result = s_valueinfo_bottom;
     }
 }
 static void check_expr(Checker* chk, const Expr* e, ValueInfo* result)
 {
     check_expr_impl(chk, e, result);
     if (result->kind == value_info_integer && result->val.sz.width == 0) abort();
+    if (result->kind > value_info_void) abort();
 }
 
 static void check_cond_impl(
@@ -1482,6 +1503,21 @@ static void check_Decl(Checker* chk, const Decl* e)
                     ValueInfo v;
                     check_expr(chk, (const Expr*)e->init, &v);
                     check_assign_value(chk, sym, &v, token_rc(e->tok));
+                }
+                else if (e->init->kind == AST_INIT)
+                {
+                    const AstInit* init = (const AstInit*)e->init;
+                    if (init->init && init->next && !init->next->init && init->init->kind == EXPR_LIT)
+                    {
+                        ValueInfo v;
+                        check_expr(chk, (const Expr*)init->init, &v);
+                        check_assign_value(chk, sym, &v, token_rc(e->tok));
+                    }
+                    else
+                    {
+                        parser_tok_error(init->tok,
+                                         "error: unimplemented check initializer -- must be single literal\n");
+                    }
                 }
                 else
                 {
@@ -1566,10 +1602,4 @@ int checker_check(Checker* chk)
     check_stmt(chk, &p->top->ast);
     chkctx_destroy(&top);
     return parser_has_errors();
-}
-void checker_free(struct Checker* chk)
-{
-    array_destroy(&chk->fmt_tmp);
-    array_destroy(&chk->ssa_info);
-    my_free(chk);
 }
