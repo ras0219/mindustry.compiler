@@ -21,6 +21,7 @@ enum ValueInfoKind
     value_info_uninitialized,
     value_info_integer,
     value_info_address,
+    value_info_aggregate,
 };
 
 static const char* value_info_kind_to_string(enum ValueInfoKind k)
@@ -34,6 +35,7 @@ static const char* value_info_kind_to_string(enum ValueInfoKind k)
         case_str(value_info_uninitialized);
         case_str(value_info_integer);
         case_str(value_info_address);
+        case_str(value_info_aggregate);
         default: abort();
     }
 }
@@ -41,13 +43,24 @@ static const char* value_info_kind_to_string(enum ValueInfoKind k)
 typedef struct ValueInfo
 {
     enum ValueInfoKind kind;
-    const Symbol* sym;
-    size_t sym_offset;
-    TypeStrBuf sym_type;
-    Interval val;
     size_t ref_ssa;
-    unsigned char or_null : 1;
-    unsigned char or_obj : 1;
+    union
+    {
+        struct
+        {
+            const Symbol* sym;
+            size_t sym_offset;
+            TypeStrBuf sym_type;
+            unsigned char or_null : 1;
+            unsigned char or_obj : 1;
+        };
+        Interval val;
+        struct
+        {
+            size_t field_ssa[4];
+            size_t next_ssa;
+        };
+    };
 } ValueInfo;
 
 static const ValueInfo s_valueinfo_void = {.kind = value_info_void};
@@ -189,14 +202,24 @@ static void value_cast_to_bool(ValueInfo* result)
             else
                 valinfo_init_interval(result, s_interval_zero_one);
             break;
+        case value_info_aggregate: abort();
     }
 }
+
+typedef struct Invalidation
+{
+    TypeStrBuf tsb;
+    ValueInfo info;
+    const RowCol* rc;
+} Invalidation;
 
 typedef struct CheckContext
 {
     PtrMap sym_to_ssa;
     // Array<ValueInfo>
     Array info;
+    // Array<Invalidation>
+    Array invalidations;
     struct CheckContext* parent;
     unsigned char is_void : 1;
 } CheckContext;
@@ -205,6 +228,7 @@ static void chkctx_destroy(CheckContext* ctx)
 {
     ptrmap_destroy(&ctx->sym_to_ssa);
     array_destroy(&ctx->info);
+    array_destroy(&ctx->invalidations);
 }
 
 struct Checker
@@ -225,6 +249,7 @@ struct Checker
 // }
 static __forceinline size_t check_push_ssa(Checker* chk, const ValueInfo* info, const RowCol* rc)
 {
+    if (info->kind == value_info_integer && info->val.sz.width == 0) abort();
     ValueInfo* i = array_push(&chk->ssa_info, info, sizeof(*info));
     arrptr_push(&chk->ssa_rc, rc);
     return i->ref_ssa = arrptr_size(&chk->ssa_rc);
@@ -285,6 +310,7 @@ static ValueInfo* chkctx_get_ssa_info(const CheckContext* ctx, size_t ssa)
 
 static const ValueInfo* check_get_ssa_info_rec(const Checker* chk, const CheckContext* ctx, size_t ssa)
 {
+    const ValueInfo* info;
     while (ctx)
     {
         ValueInfo* const infos = ctx->info.data;
@@ -292,15 +318,18 @@ static const ValueInfo* check_get_ssa_info_rec(const Checker* chk, const CheckCo
 
         for (size_t i = 0; i < n; ++i)
         {
-            ValueInfo* info = infos + i;
+            info = infos + i;
             if (info->ref_ssa == ssa)
             {
-                return info;
+                goto found;
             }
         }
         ctx = ctx->parent;
     }
-    return (const ValueInfo*)chk->ssa_info.data + ssa - 1;
+    info = (const ValueInfo*)chk->ssa_info.data + ssa - 1;
+found:
+    if (info->kind == value_info_integer && info->val.sz.width == 0) abort();
+    return info;
 }
 
 // static ValueInfo* chkctx_get_info(CheckContext* ctx, const Symbol* sym)
@@ -324,39 +353,69 @@ static void check_merge_values(Checker* chk, ValueInfo* v, const ValueInfo* w, c
         return;
     }
 
-    if (v->kind == w->kind)
+    switch (v->kind)
     {
-        switch (v->kind)
-        {
-            case value_info_address:
-                if (!tsb_match(&v->sym_type, &w->sym_type))
+        case value_info_address:
+            if (!tsb_match(&v->sym_type, &w->sym_type))
+            {
+                parser_ferror(rc, "error: cannot merge pointers to different types\n");
+                *v = s_valueinfo_any;
+            }
+            else
+            {
+                if (w->or_obj)
                 {
-                    parser_ferror(rc, "error: cannot merge pointers to different types\n");
-                    *v = s_valueinfo_any;
-                }
-                else
-                {
-                    if (w->or_obj)
+                    if (v->or_obj)
                     {
-                        if (v->or_obj)
-                        {
-                            if (w->sym != v->sym) v->sym = NULL;
-                        }
-                        else
-                        {
-                            v->or_obj = 1;
-                            v->sym = w->sym;
-                        }
+                        if (w->sym != v->sym) v->sym = NULL;
                     }
-                    if (w->or_null) v->or_null = 1;
+                    else
+                    {
+                        v->or_obj = 1;
+                        v->sym = w->sym;
+                    }
                 }
-                break;
-            case value_info_integer: v->val = interval_merge(v->val, w->val); break;
-            case value_info_uninitialized:
-            case value_info_void: break;
-            default: parser_ferror(rc, "error: unimplemented merge\n"); *v = s_valueinfo_any;
-        }
+                if (w->or_null) v->or_null = 1;
+            }
+            break;
+        case value_info_integer: v->val = interval_merge(v->val, w->val); break;
+        case value_info_uninitialized:
+        case value_info_void: break;
+        default: parser_ferror(rc, "error: unimplemented merge\n"); *v = s_valueinfo_any;
     }
+}
+
+static int can_alias(const TypeStrBuf* dst, const TypeStrBuf* src)
+{
+    char sbyte = tsb_byte(src);
+    if (sbyte == TYPE_BYTE_CHAR || sbyte == TYPE_BYTE_SCHAR || sbyte == TYPE_BYTE_UCHAR)
+        // character pointer aliases everything
+        return 1;
+    // todo: better inner pointer analysis
+    return sbyte == tsb_byte(dst);
+}
+
+static size_t check_invalidate_tbaa_sym(Checker* chk, size_t ssa, const TypeStrBuf* sym_tsb, const Invalidation* i)
+{
+    if (i->info.ref_ssa == ssa) return ssa;
+    if (tsb_get_cvr(sym_tsb) & TYPESTR_CVR_C) return ssa; // cannot assign to const objects
+    if (!can_alias(sym_tsb, &i->tsb)) return ssa;
+    ValueInfo w = *check_get_ssa_info_rec(chk, chk->ctx, ssa);
+    check_merge_values(chk, &w, &i->info, i->rc);
+    return check_push_ssa(chk, &w, i->rc);
+}
+
+static void check_invalidate_tbaa(Checker* chk, const TypeStrBuf* tsb, const ValueInfo* v, const RowCol* rc)
+{
+    const Invalidation inv = {.info = *v, .rc = rc, .tsb = *tsb};
+    const size_t n = ptrmap_size(&chk->ctx->sym_to_ssa);
+    for (size_t i = 0; i < n; ++i)
+    {
+        const Symbol* sym = ptrmap_nth_ptr(&chk->ctx->sym_to_ssa, i);
+        size_t* ssa = ptrmap_nth_val(&chk->ctx->sym_to_ssa, i);
+        *ssa = check_invalidate_tbaa_sym(chk, *ssa, &sym->type.buf, &inv);
+    }
+    array_push(&chk->ctx->invalidations, &inv, sizeof(inv));
 }
 
 // static void chkctx_intersect_value(CheckContext* ctx, const Symbol* sym, const ValueInfo* v)
@@ -382,6 +441,7 @@ static void check_assign_value(Checker* chk, const Symbol* sym, const ValueInfo*
 static void chkctx_replace_ssa(CheckContext* ctx, const ValueInfo* v)
 {
     if (!v->ref_ssa) abort();
+    if (v->kind == value_info_integer && v->val.sz.width == 0) abort();
     const size_t n_i = array_size(&ctx->info, sizeof(ValueInfo));
     ValueInfo* const info = ctx->info.data;
     for (size_t i = 0; i < n_i; ++i)
@@ -399,12 +459,26 @@ static void check_flatten_context(Checker* chk, CheckContext* ctx)
 {
     if (!ctx->parent) abort();
     ptrmap_insert_all(&ctx->parent->sym_to_ssa, &ctx->sym_to_ssa);
+    for (size_t i = 0; i < ptrmap_size(&ctx->parent->sym_to_ssa); ++i)
+    {
+        const Symbol* sym = ptrmap_nth_ptr(&ctx->parent->sym_to_ssa, i);
+        if (!ptrmap_find(&ctx->sym_to_ssa, sym))
+        {
+            size_t* ssa = ptrmap_nth_val(&ctx->parent->sym_to_ssa, i);
+            ARRAY_FOREACH(const Invalidation, j, &ctx->invalidations)
+            {
+                *ssa = check_invalidate_tbaa_sym(chk, *ssa, &sym->type.buf, j);
+            }
+        }
+    }
     const size_t n_i = array_size(&ctx->info, sizeof(ValueInfo));
     const ValueInfo* const info = ctx->info.data;
     for (size_t i = 0; i < n_i; ++i)
     {
         chkctx_replace_ssa(ctx->parent, info + i);
     }
+    array_push(&ctx->parent->invalidations, ctx->invalidations.data, ctx->invalidations.sz);
+    ctx->parent->is_void |= ctx->is_void;
 }
 
 static void chkctx_clone(CheckContext* chk, const CheckContext* other)
@@ -494,6 +568,7 @@ static void check_merge_context(Checker* chk, CheckContext* ctx1, const CheckCon
         }
     }
     array_shrink(&ctx1->info, k, sizeof(ValueInfo));
+    array_push(&ctx1->invalidations, ctx2->invalidations.data, ctx2->invalidations.sz);
 }
 
 static Interval chk_neg_ofchk(Checker* chk, Interval i, const Token* tok)
@@ -800,14 +875,19 @@ static void check_ExprLit(Checker* chk, const ExprLit* e, ValueInfo* result)
 {
     if (e->tok->type == LEX_NUMBER || e->tok->type == LEX_CHARLIT)
     {
+        if (e->sizing.width == 0) abort();
         valinfo_init_integer(result, e->sizing, e->numeric);
     }
     else if (e->tok->type == LEX_STRING)
     {
-        // be_compile_ExprLit_Sym(be, e->sym);
-        // *out = e->sym->addr;
-        parser_tok_error(e->tok, "error: unimplemented literal type (%d)\n", e->tok->type);
-        *result = s_valueinfo_any;
+        if (!e->take_address)
+        {
+            parser_tok_error(e->tok, "error: unimplemented literal type (%d)\n", e->tok->type);
+            *result = s_valueinfo_any;
+        }
+        else
+        {
+        }
     }
     else
     {
@@ -1184,32 +1264,6 @@ static void check_ExprRef(Checker* chk, const ExprRef* e, ValueInfo* result)
     }
 }
 
-static int can_alias(const TypeStrBuf* dst, const TypeStrBuf* src)
-{
-    char sbyte = tsb_byte(src);
-    if (sbyte == TYPE_BYTE_CHAR || sbyte == TYPE_BYTE_SCHAR || sbyte == TYPE_BYTE_UCHAR)
-        // character pointer aliases everything
-        return 1;
-    // todo: better inner pointer analysis
-    return sbyte == tsb_byte(dst);
-}
-
-static void check_invalidate_tbaa(Checker* chk, const TypeStrBuf* tsb, const ValueInfo* v, const RowCol* rc)
-{
-    const size_t n = ptrmap_size(&chk->ctx->sym_to_ssa);
-    for (size_t i = 0; i < n; ++i)
-    {
-        const Symbol* sym = ptrmap_nth_ptr(&chk->ctx->sym_to_ssa, i);
-        size_t* ssa = ptrmap_nth_val(&chk->ctx->sym_to_ssa, i);
-        if (v->ref_ssa == *ssa) continue;
-        if (tsb_get_cvr(&sym->type.buf) & TYPESTR_CVR_C) continue; // cannot assign to const objects
-        if (!can_alias(&sym->type.buf, tsb)) continue;
-        ValueInfo w = *check_get_ssa_info_rec(chk, chk->ctx, *ssa);
-        check_merge_values(chk, &w, v, rc);
-        *ssa = check_push_ssa(chk, &w, rc);
-    }
-}
-
 static void check_ExprAssign(Checker* chk, const ExprAssign* e, ValueInfo* result)
 {
     check_expr(chk, e->lhs, result);
@@ -1329,7 +1383,7 @@ static void check_ExprCall(Checker* chk, const ExprCall* e, ValueInfo* result)
     }
 }
 
-static void check_expr(Checker* chk, const Expr* e, ValueInfo* result)
+static void check_expr_impl(Checker* chk, const Expr* e, ValueInfo* result)
 {
     switch (e->kind)
     {
@@ -1351,6 +1405,11 @@ static void check_expr(Checker* chk, const Expr* e, ValueInfo* result)
             parser_tok_error(e->tok, "error: unimplemented ast to check: %s\n", ast_kind_to_string(e->kind));
             *result = s_valueinfo_any;
     }
+}
+static void check_expr(Checker* chk, const Expr* e, ValueInfo* result)
+{
+    check_expr_impl(chk, e, result);
+    if (result->kind == value_info_integer && result->val.sz.width == 0) abort();
 }
 
 static void check_cond_impl(
@@ -1455,19 +1514,29 @@ static void check_StmtIf(Checker* chk, const StmtIf* e)
     chk->ctx = &false_ctx;
     if (e->else_body) check_stmt(chk, e->else_body);
     chk->ctx = true_ctx.parent;
-    check_merge_context(chk, &false_ctx, &true_ctx, token_rc(e->tok));
-    check_flatten_context(chk, &false_ctx);
+    if (false_ctx.is_void)
+    {
+        check_flatten_context(chk, &true_ctx);
+    }
+    else
+    {
+        if (!true_ctx.is_void)
+        {
+            check_merge_context(chk, &false_ctx, &true_ctx, token_rc(e->tok));
+        }
+        check_flatten_context(chk, &false_ctx);
+    }
     chkctx_destroy(&true_ctx);
     chkctx_destroy(&false_ctx);
 }
 static void check_StmtReturn(Checker* chk, const StmtReturn* e)
 {
-    ValueInfo result;
     if (e->expr)
     {
+        ValueInfo result;
         check_expr(chk, e->expr, &result);
-        chk->ctx->is_void = 1;
     }
+    chk->ctx->is_void = 1;
 }
 
 static void check_stmt(Checker* chk, const Ast* ast)

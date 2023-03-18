@@ -398,7 +398,6 @@ static const char* predefs[] = {
     "double=long",
     "float=int",
     "__asm__(X)=",
-    "__attribute__(X)=",
     "__building_module(X)=0",
     "TARGET_CPU_X86_64",
     "__has_include(X)=0",

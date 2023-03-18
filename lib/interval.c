@@ -88,7 +88,7 @@ void interval_fmt(Array* buf, Interval i)
         //               "%lld to %lld",
         //               interval_signed_min(i),
         //               interval_signed_max(i));
-        array_appendf(buf, "%llu (+%llu)", i.base, i.maxoff);
+        array_appendf(buf, "%lld (+%llu)", interval_signed_to_i64(i.base, i.sz.width), i.maxoff);
     else
         array_appendf(buf, "%llu to %llu", i.base, (i.base + i.maxoff) & s_umax_sizing[i.sz.width]);
 }
@@ -105,10 +105,11 @@ void interval_fmt(Array* buf, Interval i)
 // }
 Interval interval_merge(Interval i, Interval j)
 {
+    if (i.sz.width != j.sz.width || i.sz.is_signed != j.sz.is_signed) abort();
     const uint64_t i_to_j = u64_sat_add(j.maxoff, j.base - i.base);
     const uint64_t j_to_i = u64_sat_add(i.maxoff, i.base - j.base);
-    const Interval ret_i = {.base = i.base, .maxoff = i.maxoff < i_to_j ? i_to_j : i.maxoff};
-    const Interval ret_j = {.base = j.base, .maxoff = j.maxoff < j_to_i ? j_to_i : j.maxoff};
+    const Interval ret_i = {.base = i.base, .maxoff = i.maxoff < i_to_j ? i_to_j : i.maxoff, .sz = i.sz};
+    const Interval ret_j = {.base = j.base, .maxoff = j.maxoff < j_to_i ? j_to_i : j.maxoff, .sz = i.sz};
     if (ret_i.maxoff > ret_j.maxoff)
         return ret_j;
     else

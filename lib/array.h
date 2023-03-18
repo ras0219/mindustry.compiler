@@ -51,6 +51,8 @@ void array_appendv(struct Array* arr, const char* fmt, va_list argp);
 /// @return bytes appended
 size_t array_appends(struct Array* arr, const char* s);
 
+__forceinline void* array_end(const struct Array* arr) { return arr->data + arr->sz; }
+
 __forceinline void** arrptr_back(const struct Array* arr)
 {
     return (void**)((char*)arr->data + arr->sz - sizeof(void*));
@@ -75,5 +77,5 @@ __forceinline size_t arrsz_pop(struct Array* arr)
 __forceinline void arrsz_shrink(struct Array* arr, size_t n) { arr->sz = n * sizeof(size_t); }
 __forceinline size_t* arrsz_push(struct Array* arr, size_t data) { return array_push(arr, &data, sizeof(data)); }
 
-#define ARRPTR_FOREACH(type, i, arr)                                                                                   \
-    for (type** i = (arr)->data, __end##i = i ? i + arrptr_size(arr) : NULL; i != __end##i; ++i)
+#define ARRAY_FOREACH(type, i, arr) for (type* i = (arr)->data, *__end##i = array_end((arr)); i != __end##i; ++i)
+#define ARRPTR_FOREACH(type, i, arr) for (type** i = (arr)->data, ** __end##i = array_end((arr)); i != __end##i; ++i)

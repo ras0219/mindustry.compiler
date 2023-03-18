@@ -23,6 +23,6 @@ int foo(const struct Foo* f)
 
 int main()
 {
-    // struct Foo f;
-    // return foo(&f);
+    struct Foo f = {0};
+    return foo(&f);
 }
