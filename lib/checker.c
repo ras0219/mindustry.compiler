@@ -299,6 +299,59 @@ static unsigned valinfo_get_traits(const ValueInfo* v)
     }
 }
 
+static void check_merge_values_null(Checker* chk, ValueInfo* v, const RowCol* rc)
+{
+    if (v->kind == value_info_sym)
+        v->kind = value_info_sym_null;
+    else if (v->kind == value_info_addr_obj)
+        v->kind = value_info_addr_any;
+    else if (v->kind == value_info_integer)
+        v->kind = value_info_null;
+}
+static void check_merge_values_addr(Checker* chk, ValueInfo* v, const ValueInfo* w, const RowCol* rc)
+{
+    switch (v->kind)
+    {
+        case value_info_integer:
+            if (v->val.base != 0 || v->val.maxoff != 0)
+            {
+                parser_ferror(rc, "error: cannot merge nonzero integer with pointer\n");
+                *v = s_valueinfo_bottom;
+                return;
+            }
+        case value_info_null:
+            v->kind = w->kind;
+            v->addr = w->addr;
+            return;
+        case value_info_sym:
+        case value_info_sym_null: check_generalize_sym(chk, v, rc);
+        case value_info_addr_any:
+        case value_info_addr_obj:
+            if (!tsb_match(&v->addr.sym_type, &w->addr.sym_type))
+            {
+                parser_ferror(rc, "error: cannot merge pointers to different types\n");
+                *v = s_valueinfo_bottom;
+                return;
+            }
+            if (w->addr.or_uninit) v->addr.or_uninit = 1;
+            return;
+        default: abort();
+    }
+}
+static void check_merge_values_sym(Checker* chk, ValueInfo* v, const ValueInfo* w, const RowCol* rc)
+{
+    if (v->kind == value_info_sym || v->kind == value_info_sym_null)
+    {
+        if (v->sym.sym == w->sym.sym && v->sym.sym_offset == w->sym.sym_offset) return;
+    }
+    ValueInfo w2 = *w;
+    check_generalize_sym(chk, &w2, rc);
+    if (w2.kind == value_info_bottom)
+        *v = s_valueinfo_bottom;
+    else
+        check_merge_values_addr(chk, v, &w2, rc);
+}
+
 static void check_merge_values(Checker* chk, ValueInfo* v, const ValueInfo* w, const RowCol* rc)
 {
     if (w->kind == value_info_bottom) *v = s_valueinfo_bottom;
@@ -306,66 +359,6 @@ static void check_merge_values(Checker* chk, ValueInfo* v, const ValueInfo* w, c
     if (v->ref_ssa == w->ref_ssa) return;
     v->ref_ssa = 0;
 
-    if (v->kind == w->kind && v->kind == value_info_integer)
-    {
-        v->val = interval_merge(v->val, w->val);
-        return;
-    }
-
-    unsigned v_traits = valinfo_get_traits(v);
-    unsigned w_traits = valinfo_get_traits(w);
-    unsigned nullable = (v_traits | w_traits) & value_traits_null;
-    if (v_traits & w_traits & value_traits_ptr)
-    {
-        if (w_traits & value_traits_null)
-        {
-            if (v->kind == value_info_sym)
-                v->kind = value_info_sym_null;
-            else if (v->kind == value_info_addr_obj)
-                v->kind = value_info_addr_any;
-        }
-        if (w_traits & value_traits_sym)
-        {
-            switch (v->kind) {
-                case 
-            }
-            if (v_traits & value_traits_sym)
-            {
-            }
-            else if (v_traits & value_traits_addr)
-            {
-            }
-            else
-            {
-            }
-            if (v->sym.sym == w->sym.sym && v->sym.sym_offset == w->sym.sym_offset)
-            {
-                v->kind = nullable ? value_info_sym_null : value_info_sym;
-                return;
-            }
-            if (v_traits & value_traits_sym) check_generalize_sym(chk, v, rc);
-        }
-        if (w_traits & value_traits_addr)
-        {
-            if (v_traits & value_traits_sym) check_generalize_sym(chk, v, rc);
-        }
-        if (v_traits & w_traits & value_traits_only_null)
-        {
-            *v = s_valueinfo_null;
-            return;
-        }
-        if (v_traits & w_traits & value_traits_sym)
-        {
-            if (v->sym.sym == w->sym.sym && v->sym.sym_offset == w->sym.sym_offset)
-            {
-                v->kind = nullable ? value_info_sym_null : value_info_sym;
-                return;
-            }
-        }
-        ValueInfo w2 = *w;
-        if (v_traits & value_traits_sym) check_generalize_sym(chk, v, rc);
-        if (w_traits & value_traits_sym) check_generalize_sym(chk, &w2, rc);
-    }
     if (v->kind == w->kind)
     {
         if (v->kind == value_info_integer)
@@ -373,85 +366,32 @@ static void check_merge_values(Checker* chk, ValueInfo* v, const ValueInfo* w, c
             v->val = interval_merge(v->val, w->val);
             return;
         }
-        else if (v->kind == value_info_null)
-        {
+        else if (v->kind == value_info_uninitialized)
             return;
-        }
-        else if (v->kind == value_info_sym)
-        {
+        else if (v->kind == value_info_void)
             return;
-        }
     }
 
-    if (v_traits & w_traits) ValueInfo w2 = *w;
-    switch (v->kind)
+    unsigned v_traits = valinfo_get_traits(v);
+    unsigned w_traits = valinfo_get_traits(w);
+    if (!(v_traits & w_traits))
     {
-        case value_info_null:
-            switch (w2.kind)
-            {
-                case value_info_integer:
-                    if (w2.val.base != 0 || w2.val.maxoff != 0) goto fail_to_merge;
-                case value_info_null: break;
-                case value_info_sym:
-                case value_info_sym_null:
-                    v->kind = value_info_sym_null;
-                    v->sym = w2.sym;
-                    break;
-                default: goto fail_to_merge;
-            }
-            break;
-        case value_info_sym:
-        case value_info_sym_null:
-            switch (w2.kind)
-            {
-                case value_info_integer:
-                    if (w2.val.base != 0 || w2.val.maxoff != 0) goto fail_to_merge;
-                case value_info_null: v->kind = value_info_sym_null; break;
-                case value_info_sym_null: v->kind = value_info_sym_null;
-                // fallthrough
-                case value_info_sym:
-                    if (v->sym.sym == w2.sym.sym && v->sym.sym_offset == w2.sym.sym_offset) break;
-                    check_generalize_sym(chk, &w2, rc);
-                    // fallthrough
-                case value_info_addr_obj:
-                case value_info_addr_obj:
-                    // symbols aren't exactly the same -- generalize
-                    if (!tsb_match(&v->sym.sym->type.buf, &w2.sym.sym->type.buf))
-                    {
-                        parser_ferror(rc, "error: cannot merge pointers to different types\n");
-                        goto fail_to_merge2;
-                    }
-                    check_generalize_sym(chk, v, rc);
-
-                    break;
-                default: goto fail_to_merge;
-            }
-            break;
-            if (!tsb_match(&v->sym_type, &w2.sym_type))
-            {
-                parser_ferror(rc, "error: cannot merge pointers to different types\n");
-                *v = s_valueinfo_bottom;
-            }
-            else
-            {
-                if (w2.or_obj)
-                {
-                    if (v->or_obj)
-                    {
-                        if (w2.sym != v->sym) v->sym = NULL;
-                    }
-                    else
-                    {
-                        v->or_obj = 1;
-                        v->sym = w2.sym;
-                    }
-                }
-                if (w2.or_null) v->or_null = 1;
-            }
-            break;
-        case value_info_integer: v->val = interval_merge(v->val, w2.val); break;
-        case value_info_uninitialized:
-        case value_info_void: break;
+        goto fail_to_merge;
+    }
+    if (v_traits & w_traits & value_traits_ptr)
+    {
+        if (w_traits & value_traits_null)
+        {
+            check_merge_values_null(chk, v, rc);
+        }
+        if (w_traits & value_traits_sym)
+        {
+            check_merge_values_sym(chk, v, w, rc);
+        }
+        if (w_traits & value_traits_addr)
+        {
+            check_merge_values_addr(chk, v, w, rc);
+        }
     }
 
     return;
@@ -460,8 +400,7 @@ fail_to_merge:
     parser_ferror(rc,
                   "error: cannot merge values of types (%s vs %s)\n",
                   value_info_kind_to_string(v->kind),
-                  value_info_kind_to_string(w2.kind));
-fail_to_merge2:
+                  value_info_kind_to_string(w->kind));
     *v = s_valueinfo_bottom;
     return;
 }
@@ -676,13 +615,12 @@ static void check_refine_ssa_true(Checker* chk, CheckContext* ctx, size_t ssa)
     ValueInfo* info = check_refine_ssa(chk, ctx, ssa);
     switch (info->kind)
     {
-        case value_info_address:
-            info->or_null = 0;
-            if (!info->or_obj) ctx->is_void = 1;
-            break;
+        case value_info_sym_null: info->kind = value_info_sym; break;
+        case value_info_addr_any: info->kind = value_info_addr_obj; break;
         case value_info_integer:
             if (!interval_remove_0(&info->val, info->val)) ctx->is_void = 1;
             break;
+        case value_info_null: ctx->is_void = 1; break;
         default: break;
     }
 }
@@ -691,10 +629,11 @@ static void check_refine_ssa_false(Checker* chk, CheckContext* ctx, size_t ssa)
     ValueInfo* info = check_refine_ssa(chk, ctx, ssa);
     switch (info->kind)
     {
-        case value_info_address:
-            info->or_obj = 0;
-            if (!info->or_null) ctx->is_void = 1;
-            break;
+        case value_info_sym_null:
+        case value_info_addr_any:
+        case value_info_null: info->kind = value_info_null; break;
+        case value_info_sym:
+        case value_info_addr_obj: ctx->is_void = 1; break;
         case value_info_integer:
             if (!interval_remove_nonzero(&info->val, info->val)) ctx->is_void = 1;
             break;
@@ -719,6 +658,7 @@ static void check_refine_ssa_rel(Checker* chk,
     }
     switch (rhs->kind)
     {
+        case value_info_null:
         case value_info_address:
             if ((info->or_null || rhs->or_null) && token_type != TOKEN_SYM2('=', '=') &&
                 token_type != TOKEN_SYM2('!', '='))
