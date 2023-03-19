@@ -51,6 +51,7 @@ typedef struct ValueInfo
         struct
         {
             const Symbol* sym;
+            const Symbol* field;
             size_t sym_offset;
         } sym;
         struct
@@ -70,7 +71,7 @@ typedef struct ValueInfo
 static const ValueInfo s_valueinfo_void = {.kind = value_info_void};
 static const ValueInfo s_valueinfo_uninit = {.kind = value_info_uninitialized};
 static const ValueInfo s_valueinfo_bottom = {.kind = value_info_bottom};
-static const ValueInfo s_valueinfo_null = {.kind = value_info_null};
+// static const ValueInfo s_valueinfo_null = {.kind = value_info_null};
 
 static void valinfo_init_interval(ValueInfo* info, Interval v)
 {
@@ -167,33 +168,6 @@ void checker_free(struct Checker* chk)
     my_free(chk);
 }
 
-static __forceinline size_t check_push_ssa(Checker* chk, const ValueInfo* info, const RowCol* rc)
-{
-    if (info->kind == value_info_integer && info->val.sz.width == 0) abort();
-    ValueInfo* i = array_push(&chk->ssa_info, info, sizeof(*info));
-    arrptr_push(&chk->ssa_rc, rc);
-    return i->ref_ssa = arrptr_size(&chk->ssa_rc);
-}
-
-static void check_any_from_type(Checker* chk, ValueInfo* out, const TypeStrBuf* ty, const RowCol* rc)
-{
-    switch (tsb_byte(ty))
-    {
-        case TYPE_BYTE_POINTER: valinfo_init_addr(out, ty); break;
-        case TYPE_BYTE_INT: valinfo_init_interval(out, s_interval_i32); break;
-        case TYPE_BYTE_UINT: valinfo_init_interval(out, s_interval_u32); break;
-        case TYPE_BYTE_LLONG: valinfo_init_interval(out, s_interval_i64); break;
-        case TYPE_BYTE_ULLONG: valinfo_init_interval(out, s_interval_u64); break;
-        default:
-            tsb_error1(rc, chk->elab->types, "error: cannot determine range from type: %.*s\n", ty);
-            *out = s_valueinfo_bottom;
-    }
-}
-static void check_any_from_decl(Checker* chk, ValueInfo* out, const Decl* decl, const RowCol* rc)
-{
-    return check_any_from_type(chk, out, &decl->sym->type.buf, rc);
-}
-
 static ValueInfo* chkctx_get_ssa_info(const CheckContext* ctx, size_t ssa)
 {
     ValueInfo* const infos = ctx->info.data;
@@ -244,6 +218,89 @@ static const ValueInfo* check_get_ssa_info_rec(const Checker* chk, const CheckCo
 found:
     if (info->kind == value_info_integer && info->val.sz.width == 0) abort();
     return info;
+}
+
+static __forceinline size_t check_push_ssa(Checker* chk, const ValueInfo* info, const RowCol* rc)
+{
+    if (info->kind == value_info_integer && info->val.sz.width == 0) abort();
+    ValueInfo* i = array_push(&chk->ssa_info, info, sizeof(*info));
+    arrptr_push(&chk->ssa_rc, rc);
+    return i->ref_ssa = arrptr_size(&chk->ssa_rc);
+}
+static void check_read_sym(Checker* chk, const Symbol* sym, ValueInfo* result, const RowCol* rc)
+{
+    size_t ssa = chkctx_get_ssa_rec(chk->ctx, sym);
+    const ValueInfo* info = check_get_ssa_info_rec(chk, chk->ctx, ssa);
+    if (info)
+    {
+        if (info->kind == value_info_uninitialized)
+        {
+            parser_ferror(rc, "error: possible uninitialized read: %s\n", sym->name);
+            *result = s_valueinfo_bottom;
+        }
+        else
+        {
+            *result = *info;
+        }
+    }
+    else
+    {
+        parser_ferror(rc, "error: no info for symbol: %s\n", sym->name);
+        *result = s_valueinfo_bottom;
+    }
+}
+
+static void check_read_sym_offset(Checker* chk, const Symbol* sym, ValueInfo* result, const RowCol* rc)
+{
+    size_t ssa = chkctx_get_ssa_rec(chk->ctx, sym);
+    const ValueInfo* info = check_get_ssa_info_rec(chk, chk->ctx, ssa);
+    if (info)
+    {
+        if (info->kind == value_info_uninitialized)
+        {
+            parser_ferror(rc, "error: possible uninitialized read: %s\n", sym->name);
+            *result = s_valueinfo_bottom;
+        }
+        else
+        {
+            *result = *info;
+        }
+    }
+    else
+    {
+        parser_ferror(rc, "error: no info for symbol: %s\n", sym->name);
+        *result = s_valueinfo_bottom;
+    }
+}
+
+static void check_assign_sym_offset(
+    Checker* chk, const Symbol* sym, size_t offset, const ValueInfo* v, const RowCol* rc)
+{
+    ptrmap_set(&chk->ctx->sym_to_ssa, sym, check_push_ssa(chk, v, rc));
+}
+
+static void check_assign_sym(Checker* chk, const Symbol* sym, const ValueInfo* v, const RowCol* rc)
+{
+    ptrmap_set(&chk->ctx->sym_to_ssa, sym, check_push_ssa(chk, v, rc));
+}
+
+static void check_any_from_type(Checker* chk, ValueInfo* out, const TypeStrBuf* ty, const RowCol* rc)
+{
+    switch (tsb_byte(ty))
+    {
+        case TYPE_BYTE_POINTER: valinfo_init_addr(out, ty); break;
+        case TYPE_BYTE_INT: valinfo_init_interval(out, s_interval_i32); break;
+        case TYPE_BYTE_UINT: valinfo_init_interval(out, s_interval_u32); break;
+        case TYPE_BYTE_LLONG: valinfo_init_interval(out, s_interval_i64); break;
+        case TYPE_BYTE_ULLONG: valinfo_init_interval(out, s_interval_u64); break;
+        default:
+            tsb_error1(rc, chk->elab->types, "error: cannot determine range from type: %.*s\n", ty);
+            *out = s_valueinfo_bottom;
+    }
+}
+static void check_any_from_decl(Checker* chk, ValueInfo* out, const Decl* decl, const RowCol* rc)
+{
+    return check_any_from_type(chk, out, &decl->sym->type.buf, rc);
 }
 
 static void check_generalize_sym(Checker* chk, ValueInfo* v, const RowCol* rc)
@@ -436,11 +493,6 @@ static void check_invalidate_tbaa(Checker* chk, const TypeStrBuf* tsb, const Val
         *ssa = check_invalidate_tbaa_sym(chk, *ssa, &sym->type.buf, &inv);
     }
     array_push(&chk->ctx->invalidations, &inv, sizeof(inv));
-}
-
-static void check_assign_value(Checker* chk, const Symbol* sym, const ValueInfo* v, const RowCol* rc)
-{
-    ptrmap_set(&chk->ctx->sym_to_ssa, sym, check_push_ssa(chk, v, rc));
 }
 
 static void chkctx_replace_ssa(CheckContext* ctx, const ValueInfo* v)
@@ -650,84 +702,99 @@ static void check_refine_ssa_rel(Checker* chk,
 {
     ValueInfo* info = check_refine_ssa(chk, ctx, ssa);
     if (rhs->kind == value_info_bottom || info->kind == value_info_bottom) return;
-    if (rhs->kind != info->kind)
+    unsigned info_traits = valinfo_get_traits(info);
+    unsigned rhs_traits = valinfo_get_traits(rhs);
+    unsigned shared_traits = info_traits & rhs_traits;
+    if (!shared_traits)
     {
         parser_ferror(rc, "error: cannot compare values of different domains\n");
         ctx->is_void = 1;
         return;
     }
-    switch (rhs->kind)
+    if (shared_traits & value_traits_val)
     {
-        case value_info_null:
-        case value_info_address:
-            if ((info->or_null || rhs->or_null) && token_type != TOKEN_SYM2('=', '=') &&
-                token_type != TOKEN_SYM2('!', '='))
-            {
-                parser_ferror(rc, "error: can only compare for equality of nullable pointers\n");
+        int res;
+        switch (token_type)
+        {
+            case TOKEN_SYM2('=', '='): res = interval_relation_eq(&info->val, rhs->val); break;
+            case TOKEN_SYM2('!', '='): res = interval_relation_neq(&info->val, rhs->val); break;
+            case TOKEN_SYM1('<'):
+                res = is_signed ? interval_relation_lti(&info->val, interval_signed_max(rhs->val))
+                                : interval_relation_ltu(&info->val, interval_unsigned_max(rhs->val));
+                break;
+            case TOKEN_SYM2('>', '='):
+                res = is_signed ? interval_relation_gtei(&info->val, interval_signed_max(rhs->val))
+                                : interval_relation_gteu(&info->val, interval_unsigned_max(rhs->val));
+                break;
+            case TOKEN_SYM1('>'):
+                res = is_signed ? interval_relation_gti(&info->val, interval_signed_max(rhs->val))
+                                : interval_relation_gtu(&info->val, interval_unsigned_max(rhs->val));
+                break;
+            case TOKEN_SYM2('<', '='):
+                res = is_signed ? interval_relation_ltei(&info->val, interval_signed_max(rhs->val))
+                                : interval_relation_lteu(&info->val, interval_unsigned_max(rhs->val));
+                break;
+            default:
+                parser_ferror(rc, "error: unimplemented integer comparison\n");
                 ctx->is_void = 1;
                 return;
-            }
-            switch (token_type)
-            {
-                case TOKEN_SYM2('=', '='):
-                    if (info->or_null != rhs->or_null && info->or_obj != rhs->or_obj)
+        }
+        if (!res) ctx->is_void = 1;
+        return;
+    }
+    else if (shared_traits & value_traits_ptr)
+    {
+        // if (union_traits & value_traits_null)
+        // {
+        //     if (token_type != TOKEN_SYM2('=', '=') && token_type != TOKEN_SYM2('!', '='))
+        //     {
+        //         parser_ferror(rc, "error: can only compare for equality of nullable pointers\n");
+        //         ctx->is_void = 1;
+        //         return;
+        //     }
+        // }
+        switch (token_type)
+        {
+            case TOKEN_SYM2('=', '='):
+                if (!(rhs_traits & value_traits_null))
+                {
+                    if (info_traits & value_traits_only_null)
                         ctx->is_void = 1;
-                    else if (!rhs->or_obj)
-                        info->or_obj = 0;
-                    else if (!rhs->or_null)
-                        info->or_null = 0;
-                    break;
-                case TOKEN_SYM2('!', '='):
-                    if (!(info->or_null && rhs->or_obj) && !(info->or_obj && rhs->or_null))
+                    else if (info->kind == value_info_addr_any)
+                        info->kind = value_info_addr_obj;
+                    else if (info->kind == value_info_sym_null)
+                        info->kind = value_info_sym;
+                }
+                else if (rhs_traits & value_traits_only_null)
+                {
+                    if (!(info_traits & value_traits_null))
                         ctx->is_void = 1;
-                    else if (!rhs->or_obj)
-                        info->or_null = 0;
-                    else if (!rhs->or_null)
-                        info->or_obj = 0;
-                    break;
-                default:
-                    parser_ferror(rc, "error: unimplemented pointer comparison\n");
-                    ctx->is_void = 1;
-                    return;
-            }
-            break;
-        case value_info_integer:
-            switch (token_type)
-            {
-                int res;
-                case TOKEN_SYM2('=', '='):
-                    if (!interval_relation_eq(&info->val, rhs->val)) ctx->is_void = 1;
-                    break;
-                case TOKEN_SYM2('!', '='):
-                    if (!interval_relation_neq(&info->val, rhs->val)) ctx->is_void = 1;
-                    break;
-                case TOKEN_SYM1('<'):
-                    res = is_signed ? interval_relation_lti(&info->val, interval_signed_max(rhs->val))
-                                    : interval_relation_ltu(&info->val, interval_unsigned_max(rhs->val));
-                    if (!res) ctx->is_void = 1;
-                    break;
-                case TOKEN_SYM2('>', '='):
-                    res = is_signed ? interval_relation_gtei(&info->val, interval_signed_max(rhs->val))
-                                    : interval_relation_gteu(&info->val, interval_unsigned_max(rhs->val));
-                    if (!res) ctx->is_void = 1;
-                    break;
-                case TOKEN_SYM1('>'):
-                    res = is_signed ? interval_relation_gti(&info->val, interval_signed_max(rhs->val))
-                                    : interval_relation_gtu(&info->val, interval_unsigned_max(rhs->val));
-                    if (!res) ctx->is_void = 1;
-                    break;
-                case TOKEN_SYM2('<', '='):
-                    res = is_signed ? interval_relation_ltei(&info->val, interval_signed_max(rhs->val))
-                                    : interval_relation_lteu(&info->val, interval_unsigned_max(rhs->val));
-                    if (!res) ctx->is_void = 1;
-                    break;
-                default:
-                    parser_ferror(rc, "error: unimplemented integer comparison\n");
-                    ctx->is_void = 1;
-                    return;
-            }
-            break;
-        default: break;
+                    else
+                        info->kind = value_info_null;
+                }
+                break;
+            case TOKEN_SYM2('!', '='):
+                if (rhs_traits & value_traits_only_null)
+                {
+                    if (info_traits & value_traits_only_null)
+                        ctx->is_void = 1;
+                    else if (info->kind == value_info_addr_any)
+                        info->kind = value_info_addr_obj;
+                    else if (info->kind == value_info_sym_null)
+                        info->kind = value_info_sym;
+                }
+                break;
+            default:
+                parser_ferror(rc, "error: unimplemented pointer comparison\n");
+                ctx->is_void = 1;
+                return;
+        }
+    }
+    else
+    {
+        parser_ferror(rc, "error: unimplemented relation domain\n");
+        ctx->is_void = 1;
+        return;
     }
 }
 
@@ -768,29 +835,6 @@ static unsigned int reverse_relation(unsigned int token_type)
         case TOKEN_SYM1('<'): return TOKEN_SYM1('>');
         case TOKEN_SYM1('>'): return TOKEN_SYM1('<');
         default: abort();
-    }
-}
-
-static void check_read_sym(Checker* chk, const Symbol* sym, ValueInfo* result, const RowCol* rc)
-{
-    size_t ssa = chkctx_get_ssa_rec(chk->ctx, sym);
-    const ValueInfo* info = check_get_ssa_info_rec(chk, chk->ctx, ssa);
-    if (info)
-    {
-        if (info->kind == value_info_uninitialized)
-        {
-            parser_ferror(rc, "error: possible uninitialized read: %s\n", sym->name);
-            *result = s_valueinfo_bottom;
-        }
-        else
-        {
-            *result = *info;
-        }
-    }
-    else
-    {
-        parser_ferror(rc, "error: no info for symbol: %s\n", sym->name);
-        *result = s_valueinfo_bottom;
     }
 }
 
@@ -844,20 +888,10 @@ static void check_ExprBuiltin(Checker* chk, const ExprBuiltin* e, ValueInfo* res
             check_expr(chk, e->expr1, result);
             switch (result->kind)
             {
-                case value_info_address:
-                    if (result->or_null)
-                    {
-                        parser_tok_error(e->tok, "error: cannot prove non-null\n");
-                    }
-                    else if (result->sym)
-                    {
-                        fprintf(stderr, "Prove: Sym: %s\n", result->sym->name ? result->sym->name : "(anon)");
-                    }
-                    else
-                    {
-                        fprintf(stderr, "Prove: Sym unknown\n");
-                    }
+                case value_info_sym:
+                    fprintf(stderr, "Prove: Sym: %s\n", result->sym.sym->name ? result->sym.sym->name : "(anon)");
                     break;
+                case value_info_addr_obj: fprintf(stderr, "Prove: Sym unknown\n"); break;
                 case value_info_integer:
                     array_clear(&chk->fmt_tmp);
                     interval_fmt(&chk->fmt_tmp, result->val);
@@ -1167,29 +1201,26 @@ static void check_ExprDeref(Checker* chk, const ExprDeref* e, ValueInfo* result)
     switch (result->kind)
     {
         case value_info_bottom: return;
-        case value_info_address:
-            if (result->or_null)
-            {
-                parser_tok_error(e->tok,
-                                 result->or_obj ? "error: possible null pointer dereference\n"
-                                                : "error: definite null pointer dereference\n");
-                *result = s_valueinfo_bottom;
-                return;
-            }
+        case value_info_sym:
+            if (!e->take_address) check_read_sym(chk, result->sym.sym, result, token_rc(e->tok));
+            break;
+        case value_info_addr_obj:
             if (!e->take_address)
             {
-                if (result->sym)
-                {
-                    check_read_sym(chk, result->sym, result, token_rc(e->tok));
-                }
-                else
-                {
-                    TypeStrBuf buf = result->sym_type;
-                    tsb_remove_pointer(&buf);
-                    check_any_from_type(chk, result, &buf, token_rc(e->tok));
-                }
+                TypeStrBuf buf = result->addr.sym_type;
+                tsb_remove_pointer(&buf);
+                check_any_from_type(chk, result, &buf, token_rc(e->tok));
             }
             break;
+        case value_info_sym_null:
+        case value_info_addr_any:
+            parser_tok_error(e->tok, "error: possible null pointer dereference\n");
+            *result = s_valueinfo_bottom;
+            return;
+        case value_info_null:
+            parser_tok_error(e->tok, "error: definite null pointer dereference\n");
+            *result = s_valueinfo_bottom;
+            return;
         default: parser_tok_error(e->tok, "error: cannot dereference non-pointer value\n"); return;
     }
 }
@@ -1211,73 +1242,74 @@ static void check_ExprAssign(Checker* chk, const ExprAssign* e, ValueInfo* resul
     check_expr(chk, e->lhs, result);
     ValueInfo rhs;
     check_expr(chk, e->rhs, &rhs);
-    if (result->kind == value_info_address)
+    if (result->kind == value_info_sym)
     {
-        if (result->sym)
+        check_assign_sym(chk, result->sym.sym, &rhs, token_rc(e->tok));
+    }
+    else if (result->kind == value_info_addr_obj)
+    {
+        TypeStrBuf pointed_ty;
+        tsb_copy_elem_type(&pointed_ty, &result->addr.sym_type);
+        if (tsb_is_unknown(&pointed_ty))
         {
-            check_assign_value(chk, result->sym, &rhs, token_rc(e->tok));
+            parser_tok_error(e->tok, "error: unknown pointer type\n");
+            *result = s_valueinfo_bottom;
+            chk->ctx->is_void = 1;
         }
         else
         {
-            TypeStrBuf pointed_ty;
-            tsb_copy_elem_type(&pointed_ty, &result->sym_type);
-            if (tsb_is_unknown(&pointed_ty))
-            {
-                parser_tok_error(e->tok, "error: cannot track assignment through unknown pointer\n");
-                *result = s_valueinfo_bottom;
-                chk->ctx->is_void = 1;
-            }
-            else
-            {
-                check_invalidate_tbaa(chk, &pointed_ty, &rhs, token_rc(e->tok));
-            }
+            check_invalidate_tbaa(chk, &pointed_ty, &rhs, token_rc(e->tok));
         }
+    }
+    else
+    {
+        parser_tok_error(e->tok, "error: possible null pointer dereference\n");
+        *result = s_valueinfo_bottom;
+        chk->ctx->is_void = 1;
     }
 }
 
 static void check_ExprField(Checker* chk, const ExprField* e, ValueInfo* result)
 {
     check_expr(chk, e->lhs, result);
-    if (result->kind == value_info_address)
-    {
-        if (result->or_null)
-        {
-            parser_tok_error(e->tok,
-                             result->or_obj ? "error: possible null pointer dereference\n"
-                                            : "error: definite null pointer dereference\n");
-            *result = s_valueinfo_bottom;
-            return;
-        }
 
+    if (result->kind == value_info_sym)
+    {
+        result->sym.field = e->sym;
+        result->sym.sym_offset += e->field_offset;
+        if (!e->take_address)
+        {
+            check_read_sym(chk, result->sym.sym, result, token_rc(e->tok));
+        }
+    }
+    else if (result->kind == value_info_addr_obj)
+    {
         if (e->take_address)
         {
-            result->sym_offset += e->field_offset;
-            result->sym_type = e->sym->type.buf;
-            tsb_add_pointer(&result->sym_type);
+            result->addr.sym_type = e->sym->type.buf;
+            tsb_add_pointer(&result->addr.sym_type);
         }
         else
         {
-            // dereference value?
-            if (result->sym)
+            if (result->addr.or_uninit)
             {
-                check_read_sym(chk, result->sym, result, token_rc(e->tok));
+                parser_tok_error(e->tok, "error: possible uninitialized read\n");
             }
-            else
-            {
-                parser_tok_error(e->tok, "error: unimplemented read of field\n");
-                *result = s_valueinfo_bottom;
-            }
+            check_any_from_decl(chk, result, e->sym->last_decl, token_rc(e->tok));
         }
     }
-    else if (result->kind != value_info_bottom)
+    else
     {
-        parser_tok_error(e->tok, "error: cannot dereference non-pointer value\n");
+        parser_tok_error(e->tok, "error: possible null pointer dereference\n");
         *result = s_valueinfo_bottom;
+        chk->ctx->is_void = 1;
     }
 }
 
-static void check_fnarg(Checker* chk, const Expr* e, int is_nonnull)
+static void check_ExprCall_arg(Checker* chk, const Expr* e, size_t i, const Decl* fn_decl)
 {
+    const Attribute* attr = fn_decl ? &fn_decl->attr : 0;
+    unsigned is_nonnull = attr && i < sizeof(attr->nonnull_addrs) && attr->nonnull_addrs[i];
     ValueInfo arg;
     check_expr(chk, e, &arg);
     if (arg.kind == value_info_integer)
@@ -1287,59 +1319,62 @@ static void check_fnarg(Checker* chk, const Expr* e, int is_nonnull)
             parser_tok_error(e->tok, "error: function requires nonnull argument\n");
         }
     }
-    if (arg.kind == value_info_address)
+    unsigned traits = valinfo_get_traits(&arg);
+    if ((traits & value_traits_null) && is_nonnull)
     {
-        if (is_nonnull && arg.or_null)
-        {
-            parser_tok_error(e->tok, "error: function requires nonnull argument\n");
-        }
-        if (!arg.sym)
-            parser_tok_error(e->tok, "error: unable to check pointer param validity\n");
-        else
-        {
-            size_t ssa = chkctx_get_ssa_rec(chk->ctx, arg.sym);
-            if (!ssa) abort();
-            const ValueInfo* sym_val = check_get_ssa_info_rec(chk, chk->ctx, ssa);
-            if (!sym_val) abort();
-            if (sym_val->kind == value_info_uninitialized)
-                parser_tok_error(e->tok, "error: passing pointer to uninitialized is not allowed\n");
-        }
+        parser_tok_error(e->tok, "error: function requires nonnull argument\n");
+    }
+    if (traits & value_traits_sym)
+    {
+        size_t ssa = chkctx_get_ssa_rec(chk->ctx, arg.sym.sym);
+        if (!ssa) abort();
+        const ValueInfo* sym_val = check_get_ssa_info_rec(chk, chk->ctx, ssa);
+        if (!sym_val) abort();
+        if (sym_val->kind == value_info_uninitialized)
+            parser_tok_error(e->tok, "error: passing pointer to uninitialized is not allowed\n");
+    }
+    if (traits & value_traits_addr)
+    {
+        if (arg.addr.or_uninit)
+            parser_tok_error(e->tok, "error: passing pointer to possibly uninitialized is not allowed\n");
     }
 }
 
 static void check_ExprCall(Checker* chk, const ExprCall* e, ValueInfo* result)
 {
     check_expr(chk, e->fn, result);
-    if (result->kind == value_info_address)
+    unsigned traits = valinfo_get_traits(result);
+    if (traits & value_traits_null)
     {
-        if (result->or_null)
-        {
-            parser_tok_error(e->tok,
-                             result->or_obj ? "error: possible null pointer dereference\n"
-                                            : "error: definite null pointer dereference\n");
-            *result = s_valueinfo_bottom;
-            return;
-        }
-
-        const Attribute* attr = NULL;
-
-        if (result->sym)
-        {
-            attr = &result->sym->last_decl->attr;
-        }
-
+        parser_tok_error(e->tok,
+                         (traits & value_traits_only_null) ? "error: definite null pointer dereference\n"
+                                                           : "error: possible null pointer dereference\n");
+        *result = s_valueinfo_bottom;
+        return;
+    }
+    if (result->kind == value_info_sym)
+    {
         const CallParam* params = parser_params(chk->elab->p, e);
         for (size_t i = 0; i < e->param_extent; ++i)
         {
             const CallParam* const param = params + i;
-            int is_nonnull = i < sizeof(attr->nonnull_addrs) && attr ? attr->nonnull_addrs[i] : 0;
-            check_fnarg(chk, param->expr, is_nonnull);
+            check_ExprCall_arg(chk, param->expr, i, result->sym.sym->last_decl);
+        }
+    }
+    else if (result->kind == value_info_addr_obj)
+    {
+        const CallParam* params = parser_params(chk->elab->p, e);
+        for (size_t i = 0; i < e->param_extent; ++i)
+        {
+            const CallParam* const param = params + i;
+            check_ExprCall_arg(chk, param->expr, i, NULL);
         }
     }
     else if (result->kind != value_info_bottom)
     {
         parser_tok_error(e->tok, "error: cannot dereference non-pointer value\n");
         *result = s_valueinfo_bottom;
+        return;
     }
 }
 
@@ -1397,12 +1432,24 @@ static void check_cond(Checker* chk, const Expr* e, ValueInfo* result, CheckCont
 }
 
 static void check_DeclSpecs(Checker* chk, const DeclSpecs* e) { }
-static void check_FnParam(Checker* chk, const Decl* d, int is_nonnull)
+static void check_FnParam(Checker* chk, const Decl* d, size_t index, const Decl* fndecl)
 {
     ValueInfo info;
     check_any_from_decl(chk, &info, d, token_rc(d->tok));
-    if (is_nonnull && info.kind == value_info_address && info.or_obj) info.or_null = 0;
-    check_assign_value(chk, d->sym, &info, token_rc(d->tok));
+    int is_nonnull = fndecl && index < sizeof(fndecl->attr.nonnull_addrs) && fndecl->attr.nonnull_addrs[index];
+    if (is_nonnull)
+    {
+        if (info.kind == value_info_sym_null)
+            info.kind = value_info_sym;
+        else if (info.kind == value_info_addr_any)
+            info.kind = value_info_addr_obj;
+    }
+    unsigned traits = valinfo_get_traits(&info);
+    if (traits & value_traits_addr)
+    {
+        info.addr.or_uninit = 0;
+    }
+    check_assign_sym(chk, d->sym, &info, token_rc(d->tok));
 }
 static void check_Decl(Checker* chk, const Decl* e)
 {
@@ -1418,16 +1465,15 @@ static void check_Decl(Checker* chk, const Decl* e)
 
             const StmtDecls* const* stmtdecls = (const StmtDecls* const*)chk->elab->p->expr_seqs.data;
             const Decl* const* decls = (const Decl* const*)chk->elab->p->expr_seqs.data;
-            FOREACH_SEQ(i, e->decl_list) { check_FnParam(chk, decls[i], 0); }
+            FOREACH_SEQ(i, e->decl_list) { check_FnParam(chk, decls[i], 99, e); }
             size_t j = 0;
             FOREACH_SEQ(i, fn->seq)
             {
-                int is_nonnull = j < sizeof(e->attr.nonnull_addrs) && e->attr.nonnull_addrs[j];
                 const StmtDecls* stmt = stmtdecls[i];
                 if (stmt->ast.kind != STMT_DECLS) abort();
                 if (stmt->seq.ext != 1) abort();
                 if (decls[stmt->seq.off]->ast.kind != AST_DECL) abort();
-                check_FnParam(chk, decls[stmt->seq.off], is_nonnull);
+                check_FnParam(chk, decls[stmt->seq.off], j, e);
                 ++j;
             }
 
@@ -1435,14 +1481,14 @@ static void check_Decl(Checker* chk, const Decl* e)
         }
         else
         {
-            check_assign_value(chk, sym, &s_valueinfo_uninit, token_rc(e->tok));
+            check_assign_sym(chk, sym, &s_valueinfo_uninit, token_rc(e->tok));
             if (e->init)
             {
                 if (ast_kind_is_expr(e->init->kind))
                 {
                     ValueInfo v;
                     check_expr(chk, (const Expr*)e->init, &v);
-                    check_assign_value(chk, sym, &v, token_rc(e->tok));
+                    check_assign_sym(chk, sym, &v, token_rc(e->tok));
                 }
                 else if (e->init->kind == AST_INIT)
                 {
@@ -1451,7 +1497,7 @@ static void check_Decl(Checker* chk, const Decl* e)
                     {
                         ValueInfo v;
                         check_expr(chk, (const Expr*)init->init, &v);
-                        check_assign_value(chk, sym, &v, token_rc(e->tok));
+                        check_assign_sym(chk, sym, &v, token_rc(e->tok));
                     }
                     else
                     {

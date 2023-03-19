@@ -25,7 +25,8 @@ void bar(struct Foo* f) __attribute__((nonnull))
 {
     struct Foo g;
     f->a = 5;
-    __prove(f->b);
+    g.a = 5;
+    __prove(g.b);
 }
 
 int main()
