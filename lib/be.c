@@ -508,14 +508,10 @@ static int be_compile_init(
             .rc = e->tok ? &e->tok->rc : NULL,
         };
         UNWRAP(be_compile_expr(be, expr, &assign.arg2));
-        if (e->kind == EXPR_LIT)
+        if (e->kind == EXPR_STRLIT && is_aggregate_init)
         {
-            ExprLit* lit = (void*)e;
-            if (lit->tok->type == LEX_STRING && is_aggregate_init)
-            {
-                assign.arg2.is_addr = 0;
-                assign.arg2.sizing.width = assign.arg1.sizing.width;
-            }
+            assign.arg2.is_addr = 0;
+            assign.arg2.sizing.width = assign.arg1.sizing.width;
         }
         else if (expr->c.is_const)
         {
@@ -576,7 +572,7 @@ static void be_compile_ExprLit_Sym(BackEnd* be, Symbol* sym)
 {
     if (sym->addr.kind == TACA_VOID)
     {
-        const ExprLit* lit = sym->string_constant;
+        const ExprStrLit* lit = sym->string_constant;
         cg_string_constant(be->cg, be->next_constant, lit->text, lit->tok->tok_len);
         sym->addr = taca_const_addr(be->next_constant);
         sym->addr.is_addr = 0;
@@ -585,27 +581,27 @@ static void be_compile_ExprLit_Sym(BackEnd* be, Symbol* sym)
     }
 }
 
+static int be_compile_ExprStrLit(struct BackEnd* be, struct ExprStrLit* e, struct TACAddress* out)
+{
+    Symbol* sym = e->sym;
+    if (sym->addr.kind == TACA_VOID)
+    {
+        const ExprStrLit* lit = sym->string_constant;
+        cg_string_constant(be->cg, be->next_constant, lit->text, lit->tok->tok_len);
+        sym->addr = taca_const_addr(be->next_constant);
+        sym->addr.is_addr = 0;
+        sym->addr.sizing.width = lit->tok->tok_len + 1;
+        ++be->next_constant;
+    }
+    *out = e->sym->addr;
+
+    return 0;
+}
 static int be_compile_ExprLit(struct BackEnd* be, struct ExprLit* e, struct TACAddress* out)
 {
-    int rc = 0;
-
-    if (e->tok->type == LEX_NUMBER || e->tok->type == LEX_CHARLIT)
-    {
-        *out = taca_imm(e->numeric);
-        out->sizing = e->sizing;
-    }
-    else if (e->tok->type == LEX_STRING)
-    {
-        be_compile_ExprLit_Sym(be, e->sym);
-        *out = e->sym->addr;
-    }
-    else
-    {
-        rc = 1;
-        parser_tok_error(e->tok, "error: unimplemented literal type (%d)\n", e->tok->type);
-    }
-
-    return rc;
+    *out = taca_imm(e->numeric);
+    out->sizing = e->sizing;
+    return 0;
 }
 
 static int be_compile_ExprRef(struct BackEnd* be, struct ExprRef* esym, struct TACAddress* out)
@@ -1603,13 +1599,14 @@ static int be_compile_expr(struct BackEnd* be, struct Expr* e, struct TACAddress
 {
     int rc;
 #define DISPATCH(TYPE)                                                                                                 \
-    case AST_KIND_##TYPE: rc = be_compile_##TYPE(be, (struct TYPE*)e, out); goto end;
+    case AST_KIND_##TYPE: rc = be_compile_##TYPE(be, (struct TYPE*)e, out); break
 
     switch (e->kind)
     {
         DISPATCH(ExprRef);
         DISPATCH(ExprCall);
         DISPATCH(ExprLit);
+        DISPATCH(ExprStrLit);
         DISPATCH(ExprAdd);
         DISPATCH(ExprBinOp);
         DISPATCH(ExprAndOr);
@@ -1627,7 +1624,6 @@ static int be_compile_expr(struct BackEnd* be, struct Expr* e, struct TACAddress
                 e->tok, "error: be_compile_expr unhandled expr: %s (%d)\n", ast_kind_to_string(e->kind), e->kind);
             return 1;
     }
-end:
     if (e->take_address)
     {
         switch (e->kind)

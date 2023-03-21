@@ -18,6 +18,12 @@
 #include "typestr.h"
 #include "unwrap.h"
 
+#ifdef TRACING_ELAB
+#define TRACE_ENTRY() fprintf(stderr, "%s()\n", __func__);
+#else
+#define TRACE_ENTRY()
+#endif
+
 typedef struct ConstValue
 {
     ExprLit* base;
@@ -473,9 +479,7 @@ static void elaborate_expr_ExprAssign(struct Elaborator* elab, struct ExprAssign
 
 static void elaborate_expr_ExprAdd(Elaborator* elab, ExprAdd* e, TypeStr* rty)
 {
-#if defined(TRACING_ELAB)
-    fprintf(stderr, "elaborate_expr_ExprAdd\n");
-#endif
+    TRACE_ENTRY();
     const unsigned op = e->tok->type;
     elaborate_expr_decay(elab, e->lhs, rty);
     unsigned int lhs_mask = typestr_mask(rty);
@@ -1030,7 +1034,7 @@ static void elaborate_init_ty_AstInit(struct Elaborator* elab, size_t offset, co
             elaborate_expr(elab, expr, &ts);
             ts_decay = ts;
             const int ts_decay_addr_taken = typestr_decay(&ts_decay);
-            const int ts_is_strlit = expr->kind == EXPR_LIT && expr->tok->type == LEX_STRING;
+            const int ts_is_strlit = expr->kind == EXPR_STRLIT;
 
             while (typestr_is_aggregate(&back->ty))
             {
@@ -1084,7 +1088,7 @@ static void elaborate_init_ty(struct Elaborator* elab, size_t offset, const Type
                 parser_tok_error(ast->tok, "error: array initializer must be an initializer list\n");
                 break;
             }
-            if (ast->kind != EXPR_LIT || ast->tok->type != LEX_STRING)
+            if (ast->kind != EXPR_STRLIT)
             {
                 parser_tok_error(ast->tok,
                                  "error: array initializer must be an initializer list or a string literal\n");
@@ -1246,29 +1250,9 @@ static void typestr_from_numlit(TypeStr* t, unsigned char byte, uint64_t numeric
     typestr_assign_constant_value(t, mp_from_u64(numeric));
 }
 
-static void typestr_from_strlit(TypeStr* t, ExprLit* lit)
+static void elaborate_expr_ExprLit(struct Elaborator* elab, struct ExprLit* expr, struct TypeStr* rty)
 {
-    Symbol* sym = lit->sym;
-    if (sym->string_constant == lit)
-    {
-        // definition
-        sym->type = s_type_char;
-        tsb_add_array(&sym->type.buf, lit->tok->tok_len + 1);
-        sym->type.c.is_const = 1;
-        sym->type.c.is_lvalue = 1;
-        sym->type.c.sym = sym;
-    }
-    *t = sym->type;
-}
-
-static void elaborate_expr_ExprLit(struct Elaborator* elab,
-
-                                   struct ExprLit* expr,
-                                   struct TypeStr* rty)
-{
-#if defined(TRACING_ELAB)
-    fprintf(stderr, " EXPR_LIT\n");
-#endif
+    TRACE_ENTRY();
     *rty = s_type_unknown;
     if (expr->tok->type == LEX_NUMBER)
     {
@@ -1300,14 +1284,26 @@ static void elaborate_expr_ExprLit(struct Elaborator* elab,
     {
         typestr_from_numlit(rty, TYPE_BYTE_INT, expr->numeric);
     }
-    else if (expr->tok->type == LEX_STRING)
-    {
-        typestr_from_strlit(rty, expr);
-    }
     else
     {
         parser_tok_error(expr->tok, "error: unknown literal type: %s\n", lexstate_to_string(expr->tok->type));
     }
+}
+
+static void elaborate_expr_ExprStrLit(struct Elaborator* elab, struct ExprStrLit* lit, struct TypeStr* rty)
+{
+    TRACE_ENTRY();
+    Symbol* sym = lit->sym;
+    if (sym->string_constant == lit)
+    {
+        // definition
+        sym->type = s_type_char;
+        tsb_add_array(&sym->type.buf, lit->tok->tok_len + 1);
+        sym->type.c.is_const = 1;
+        sym->type.c.is_lvalue = 1;
+        sym->type.c.sym = sym;
+    }
+    *rty = sym->type;
 }
 
 static void elaborate_expr_ExprCall(struct Elaborator* elab,
@@ -1581,6 +1577,7 @@ static void elaborate_expr_impl(struct Elaborator* elab, struct Expr* expr, stru
     switch (expr->kind)
     {
         DISPATCH_EXPR(ExprLit);
+        DISPATCH_EXPR(ExprStrLit);
         DISPATCH_EXPR(ExprRef);
         DISPATCH_EXPR(ExprCast);
         DISPATCH_EXPR(ExprCall);
@@ -1680,9 +1677,9 @@ static int elaborate_constinit(
     else
     {
     expr_init:
-        if (is_aggregate_init && ast->kind == EXPR_LIT && ast->tok->type == LEX_STRING)
+        if (is_aggregate_init && ast->kind == EXPR_STRLIT)
         {
-            ExprLit* lit = (void*)ast;
+            ExprStrLit* lit = (void*)ast;
             size_t n = sz;
             if (n > lit->tok->tok_len + 1) n = lit->tok->tok_len + 1;
             memcpy(bytes, lit->text, n);
@@ -1813,7 +1810,7 @@ static int elaborate_decl(Elaborator* const elab, Decl* const decl)
                             tsb_append_offset(&sym->type.buf, max_assign + 1, TYPE_BYTE_ARRAY);
                         }
                     }
-                    else if (init->kind == EXPR_LIT && init->tok->type == LEX_STRING)
+                    else if (init->kind == EXPR_STRLIT)
                     {
                     strlit_init:
                         tsb_append_offset(&sym->type.buf, init->tok->tok_len + 1, TYPE_BYTE_ARRAY);

@@ -16,8 +16,8 @@
   (AST_DECL s_reg_names (AST_DECLARR
     (AST_DECLPTR? /* AST_DECLSPEC */))
    (AST_INIT
-    0 0 (EXPR_LIT)
-    0 0 (EXPR_LIT))))
+    0 0 (EXPR_STRLIT)
+    0 0 (EXPR_STRLIT))))
  (STMT_DECLS
   (AST_DECLSPEC void $)
   (AST_DECL bar (AST_DECLFN

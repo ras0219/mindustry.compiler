@@ -15,6 +15,7 @@
     Y(EXPR_REF)                                                                                                        \
     Y(EXPR_FIELD)                                                                                                      \
     Y(EXPR_LIT)                                                                                                        \
+    Y(EXPR_STRLIT)                                                                                                     \
     Y(EXPR_CAST)                                                                                                       \
     Y(EXPR_BINOP)                                                                                                      \
     Y(EXPR_ANDOR)                                                                                                      \
@@ -118,7 +119,6 @@ typedef struct ExprLit
 {
     INHERIT_EXPR;
 
-    struct Symbol* sym;
     const char* text;
     uint64_t numeric;
     enum LitSuffix suffix;
@@ -126,6 +126,17 @@ typedef struct ExprLit
 
 #define AST_STRUCT_EXPR_LIT ExprLit
 #define AST_KIND_ExprLit EXPR_LIT
+
+typedef struct ExprStrLit
+{
+    INHERIT_EXPR;
+
+    struct Symbol* sym;
+    const char* text;
+} ExprStrLit;
+
+#define AST_STRUCT_EXPR_STRLIT ExprStrLit
+#define AST_KIND_ExprStrLit EXPR_STRLIT
 
 typedef struct ExprCast
 {

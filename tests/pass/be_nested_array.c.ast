@@ -6,8 +6,8 @@
      (EXPR_LIT 5 D)
      ? /* AST_DECLSPEC */))
    (AST_INIT
-    0 0 (EXPR_LIT)
-    0 0 (EXPR_LIT))))
+    0 0 (EXPR_STRLIT)
+    0 0 (EXPR_STRLIT))))
  (STMT_DECLS
   (AST_DECLSPEC char $ const)
   (AST_DECL main (AST_DECLFN

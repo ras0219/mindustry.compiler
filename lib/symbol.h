@@ -142,7 +142,7 @@ typedef struct Symbol
     Decl* def;
     struct TypeSymbol* parent_su;
     struct Symbol* next_field;
-    struct ExprLit* string_constant;
+    struct ExprStrLit* string_constant;
 
     // elaboration information
     unsigned char is_enum_constant : 1;

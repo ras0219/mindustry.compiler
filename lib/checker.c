@@ -257,7 +257,7 @@ found:
 
 static __forceinline size_t check_push_ssa(Checker* chk, const ValueInfo* info, const RowCol* rc)
 {
-    if (info->kind >= value_info_count || info->kind < 0) abort();
+    if (info->kind >= (int)value_info_count || info->kind < 0) abort();
     if (info->kind == value_info_integer && info->val.sz.width == 0) abort();
     ValueInfo* i = array_push(&chk->ssa_info, info, sizeof(*info));
     arrptr_push(&chk->ssa_rc, rc);
@@ -986,27 +986,20 @@ static void check_cond(Checker* chk, const Expr* e, ValueInfo* result, CheckCont
 
 static void check_ExprLit(Checker* chk, const ExprLit* e, ValueInfo* result)
 {
-    if (e->tok->type == LEX_NUMBER || e->tok->type == LEX_CHARLIT)
-    {
-        if (e->sizing.width == 0) abort();
-        valinfo_init_integer(result, e->sizing, e->numeric);
-    }
-    else if (e->tok->type == LEX_STRING)
-    {
-        if (!e->take_address)
-        {
-            parser_tok_error(e->tok, "error: unimplemented literal type (%d)\n", e->tok->type);
-            *result = s_valueinfo_bottom;
-        }
-        else
-        {
-            valinfo_init_symaddr(result, e->sym);
-        }
-    }
-    else
+    if (e->sizing.width == 0) abort();
+    valinfo_init_integer(result, e->sizing, e->numeric);
+}
+
+static void check_ExprStrLit(Checker* chk, const ExprStrLit* e, ValueInfo* result)
+{
+    if (!e->take_address)
     {
         parser_tok_error(e->tok, "error: unimplemented literal type (%d)\n", e->tok->type);
         *result = s_valueinfo_bottom;
+    }
+    else
+    {
+        valinfo_init_symaddr(result, e->sym);
     }
 }
 
@@ -1516,6 +1509,7 @@ static void check_expr_impl(Checker* chk, const Expr* e, ValueInfo* result)
     {
 #define DISPATCH_CHECK(type) DISPATCH(check_, type, e, result)
         DISPATCH_CHECK(ExprLit);
+        DISPATCH_CHECK(ExprStrLit);
         DISPATCH_CHECK(ExprRef);
         DISPATCH_CHECK(ExprAddress);
         DISPATCH_CHECK(ExprBinOp);

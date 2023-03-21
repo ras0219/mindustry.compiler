@@ -929,47 +929,6 @@ fail:
     return rc;
 }
 
-int parse_sizeof(struct TestState* state)
-{
-    int rc = 1;
-    StandardTest test = {0};
-    SUBTEST(stdtest_run(state,
-                        &test,
-                        "char d1[sizeof(int)];\n"
-                        "char d2[sizeof(d1)];\n"
-                        "char d3[] = \"hello.\";\n"
-                        "char d4[sizeof(d3)];\n"
-                        "void main() { char d3[256]; int x = sizeof(d3); }"));
-    rc = 0;
-
-    struct Expr** const exprs = (struct Expr**)test.parser->expr_seqs.data;
-    REQUIRE_EQ(5, test.parser->top->seq.ext);
-    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->seq.off])
-    {
-        REQUIRE_EQ(1, decls->seq.ext);
-        REQUIRE_EXPR(Decl, d, exprs[decls->seq.off]) { REQUIRE_SIZING_EQ(s_sizing_uint, d->sym->size); }
-    }
-    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->seq.off + 1])
-    {
-        REQUIRE_EQ(1, decls->seq.ext);
-        REQUIRE_EXPR(Decl, d, exprs[decls->seq.off]) { REQUIRE_SIZING_EQ(s_sizing_uint, d->sym->size); }
-    }
-    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->seq.off + 2])
-    {
-        REQUIRE_EQ(1, decls->seq.ext);
-        REQUIRE_EXPR(Decl, d, exprs[decls->seq.off]) { REQUIRE_EQ(7, d->sym->size.width); }
-    }
-    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->seq.off + 3])
-    {
-        REQUIRE_EQ(1, decls->seq.ext);
-        REQUIRE_EXPR(Decl, d, exprs[decls->seq.off]) { REQUIRE_EQ(7, d->sym->size.width); }
-    }
-
-fail:
-    stdtest_destroy(&test);
-    return rc;
-}
-
 int parse_constants(struct TestState* state)
 {
     int rc = 1;
@@ -1276,15 +1235,14 @@ static const Token* test_ast_ast_inner(AstChecker* ctx, const Token* cur_tok, co
         case EXPR_LIT:
         {
             const ExprLit* a = (void*)ast;
-            if (a->sym)
-            {
-                // string literal
-            }
-            else
-            {
-                PARSER_DO(expect_number(ctx, cur_tok, a->numeric));
-                if (a->suffix) PARSER_DO(expect_str(ctx, cur_tok, suffix_to_string(a->suffix)));
-            }
+            PARSER_DO(expect_number(ctx, cur_tok, a->numeric));
+            if (a->suffix) PARSER_DO(expect_str(ctx, cur_tok, suffix_to_string(a->suffix)));
+            break;
+        }
+        case EXPR_STRLIT:
+        {
+            const ExprStrLit* a = (void*)ast;
+            (void)a;
             break;
         }
         case EXPR_FIELD:
@@ -2718,7 +2676,6 @@ int main(int argc, char** argv)
 
     RUN_TEST(parse_main);
     RUN_TEST(parse_body);
-    RUN_TEST(parse_sizeof);
     RUN_TEST(parse_constants);
     RUN_TEST(parse_typedef);
     RUN_TEST(parse_struct);

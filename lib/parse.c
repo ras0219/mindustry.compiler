@@ -142,6 +142,15 @@ static struct ExprLit* parse_alloc_expr_lit(Parser* p, const struct Token* tok)
     return e;
 }
 
+static struct ExprStrLit* parse_alloc_expr_strlit(Parser* p, const struct Token* tok)
+{
+    struct ExprStrLit* e = pool_alloc_zeroes(&p->ast_pools[EXPR_STRLIT], sizeof(struct ExprStrLit));
+    e->kind = EXPR_STRLIT;
+    e->tok = tok;
+    e->text = token_str(p, tok);
+    return e;
+}
+
 static struct ExprCall* parse_alloc_expr_call(
     Parser* p, const struct Token* tok, struct Expr* fn, size_t off, size_t ext)
 {
@@ -415,29 +424,28 @@ top:
             return parse_expr_post_unary(p, cur_tok, (struct Expr*)lhs_expr, ppe);
         }
         case LEX_NUMBER:
-        case LEX_CHARLIT:
-        case LEX_STRING:
         {
             struct ExprLit* lhs_expr = parse_alloc_expr_lit(p, cur_tok++);
-            if (lhs_expr->tok->type == LEX_NUMBER)
-            {
-                lit_to_uint64(lhs_expr->text, &lhs_expr->numeric, &lhs_expr->suffix, &lhs_expr->tok->rc);
-            }
-            else if (lhs_expr->tok->type == LEX_CHARLIT)
-            {
-                lhs_expr->numeric = lhs_expr->text[0];
-            }
+            lit_to_uint64(lhs_expr->text, &lhs_expr->numeric, &lhs_expr->suffix, &lhs_expr->tok->rc);
+            return parse_expr_post_unary(p, cur_tok, (struct Expr*)lhs_expr, ppe);
+        }
+        case LEX_CHARLIT:
+        {
+            struct ExprLit* lhs_expr = parse_alloc_expr_lit(p, cur_tok++);
+            lhs_expr->numeric = lhs_expr->text[0];
+            return parse_expr_post_unary(p, cur_tok, (struct Expr*)lhs_expr, ppe);
+        }
+        case LEX_STRING:
+        {
+            struct ExprStrLit* lhs_expr = parse_alloc_expr_strlit(p, cur_tok++);
+            size_t* v = bsm_get(&p->strlit_map, lhs_expr->text, lhs_expr->tok->tok_len);
+            if (v)
+                lhs_expr->sym = (Symbol*)*v;
             else
             {
-                size_t* v = bsm_get(&p->strlit_map, lhs_expr->text, lhs_expr->tok->tok_len);
-                if (v)
-                    lhs_expr->sym = (Symbol*)*v;
-                else
-                {
-                    lhs_expr->sym = pool_alloc_zeroes(&p->sym_pool, sizeof(Symbol));
-                    lhs_expr->sym->string_constant = lhs_expr;
-                    bsm_insert(&p->strlit_map, lhs_expr->text, lhs_expr->tok->tok_len, (size_t)lhs_expr->sym);
-                }
+                lhs_expr->sym = pool_alloc_zeroes(&p->sym_pool, sizeof(Symbol));
+                lhs_expr->sym->string_constant = lhs_expr;
+                bsm_insert(&p->strlit_map, lhs_expr->text, lhs_expr->tok->tok_len, (size_t)lhs_expr->sym);
             }
             return parse_expr_post_unary(p, cur_tok, (struct Expr*)lhs_expr, ppe);
         }
@@ -1317,8 +1325,7 @@ static const struct Token* parse_initializer_list(Parser* p, const struct Token*
     if (tk)
     {
         AstInit* i = *out_expr;
-        i->is_braced_strlit =
-            i->init && !i->next->init && i->init->kind == EXPR_LIT && i->init->tok->type == LEX_STRING;
+        i->is_braced_strlit = i->init && !i->next->init && i->init->kind == EXPR_STRLIT;
     }
     return tk;
 }
@@ -2283,14 +2290,17 @@ static void parser_dump_ast(struct Parser* p, FILE* f, void* ptr, int depth)
         case EXPR_LIT:
         {
             struct ExprLit* blk = (void*)ast;
-            if (!blk->sym)
-            {
-                fprintf(f, " %" PRId64, blk->numeric);
-            }
+            fprintf(f, " %" PRId64, blk->numeric);
             if (blk->suffix != LIT_SUFFIX_NONE)
             {
                 fprintf(f, " %s", suffix_to_string(blk->suffix));
             }
+            if (blk->take_address) fprintf(f, " take_addr");
+            break;
+        }
+        case EXPR_STRLIT:
+        {
+            struct ExprStrLit* blk = (void*)ast;
             if (blk->take_address) fprintf(f, " take_addr");
             break;
         }
