@@ -22,7 +22,10 @@
     do                                                                                                                 \
     {                                                                                                                  \
         cur_tok = (X);                                                                                                 \
-        if (cur_tok == NULL) goto fail;                                                                                \
+        if (cur_tok == NULL)                                                                                           \
+        {                                                                                                              \
+            goto fail;                                                                                                 \
+        }                                                                                                              \
     } while (0)
 
 #define PARSER_DO_WITH(X, ...)                                                                                         \

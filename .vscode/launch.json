@@ -18,6 +18,27 @@
             "MIMode": "lldb"
         },
         {
+            "name": "Launch MacOS tmp",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/out/main",
+            "args": [
+                "-I",
+                "/opt/src/mindustry.compiler/lib",
+                "-D",
+                "FAIL_ON_FIRST",
+                "-S",
+                "/opt/src/mindustry.compiler/lib/array.c",
+                "-c",
+                "-o",
+                "stage2/array.asm"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/selfbuild",
+            "environment": [],
+            "MIMode": "lldb"
+        },
+        {
             "name": "Launch Linux",
             "type": "cppdbg",
             "request": "launch",
