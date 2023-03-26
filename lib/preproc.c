@@ -932,6 +932,7 @@ static int pp_handle_directive(struct Preprocessor* pp, Lexer* l)
         {
             if (pp->files_open.sz > 50 * sizeof(void*))
             {
+                ARRPTR_FOREACH(const char, i, &pp->files_open) { parser_warn(&l->tok_rc, "info: included %s\n", *i); }
                 return parser_ferror(&l->tok_rc, "error: maximum include depth exceeded\n");
             }
 
@@ -947,8 +948,8 @@ static int pp_handle_directive(struct Preprocessor* pp, Lexer* l)
                 return parser_ferror(&l->tok_rc, "error: absolute include paths are not allowed\n");
             }
 
-            memcpy(pp->to_include, l->tok + 1, l->sz - 1);
-            pp->to_include_sz = l->sz - 2;
+            memcpy(pp->to_include, l->tok, l->sz);
+            pp->to_include_sz = l->sz - 1;
             return 0;
         }
         case PP_INCLUDE_NEXT_EXPECT_END:
@@ -985,6 +986,7 @@ struct PPIncludeFileInnerForeach
     // The user-provided include token
     const char* inc;
     size_t inc_sz;
+    int check_samedir;
     // current open file (absolute)
     const char* cur_file;
     // list of include dirs
@@ -1043,7 +1045,8 @@ static int pp_include_search(struct PPIncludeFileInnerForeach* p)
 }
 static int pp_include_file_inner(struct PPIncludeFileInnerForeach* data)
 {
-    if (!pp_try_include(data, data->cur_file, path_parent_span(data->cur_file))) return 0;
+    if (data->check_samedir)
+        if (!pp_try_include(data, data->cur_file, path_parent_span(data->cur_file))) return 0;
     return pp_include_search(data);
 }
 
@@ -1112,8 +1115,9 @@ static void pp_incdata_init(struct PPIncludeFileInnerForeach* data, struct Prepr
 {
     struct PPIncludeFileInnerForeach d = {
         .prev = {.pp = pp, .after_cur_incpath = pp->after_cur_incpath, .fw = pp->cur_framework_path},
-        .inc = pp->to_include,
-        .inc_sz = pp->to_include_sz,
+        .inc = pp->to_include + 1,
+        .inc_sz = pp->to_include_sz - 1,
+        .check_samedir = pp->to_include[0] == '"',
         .inc_paths = pp->inc,
         .cur_file = pp->dir_rc.file,
         .search_it = is_include_next ? pp->after_cur_incpath : 0,

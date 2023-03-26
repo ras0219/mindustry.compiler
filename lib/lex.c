@@ -147,6 +147,8 @@ static const signed char s_map_escapes[128] = {
     ['b'] = '\b' - 'b',
     ['r'] = '\r' - 'r',
     ['t'] = '\t' - 't',
+    ['f'] = '\f' - 'f',
+    ['v'] = '\v' - 'v',
     ['0'] = '\0' - '0',
     ['x'] = '\0' - 'x',
 };
@@ -191,7 +193,7 @@ int lex(Lexer* const l, const char* const buf, size_t const sz)
             {
                 HANDLE_BACKSLASH_NL();
                 const char ch = buf[i];
-                if (ch == ' ' || ch == '\t')
+                if (ch == ' ' || ch == '\t' || ch == '\f' || ch == '\v')
                 {
                     l->ws_before = 1;
                     continue;

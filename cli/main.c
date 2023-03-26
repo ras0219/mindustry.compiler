@@ -380,7 +380,9 @@ static const char* predefs[] = {
     "__x86_64",
     "__STDC_VERSION__=199901L",
     "__STDC__",
+#ifdef __APPLE__
     "__APPLE__",
+#endif
     "__MACH__",
     "_POSIX_SOURCE",
     "_POSIX_C_SOURCE=200112L",
@@ -403,6 +405,9 @@ static const char* predefs[] = {
     "__has_include(X)=0",
     "__has_include_next(X)=0",
     "__builtin_expect(X,Y)=(X)",
+    "__INT_MAX__=0x7FFFFFFF",
+    "__LONG_MAX__=0x7FFFFFFFFFFFFFFFL",
+    "__LONG_LONG_MAX__=0x7FFFFFFFFFFFFFFFLL",
 };
 
 int main(int argc, const char* const* argv)
