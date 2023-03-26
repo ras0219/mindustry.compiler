@@ -1,3 +1,5 @@
+#include <stdlib.h>
+
 #include "string.h"
 #include "strlist.h"
 
@@ -12,49 +14,40 @@ void strlist_append(StrList* sl, const char* s, size_t n)
 
 void strlist_appendz(StrList* sl, const char* z) { strlist_append(sl, z, strlen(z)); }
 
-/// \param cb int(*)(void* userp, char* s, size_t sz)
-int strlistv_foreach(char* const data, size_t const sz, strlist_foreach_cb_t cb, void* userp)
+StrListIterator strlistv_next(StrListV sl, StrListIterator it, const char** s, size_t* n)
 {
-    size_t i = 0;
-    while (i != sz)
+    memcpy(n, sl.data + it, sizeof(size_t));
+    *s = (char*)sl.data + it + sizeof(size_t);
+    return it + sizeof(size_t) + 1 + *n;
+}
+int strlistv_at_end(StrListV sl, StrListIterator it) { return it == sl.sz; }
+
+/// \param cb int(*)(void* userp, char* s, size_t sz)
+int strlistv_foreach(StrListV sl, StrListIterator it, strlist_foreach_cb_t cb, void* userp)
+{
+    if (it > sl.sz) abort();
+    while (it != sl.sz)
     {
-        int r;
         size_t n;
-        memcpy(&n, data + i, sizeof(size_t));
-        char* const s = data + i + sizeof(size_t);
-        if (r = cb(userp, s, n)) return r;
-        i += sizeof(size_t) + 1 + n;
+        const char* s;
+        it = strlistv_next(sl, it, &s, &n);
+        const int r = cb(userp, s, n, it);
+        if (r) return r;
     }
     return 0;
 }
 
-int strlist_foreach(const StrList* sl, strlist_foreach_cb_t cb, void* userp)
+StrListIterator strlistv_find(StrListV sl, StrListIterator it, const char* s, size_t sz)
 {
-    return strlistv_foreach(sl->data, sl->sz, cb, userp);
-}
-
-struct A
-{
-    int n;
-    const size_t sz;
-    const char* const s;
-};
-
-static int strlist_find_cb(void* userp, char* s, size_t sz)
-{
-    struct A* const a = userp;
-    if (sz == a->sz && memcmp(a->s, s, sz) == 0) return 1;
-    ++a->n;
-    return 0;
-}
-
-int strlist_find(const StrList* sl, const char* s, size_t sz)
-{
-    struct A a = {
-        .sz = sz,
-        .s = s,
-    };
-    return strlist_foreach(sl, strlist_find_cb, &a) ? a.n : -1;
+    if (it > sl.sz) abort();
+    while (it != sl.sz)
+    {
+        size_t n;
+        const char* t;
+        it = strlistv_next(sl, it, &t, &n);
+        if (n == sz && 0 == memcmp(s, t, sz)) return it;
+    }
+    return STRLIST_NPOS;
 }
 
 void strlist_destroy(StrList* sl) { array_destroy(sl); }

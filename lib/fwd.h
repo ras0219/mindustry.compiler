@@ -9,6 +9,7 @@ struct DeclSpecs;
 struct Elaborator;
 struct Parser;
 struct RowCol;
+struct StrListV;
 struct StrStrMap;
 struct StringSet;
 struct TACAddress;

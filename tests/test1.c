@@ -16,6 +16,7 @@
 #include "preproc.h"
 #include "stdlibe.h"
 #include "stream.h"
+#include "strlist.h"
 #include "symbol.h"
 #include "tac.h"
 #include "token.h"
@@ -1649,8 +1650,22 @@ static int test_file(struct TestState* state, const char* path)
     FILE *f2 = NULL, *f3 = NULL;
     if (!f) REQUIRE_FAIL("failed to open test file %s", path);
 
+    struct
+    {
+        char data[128];
+    } static_incpath_data;
+    // hack, to fix
+    Array fake_array = {
+        .cap = sizeof(static_incpath_data),
+        .sz = 0,
+        .data = &static_incpath_data,
+    };
+    assign_path_join(&buf, g_datadir, g_datadir_sz, "tests/pass/inc", sizeof("tests/pass/inc") - 1);
+    strlist_append(&fake_array, buf.data, buf.sz - 1);
+    array_clear(&buf);
     parser_clear_errors();
     pp = preproc_alloc();
+    preproc_include_paths(pp, &fake_array);
     if (preproc_file(pp, f, path))
     {
         REQUIRE_FAIL_IMPL(path, 1, "%s", "failed to preprocess");
@@ -1703,7 +1718,7 @@ static int test_file(struct TestState* state, const char* path)
 
     rc = 0;
 fail:
-    if (parser_has_errors()) parser_print_msgs(stderr), parser_clear_errors();
+    if (parser_has_warnings() || parser_has_errors()) parser_print_msgs(stderr), parser_clear_errors();
     cg_destroy(&cg);
     be_destroy(&be);
     if (chk) checker_free(chk);

@@ -96,8 +96,8 @@ struct Preprocessor
     char to_include[128];
     size_t to_include_sz;
 
-    char* inc_data;
-    size_t inc_sz;
+    StrListV inc;
+    StrListIterator after_cur_incpath;
 
     // Array<char*>
     struct Array files_open;
@@ -939,7 +939,7 @@ static int pp_handle_directive(struct Preprocessor* pp, Lexer* l)
             {
                 return parser_ice(&l->tok_rc);
             }
-            pp->preproc = PP_INCLUDE ? PP_INCLUDE_EXPECT_END : PP_INCLUDE_NEXT_EXPECT_END;
+            pp->preproc = pp->preproc == PP_INCLUDE ? PP_INCLUDE_EXPECT_END : PP_INCLUDE_NEXT_EXPECT_END;
 
             l->tok[l->sz - 1] = '\0';
             if (path_is_absolute(l->tok + 1))
@@ -982,49 +982,69 @@ static int preproc_file_impl(struct Preprocessor* pp, FILE* f, const char* filen
 
 struct PPIncludeFileInnerForeach
 {
-    const struct
-    {
-        Array* buf;
-        const char* inc;
-        size_t inc_sz;
-        StrList* tried;
-    };
+    // The user-provided include token
+    const char* inc;
+    size_t inc_sz;
+    // current open file (absolute)
+    const char* cur_file;
+    // list of include dirs
+    StrListV inc_paths;
+    // index into inc_paths to start searching
+    StrListIterator search_it;
+    // buffer to store output filename
+    Array buf;
+    // buffer to store output framework
+    Array new_fw;
+    // list of tried filenames
+    StrList tried;
+    // open file pointer
     FILE* f;
+    // frameworks used
+    const StringSet* frameworks;
+    // Stored preproc state
+    struct
+    {
+        Preprocessor* pp;
+        const char* fw;
+        StrListIterator after_cur_incpath;
+    } prev;
 };
 
-static int pp_include_file_inner_cb(void* userp, char* s, size_t sz)
+static int pp_warn_searched(StrListV sl, const RowCol* rc)
 {
-    struct PPIncludeFileInnerForeach* data = userp;
-    assign_path_join(data->buf, s, sz, data->inc, data->inc_sz);
-    if (data->f = fopen(data->buf->data, "r")) return 1;
-    strlist_append(data->tried, data->buf->data, data->buf->sz - 1);
-    if (errno != ENOENT) return 1;
+    StrListIterator it = 0;
+    while (!strlistv_at_end(sl, it))
+    {
+        const char* s;
+        size_t sz;
+        it = strlistv_next(sl, it, &s, &sz);
+        parser_fmsg(warn, rc, "info: checked %.*s\n", sz, s);
+    }
     return 0;
 }
-static int pp_info_searched_cb(void* rc, char* s, size_t sz)
+static int pp_try_include(struct PPIncludeFileInnerForeach* p, const char* parent, size_t parent_sz)
 {
-    parser_fmsg(warn, rc, "info: checked %.*s\n", sz, s);
-    return 0;
-}
-static int pp_include_file_samedir(struct Preprocessor* pp, Array* buf, FILE** file, StrList* tried)
-{
-    assign_path_join(buf, pp->dir_rc.file, path_parent_span(pp->dir_rc.file), pp->to_include, pp->to_include_sz);
-    if (*file = fopen(buf->data, "r")) return 0;
-    strlist_append(tried, buf->data, buf->sz - 1);
+    assign_path_join(&p->buf, parent, parent_sz, p->inc, p->inc_sz);
+    if (p->f = fopen(p->buf.data, "r")) return 0;
+    strlist_append(&p->tried, p->buf.data, p->buf.sz - 1);
+    if (errno != ENOENT) return 0;
     return 1;
 }
-static int pp_include_file_inner(struct Preprocessor* pp, Array* buf, FILE** file, StrList* tried)
+static int pp_include_search(struct PPIncludeFileInnerForeach* p)
 {
-    if (!pp_include_file_samedir(pp, buf, file, tried)) return 0;
-
-    struct PPIncludeFileInnerForeach data = {
-        .buf = buf,
-        .inc = pp->to_include,
-        .inc_sz = pp->to_include_sz,
-        .tried = tried,
-    };
-    strlistv_foreach(pp->inc_data, pp->inc_sz, pp_include_file_inner_cb, &data);
-    return !(*file = data.f);
+    while (!strlistv_at_end(p->inc_paths, p->search_it))
+    {
+        const char* s;
+        size_t sz;
+        p->search_it = strlistv_next(p->inc_paths, p->search_it, &s, &sz);
+        if (!pp_try_include(p, s, sz)) return 0;
+    }
+    return 1;
+}
+static int pp_include_file_inner(struct PPIncludeFileInnerForeach* data)
+{
+    if (!pp_try_include(data, data->cur_file, path_parent_span(data->cur_file))) return 0;
+    return pp_include_search(data);
 }
 
 /// \param out Out. Non-null-terminated.
@@ -1032,169 +1052,154 @@ static int readlink_array(const char* path, Array* out) { return 1; }
 
 /// \param buf Out. Null-terminated. Path to include file opened.
 /// \param fw Out. Null-terminated. Path to current framework without trailing slash.
-static int pp_include_framework_inner(struct Preprocessor* pp, Array* buf, Array* fw, FILE** file, StrList* tried)
+static int pp_include_framework_inner(struct PPIncludeFileInnerForeach* p)
 {
-    const struct
-    {
-        const char* inc;
-        size_t inc_sz;
-    } data = {pp->to_include, pp->to_include_sz};
-
-    const char* fw_name_end = memchr(data.inc, '/', data.inc_sz);
+    const char* fw_name_end = memchr(p->inc, '/', p->inc_sz);
     if (!fw_name_end) return 1;
 
     DIR* dir;
 
-    size_t fw_name_len = fw_name_end - data.inc;
-    if (pp->cur_framework_path)
+    size_t fw_name_len = fw_name_end - p->inc;
+    if (p->prev.fw)
     {
-        array_clear(buf);
-        array_appends(buf, pp->cur_framework_path);
-        path_combine(buf, "Frameworks/", sizeof("Frameworks/") - 1);
-        array_push(buf, data.inc, fw_name_len);
-        array_push(buf, ".framework", sizeof(".framework") - 1);
-        array_push_byte(buf, '\0');
-        if (dir = opendir(buf->data)) goto found_fw;
-        buf->sz = path_parent_span(pp->cur_framework_path);
-        array_push(buf, data.inc, fw_name_len);
-        array_push(buf, ".framework", sizeof(".framework") - 1);
-        array_push_byte(buf, '\0');
-        if (dir = opendir(buf->data)) goto found_fw;
+        array_clear(&p->buf);
+        array_appends(&p->buf, p->prev.fw);
+        path_combine(&p->buf, "Frameworks/", sizeof("Frameworks/") - 1);
+        array_push(&p->buf, p->inc, fw_name_len);
+        array_push(&p->buf, ".framework", sizeof(".framework") - 1);
+        array_push_byte(&p->buf, '\0');
+        if (dir = opendir(p->buf.data)) goto found_fw;
+        p->buf.sz = path_parent_span(p->prev.fw);
+        array_push(&p->buf, p->inc, fw_name_len);
+        array_push(&p->buf, ".framework", sizeof(".framework") - 1);
+        array_push_byte(&p->buf, '\0');
+        if (dir = opendir(p->buf.data)) goto found_fw;
     }
-    if (pp->cur_framework_path || strset_get(pp->frameworks, data.inc, fw_name_len) != SIZE_MAX)
+    if (p->prev.fw || strset_get(p->frameworks, p->inc, fw_name_len) != SIZE_MAX)
     {
-        array_clear(buf);
-        array_appendf(buf,
+        array_clear(&p->buf);
+        array_appendf(&p->buf,
                       "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/"
                       "%.*s.framework",
                       fw_name_len,
-                      data.inc);
-        array_push_byte(buf, '\0');
-        if (dir = opendir(buf->data)) goto found_fw;
+                      p->inc);
+        array_push_byte(&p->buf, '\0');
+        if (dir = opendir(p->buf.data)) goto found_fw;
     }
     return 1;
 
 found_fw:
     closedir(dir);
-    if (0 == readlink_array(buf->data, fw))
+    if (0 == readlink_array(p->buf.data, &p->new_fw))
     {
-        array_push_byte(fw, '\0');
-        array_assign(buf, fw->data, fw->sz);
+        array_push_byte(&p->new_fw, '\0');
+        array_assign(&p->buf, p->new_fw.data, p->new_fw.sz);
     }
     else
     {
-        array_assign(fw, buf->data, buf->sz);
+        array_assign(&p->new_fw, p->buf.data, p->buf.sz);
     }
-    array_pop(buf, 1);
-    array_appends(buf, "/Headers/");
-    array_push(buf, fw_name_end + 1, data.inc_sz - fw_name_len - 1);
-    array_push_byte(buf, '\0');
-    if (*file = fopen(buf->data, "r")) return 0;
-    strlist_append(tried, buf->data, buf->sz - 1);
+    array_pop(&p->buf, 1);
+    array_appends(&p->buf, "/Headers/");
+    array_push(&p->buf, fw_name_end + 1, p->inc_sz - fw_name_len - 1);
+    array_push_byte(&p->buf, '\0');
+    if (p->f = fopen(p->buf.data, "r")) return 0;
+    strlist_append(&p->tried, p->buf.data, p->buf.sz - 1);
     return 1;
+}
+
+static void pp_incdata_init(struct PPIncludeFileInnerForeach* data, struct Preprocessor* pp, int is_include_next)
+{
+    struct PPIncludeFileInnerForeach d = {
+        .prev = {.pp = pp, .after_cur_incpath = pp->after_cur_incpath, .fw = pp->cur_framework_path},
+        .inc = pp->to_include,
+        .inc_sz = pp->to_include_sz,
+        .inc_paths = pp->inc,
+        .cur_file = pp->dir_rc.file,
+        .search_it = is_include_next ? pp->after_cur_incpath : 0,
+        .frameworks = pp->frameworks,
+    };
+    *data = d;
+}
+static void pp_incdata_destroy(struct PPIncludeFileInnerForeach* data)
+{
+    data->prev.pp->after_cur_incpath = data->prev.after_cur_incpath;
+    data->prev.pp->cur_framework_path = data->prev.fw;
+    if (data->f) fclose(data->f);
+    array_destroy(&data->tried);
+    array_destroy(&data->new_fw);
+    array_destroy(&data->buf);
+}
+
+static void pp_include_error(struct PPIncludeFileInnerForeach* data, int err)
+{
+    pp_warn_searched(strlistv(&data->tried), &data->prev.pp->dir_rc);
+    const char* errmsg = strerror(err);
+    if (!errmsg) abort();
+    parser_ferror(
+        &data->prev.pp->dir_rc, "error: could not find include %.*s: %s\n", (int)data->inc_sz, data->inc, errmsg);
+}
+
+static int pp_apply_include(struct PPIncludeFileInnerForeach* data)
+{
+    int rc = 0;
+    if (!data->f)
+    {
+        pp_include_error(data, errno);
+        UNWRAP(1);
+    }
+    Preprocessor* const pp = data->prev.pp;
+    pp->cur_framework_path = data->new_fw.sz ? data->new_fw.data : NULL;
+    pp->after_cur_incpath = data->search_it;
+    const size_t cur_if_sz = pp->if_true_depth;
+    UNWRAP(preproc_file_impl(pp, data->f, data->buf.data));
+    // pop EOF from included file
+    array_pop(&pp->toks, sizeof(struct Token));
+    if (pp->if_true_depth != cur_if_sz || pp->if_false_depth != 0)
+    {
+        parser_ferror(&pp->dir_rc, "error: mismatched ifdef levels after including %s\n", data->buf.data);
+        UNWRAP(1);
+    }
+fail:
+    return rc;
 }
 
 static int pp_include_file(struct Preprocessor* pp, struct Lexer* l)
 {
     int rc = 0;
-    StrList tried = {0};
-    FILE* file = NULL;
-    Array buf = {0};
-    Array new_fw = {0};
-    const char* const prev_fw = pp->cur_framework_path;
+    struct PPIncludeFileInnerForeach data;
+    pp_incdata_init(&data, pp, 0);
 
-    if (rc = pp_include_file_inner(pp, &buf, &file, &tried))
+    if (rc = pp_include_file_inner(&data))
     {
-        if (rc = pp_include_framework_inner(pp, &buf, &new_fw, &file, &tried))
+        if (rc = pp_include_framework_inner(&data))
         {
-            const int err = errno;
-            strlist_foreach(&tried, pp_info_searched_cb, &pp->dir_rc);
-            const char* errmsg = strerror(err);
-            if (!errmsg) abort();
-            parser_ferror(&pp->dir_rc,
-                          "error: could not find include %.*s: %s\n",
-                          (int)pp->to_include_sz,
-                          pp->to_include,
-                          errmsg);
+            pp_include_error(&data, errno);
             UNWRAP(1);
         }
-        else
-        {
-            pp->cur_framework_path = new_fw.data;
-        }
     }
-    else
-    {
-        pp->cur_framework_path = NULL;
-    }
-
-    size_t cur_if_sz = pp->if_true_depth;
-    UNWRAP(preproc_file_impl(pp, file, buf.data));
-    // pop EOF from included file
-    array_pop(&pp->toks, sizeof(struct Token));
-    if (pp->if_true_depth != cur_if_sz || pp->if_false_depth != 0)
-    {
-        parser_ferror(&pp->dir_rc, "error: mismatched ifdef levels after including %s\n", buf.data);
-        UNWRAP(1);
-    }
+    UNWRAP(pp_apply_include(&data));
 
 fail:
-    pp->cur_framework_path = prev_fw;
-    if (file) fclose(file);
-    array_destroy(&tried);
-    array_destroy(&new_fw);
-    array_destroy(&buf);
+    pp_incdata_destroy(&data);
     return rc;
 }
 
 static int pp_include_next_file(struct Preprocessor* pp, struct Lexer* l)
 {
     int rc = 0;
-    StrList tried = {0};
-    FILE* file = NULL;
-    Array buf = {0};
-    Array new_fw = {0};
-    const char* const prev_fw = pp->cur_framework_path;
+    struct PPIncludeFileInnerForeach data;
+    pp_incdata_init(&data, pp, 1);
 
-    int index = strlist_find(&tried, pp_info_searched_cb, &pp->dir_rc);
-    if (index == -1)
+    if (rc = pp_include_search(&data))
     {
-        parser_ferror(&pp->dir_rc, "error: cannot include_next\n");
+        pp_include_error(&data, errno);
         UNWRAP(1);
     }
-    path_parent_span(pp->dir_rc.file);
-
-    if (rc = pp_include_file_inner(pp, &buf, &file, &tried))
-    {
-        const int err = errno;
-        strlist_foreach(&tried, pp_info_searched_cb, &pp->dir_rc);
-        const char* errmsg = strerror(err);
-        if (!errmsg) abort();
-        parser_ferror(
-            &pp->dir_rc, "error: could not find include %.*s: %s\n", (int)pp->to_include_sz, pp->to_include, errmsg);
-        UNWRAP(1);
-    }
-    else
-    {
-        pp->cur_framework_path = NULL;
-    }
-
-    size_t cur_if_sz = pp->if_true_depth;
-    UNWRAP(preproc_file_impl(pp, file, buf.data));
-    // pop EOF from included file
-    array_pop(&pp->toks, sizeof(struct Token));
-    if (pp->if_true_depth != cur_if_sz || pp->if_false_depth != 0)
-    {
-        parser_ferror(&pp->dir_rc, "error: mismatched ifdef levels after including %s\n", buf.data);
-        UNWRAP(1);
-    }
+    UNWRAP(pp_apply_include(&data));
 
 fail:
-    pp->cur_framework_path = prev_fw;
-    if (file) fclose(file);
-    array_destroy(&tried);
-    array_destroy(&new_fw);
-    array_destroy(&buf);
+    pp_incdata_destroy(&data);
     return rc;
 }
 
@@ -1286,6 +1291,7 @@ static int pp_flush_directive(struct Preprocessor* pp, Lexer* l)
         case PP_DEFINE_FN_COMMA:
         case PP_DEFINE_FN_ELLIPSIS:
             return parser_ferror(&pp->dir_rc, "error: unterminated function-like macro definition\n");
+        case PP_INCLUDE_NEXT:
         case PP_INCLUDE: return parser_ferror(&pp->dir_rc, "error: expected header to include\n");
         case PP_INCLUDE_EXPECT_END: return pp_include_file(pp, l);
         case PP_INCLUDE_NEXT_EXPECT_END: return pp_include_next_file(pp, l);
@@ -1755,11 +1761,7 @@ fail:
     return rc;
 }
 
-void preproc_include_paths(Preprocessor* pp, const StrList* incs)
-{
-    pp->inc_data = incs->data;
-    pp->inc_sz = incs->sz;
-}
+void preproc_include_paths(Preprocessor* pp, const StrList* incs) { pp->inc = strlistv(incs); }
 void preproc_framework_paths(Preprocessor* pp, const StrList* incs) { pp->fw_paths = incs; }
 void preproc_frameworks(Preprocessor* pp, const StringSet* frameworks) { pp->frameworks = frameworks; }
 
@@ -1767,8 +1769,6 @@ struct Preprocessor* preproc_alloc(void)
 {
     struct Preprocessor* pp = my_malloc(sizeof(struct Preprocessor));
     memset(pp, 0, sizeof(struct Preprocessor));
-    pp->inc_data = NULL;
-    pp->inc_sz = 0;
     pp->frameworks = NULL;
     sp_init(&pp->stringpool);
     struct Token* tok_one = array_push_zeroes(&pp->defs_tokens, sizeof(struct Token));
@@ -1791,7 +1791,11 @@ static int lex_file(FILE* f, Lexer* l)
         if (!sz) break;
         UNWRAP(lex(l, buf, sz));
     }
-    UNWRAP(ferror(f));
+    if (rc = ferror(f))
+    {
+        parser_ferror(&l->rc, "error: while reading file: %d\n", errno);
+        goto fail;
+    }
     UNWRAP(end_lex(l));
 fail:
     return rc;

@@ -38,6 +38,8 @@ static int parser_vfmsg_impl(struct FixedMsgBuffer* buf, const struct RowCol* rc
 
 int parser_has_errors() { return s_error.used > 0; }
 
+int parser_has_warnings() { return s_warn.used > 0; }
+
 int parser_tok_error(const struct Token* tok, const char* fmt, ...)
 {
     va_list argp;
