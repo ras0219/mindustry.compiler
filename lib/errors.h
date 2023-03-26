@@ -33,4 +33,4 @@ void parser_clear_errors();
 
 size_t parser_print_msgs_mem(void* buf, size_t sz);
 
-#define PARSER_UNIMPLEMENTED(rc, fmt, ...) parser_ferror(rc, fmt "%s:%d\n", #__VA_ARGS__, __FILE__, __LINE__)
+#define PARSER_UNIMPLEMENTED(rc, fmt, ...) parser_ferror(rc, fmt "%s:%d\n", ##__VA_ARGS__, __FILE__, __LINE__)

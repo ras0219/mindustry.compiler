@@ -613,9 +613,10 @@ static const struct Token* parse_until_comma_or_cparen(Parser* p, const struct T
     {
         switch (cur_tok->type)
         {
-            case LEX_EOF: return NULL;
+            case LEX_EOF: parser_tok_error(cur_tok, "error: unexpected EOF\n"); return NULL;
             case TOKEN_SYM1(','):
                 if (depth == 1) return cur_tok;
+                break;
             case TOKEN_SYM1('('): ++depth; break;
             case TOKEN_SYM1(')'):
                 if (--depth == 0) return cur_tok;

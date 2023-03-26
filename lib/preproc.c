@@ -30,6 +30,8 @@ enum PreprocessorState
     PP_INIT,
     PP_INCLUDE,
     PP_INCLUDE_EXPECT_END,
+    PP_INCLUDE_NEXT,
+    PP_INCLUDE_NEXT_EXPECT_END,
     PP_PRAGMA,
     PP_PRAGMA_ONCE,
     PP_EXPECT_END,
@@ -744,6 +746,12 @@ static int pp_handle_directive(struct Preprocessor* pp, Lexer* l)
                     pp->preproc = PP_INCLUDE;
                     return 0;
                 }
+                if (STREQ_LIT(l->tok, l->sz, "include_next"))
+                {
+                    l->expect_header = 1;
+                    pp->preproc = PP_INCLUDE_NEXT;
+                    return 0;
+                }
                 HANDLE_DIRECTIVE("pragma", PP_PRAGMA);
                 HANDLE_DIRECTIVE("define", PP_DEFINE);
                 HANDLE_DIRECTIVE("undef", PP_UNDEF);
@@ -920,6 +928,7 @@ static int pp_handle_directive(struct Preprocessor* pp, Lexer* l)
         case PP_ELIF: pp_form_token(pp, l, array_alloc(&pp->toks, sizeof(struct Token))); return 0;
         case PP_IGNORE: return 0;
         case PP_INCLUDE:
+        case PP_INCLUDE_NEXT:
         {
             if (pp->files_open.sz > 50 * sizeof(void*))
             {
@@ -930,7 +939,7 @@ static int pp_handle_directive(struct Preprocessor* pp, Lexer* l)
             {
                 return parser_ice(&l->tok_rc);
             }
-            pp->preproc = PP_INCLUDE_EXPECT_END;
+            pp->preproc = PP_INCLUDE ? PP_INCLUDE_EXPECT_END : PP_INCLUDE_NEXT_EXPECT_END;
 
             l->tok[l->sz - 1] = '\0';
             if (path_is_absolute(l->tok + 1))
@@ -942,6 +951,7 @@ static int pp_handle_directive(struct Preprocessor* pp, Lexer* l)
             pp->to_include_sz = l->sz - 2;
             return 0;
         }
+        case PP_INCLUDE_NEXT_EXPECT_END:
         case PP_INCLUDE_EXPECT_END:
             return parser_ferror(&l->tok_rc, "error: expected end of include directive: %s\n", l->tok);
         case PP_ELSE:
@@ -996,17 +1006,23 @@ static int pp_info_searched_cb(void* rc, char* s, size_t sz)
     parser_fmsg(warn, rc, "info: checked %.*s\n", sz, s);
     return 0;
 }
+static int pp_include_file_samedir(struct Preprocessor* pp, Array* buf, FILE** file, StrList* tried)
+{
+    assign_path_join(buf, pp->dir_rc.file, path_parent_span(pp->dir_rc.file), pp->to_include, pp->to_include_sz);
+    if (*file = fopen(buf->data, "r")) return 0;
+    strlist_append(tried, buf->data, buf->sz - 1);
+    return 1;
+}
 static int pp_include_file_inner(struct Preprocessor* pp, Array* buf, FILE** file, StrList* tried)
 {
+    if (!pp_include_file_samedir(pp, buf, file, tried)) return 0;
+
     struct PPIncludeFileInnerForeach data = {
         .buf = buf,
         .inc = pp->to_include,
         .inc_sz = pp->to_include_sz,
         .tried = tried,
     };
-    assign_path_join(buf, pp->dir_rc.file, path_parent_span(pp->dir_rc.file), data.inc, data.inc_sz);
-    if (*file = fopen(buf->data, "r")) return 0;
-    strlist_append(tried, buf->data, buf->sz - 1);
     strlistv_foreach(pp->inc_data, pp->inc_sz, pp_include_file_inner_cb, &data);
     return !(*file = data.f);
 }
@@ -1131,6 +1147,57 @@ fail:
     return rc;
 }
 
+static int pp_include_next_file(struct Preprocessor* pp, struct Lexer* l)
+{
+    int rc = 0;
+    StrList tried = {0};
+    FILE* file = NULL;
+    Array buf = {0};
+    Array new_fw = {0};
+    const char* const prev_fw = pp->cur_framework_path;
+
+    int index = strlist_find(&tried, pp_info_searched_cb, &pp->dir_rc);
+    if (index == -1)
+    {
+        parser_ferror(&pp->dir_rc, "error: cannot include_next\n");
+        UNWRAP(1);
+    }
+    path_parent_span(pp->dir_rc.file);
+
+    if (rc = pp_include_file_inner(pp, &buf, &file, &tried))
+    {
+        const int err = errno;
+        strlist_foreach(&tried, pp_info_searched_cb, &pp->dir_rc);
+        const char* errmsg = strerror(err);
+        if (!errmsg) abort();
+        parser_ferror(
+            &pp->dir_rc, "error: could not find include %.*s: %s\n", (int)pp->to_include_sz, pp->to_include, errmsg);
+        UNWRAP(1);
+    }
+    else
+    {
+        pp->cur_framework_path = NULL;
+    }
+
+    size_t cur_if_sz = pp->if_true_depth;
+    UNWRAP(preproc_file_impl(pp, file, buf.data));
+    // pop EOF from included file
+    array_pop(&pp->toks, sizeof(struct Token));
+    if (pp->if_true_depth != cur_if_sz || pp->if_false_depth != 0)
+    {
+        parser_ferror(&pp->dir_rc, "error: mismatched ifdef levels after including %s\n", buf.data);
+        UNWRAP(1);
+    }
+
+fail:
+    pp->cur_framework_path = prev_fw;
+    if (file) fclose(file);
+    array_destroy(&tried);
+    array_destroy(&new_fw);
+    array_destroy(&buf);
+    return rc;
+}
+
 static int pp_flush_directive(struct Preprocessor* pp, Lexer* l)
 {
     int rc = 0;
@@ -1221,6 +1288,7 @@ static int pp_flush_directive(struct Preprocessor* pp, Lexer* l)
             return parser_ferror(&pp->dir_rc, "error: unterminated function-like macro definition\n");
         case PP_INCLUDE: return parser_ferror(&pp->dir_rc, "error: expected header to include\n");
         case PP_INCLUDE_EXPECT_END: return pp_include_file(pp, l);
+        case PP_INCLUDE_NEXT_EXPECT_END: return pp_include_next_file(pp, l);
         case PP_PRAGMA: return parser_ferror(&pp->dir_rc, "error: expected pragma directive: %s\n", l->tok);
         case PP_PRAGMA_ONCE: ((struct ParsedFile*)pp->filenames.data)[pp->cur_file].pragma_once = 1; return 0;
     }

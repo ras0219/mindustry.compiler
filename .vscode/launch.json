@@ -57,6 +57,26 @@
             "miDebuggerPath": "/usr/bin/gdb"
         },
         {
+            "name": "Launch Linux tmp",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/selfbuild/stage1/main",
+            "args": [
+                "-I",
+                "../lib",
+                "-D",
+                "FAIL_ON_FIRST",
+                "-S",
+                "../lib/array.c",
+                "-c",
+                "-o",
+                "stage2/array.asm"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/selfbuild",
+            "miDebuggerPath": "/usr/bin/gdb"
+        },
+        {
             "name": "Launch",
             "type": "cppdbg",
             "request": "launch",

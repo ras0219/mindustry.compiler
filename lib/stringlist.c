@@ -28,7 +28,7 @@ int strlistv_foreach(char* const data, size_t const sz, strlist_foreach_cb_t cb,
     return 0;
 }
 
-int strlist_foreach(StrList* sl, strlist_foreach_cb_t cb, void* userp)
+int strlist_foreach(const StrList* sl, strlist_foreach_cb_t cb, void* userp)
 {
     return strlistv_foreach(sl->data, sl->sz, cb, userp);
 }
@@ -48,7 +48,7 @@ static int strlist_find_cb(void* userp, char* s, size_t sz)
     return 0;
 }
 
-int strlist_find(StrList* sl, const char* s, size_t sz)
+int strlist_find(const StrList* sl, const char* s, size_t sz)
 {
     struct A a = {
         .sz = sz,
