@@ -712,6 +712,7 @@ static void elaborate_expr_ExprUnOp(struct Elaborator* elab, struct ExprUnOp* e,
                     rc, elab->types, "error: expected arithmetic type in first argument but got '%.*s'\n", &orig_lhs);
                 *rty = s_type_int;
             }
+            typestr_promote_integer(rty);
             break;
         case TOKEN_SYM1('-'):
             if (!(lhs_mask & TYPE_MASK_ARITH))
@@ -720,14 +721,16 @@ static void elaborate_expr_ExprUnOp(struct Elaborator* elab, struct ExprUnOp* e,
                     rc, elab->types, "error: expected arithmetic type in first argument but got '%.*s'\n", &orig_lhs);
                 *rty = s_type_int;
             }
+            typestr_promote_integer(rty);
             break;
         case TOKEN_SYM1('~'):
             if (!(lhs_mask & TYPE_FLAGS_INT))
             {
                 typestr_error1(
                     rc, elab->types, "error: expected integer type in first argument but got '%.*s'\n", &orig_lhs);
+                *rty = s_type_int;
             }
-            typestr_apply_integral_type(rty, &s_type_int);
+            typestr_promote_integer(rty);
             break;
         case TOKEN_SYM1('!'):
             if (!(lhs_mask & TYPE_MASK_SCALAR))

@@ -62,12 +62,6 @@ static __forceinline unsigned long long typestr_get_add_size(const struct TypeTa
     return tsb_get_add_size(types, &ts->buf, rc);
 }
 
-static __forceinline struct Sizing typestr_try_calc_sizing(const struct TypeTable* types,
-                                                           const struct TypeStr* ts,
-                                                           const struct RowCol* rc)
-{
-    return tsb_try_calc_sizing(types, &ts->buf, rc);
-}
 static __forceinline struct Sizing typestr_calc_sizing(const struct TypeTable* types,
                                                        const struct TypeStr* ts,
                                                        const struct RowCol* rc)

@@ -150,7 +150,6 @@ void tsb_error2(
 
 int tsb_match(const TypeStrBuf* a, const TypeStrBuf* b);
 
-struct Sizing tsb_try_calc_sizing(const struct TypeTable* types, const TypeStrBuf* ts, const struct RowCol* rc);
 struct Sizing tsb_calc_sizing(const struct TypeTable* types, const TypeStrBuf* ts, const struct RowCol* rc);
 struct Sizing tsb_calc_sizing_zero_void(const struct TypeTable* types, const TypeStrBuf* ts, const struct RowCol* rc);
 struct Sizing tsb_calc_elem_sizing(const struct TypeTable* types, const TypeStrBuf* ts, const struct RowCol* rc);
