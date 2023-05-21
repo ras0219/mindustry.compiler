@@ -1516,13 +1516,7 @@ static void be_compile_global(struct BackEnd* be, Decl* decl)
         }
 
         char* start = (char*)be->elab->constinit.data + sym->constinit_offset;
-        unsigned char chksum = 0;
-        for (size_t i = 0; i < sym->size.width; ++i)
-        {
-            chksum += start[i];
-        }
-        cg_reserve_data(
-            be->cg, sym->addr.name, (char*)be->elab->constinit.data + sym->constinit_offset, buf, sym->size.width);
+        cg_reserve_data(be->cg, sym->addr.name, start, buf, sym->size.width);
         my_free(buf);
     }
     else
