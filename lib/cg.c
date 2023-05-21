@@ -300,80 +300,72 @@ static void cg_gen_taca(struct CodeGen* cg, struct TACAddress addr, struct Activ
     {
         case TACA_NAME:
             cg_mangle_sym(cg, &cg->code, addr.name);
-            array_appends(&cg->code, "@GOTPCREL(%rip)");
+            array_appends(&cg->code, "@GOTPCREL");
+            if (addr.offset) array_appendf(&cg->code, "+%zu", addr.offset);
+            array_appends(&cg->code, "(%rip)");
             break;
         case TACA_LNAME:
             cg_mangle_sym(cg, &cg->code, addr.name);
+            if (addr.offset) array_appendf(&cg->code, "+%zu", addr.offset);
             array_appends(&cg->code, "(%rip)");
             break;
-        case TACA_LITERAL: array_appends(&cg->code, addr.literal); break;
-        case TACA_IMM: array_appendf(&cg->code, "$%zu", addr.imm); break;
-        case TACA_ALABEL: cg_mangle_label(cg, &cg->code, addr.alabel); break;
+        case TACA_LITERAL:
+            if (addr.offset) goto offset_unsupported;
+            array_appends(&cg->code, addr.literal);
+            break;
+        case TACA_IMM:
+            if (addr.offset) goto offset_unsupported;
+            array_appendf(&cg->code, "$%zu", addr.imm);
+            break;
+        case TACA_ALABEL:
+            if (addr.offset) goto offset_unsupported;
+            cg_mangle_label(cg, &cg->code, addr.alabel);
+            break;
         case TACA_LLABEL:
             cg_mangle_label(cg, &cg->code, cg->cur_fn_lbl_prefix);
             array_appendf(&cg->code, "_%s", addr.literal);
             break;
-        case TACA_REG: cg_gen_taca_reg(cg, addr.reg, addr.sizing); break;
+        case TACA_REG:
+            if (addr.offset) goto offset_unsupported;
+            cg_gen_taca_reg(cg, addr.reg, addr.sizing);
+            break;
         case TACA_THROUGH_REG:
+            if (addr.offset) array_appendf(&cg->code, "%zu", addr.offset);
             array_push_byte(&cg->code, '(');
             array_appends(&cg->code, s_reg_names[addr.reg]);
             array_push_byte(&cg->code, ')');
             break;
         case TACA_CONST:
             cg_mangle_const(cg, &cg->code, addr.const_idx);
+            if (addr.offset) array_appendf(&cg->code, "+%zu", addr.offset);
             array_appendf(&cg->code, "(%%rip)");
             break;
         case TACA_REF:
-            if (frame->temp_offset + frame->frame_slots[addr.ref] * 8 >= frame->total_frame_size) abort();
-            array_appendf(&cg->code, "%zu(%%rsp)", frame->temp_offset + frame->frame_slots[addr.ref] * 8);
+            if (frame->temp_offset + frame->frame_slots[addr.ref] * 8 + addr.offset >= frame->total_frame_size) abort();
+            array_appendf(&cg->code, "%zu(%%rsp)", addr.offset + frame->temp_offset + frame->frame_slots[addr.ref] * 8);
             break;
         case TACA_PARAM:
-            if (addr.param_offset >= frame->locals_offset) abort();
-            array_appendf(&cg->code, "%zu(%%rsp)", addr.param_offset);
+            if (addr.offset >= frame->locals_offset) abort();
+            array_appendf(&cg->code, "%zu(%%rsp)", addr.offset);
             break;
         case TACA_FRAME:
-            if (frame->temp_offset <= frame->locals_offset + addr.frame_offset) abort();
-            array_appendf(&cg->code, "%zu(%%rsp)", frame->locals_offset + addr.frame_offset);
+            if (frame->temp_offset <= frame->locals_offset + addr.offset) abort();
+            array_appendf(&cg->code, "%zu(%%rsp)", frame->locals_offset + addr.offset);
             break;
-        case TACA_ARG: array_appendf(&cg->code, "%zu(%%rsp)", 8 + frame->total_frame_size + addr.arg_offset); break;
+        case TACA_ARG: array_appendf(&cg->code, "%zu(%%rsp)", 8 + frame->total_frame_size + addr.offset); break;
         default: parser_ferror(NULL, "error: unimplemented TACA: %s\n", taca_to_string(addr.kind)); break;
     }
+    return;
+
+offset_unsupported:
+    parser_ferror(NULL, "error: unimplemented offset TACA: %s\n", taca_to_string(addr.kind));
+    return;
 }
 
 static void cg_gen_taca_offset(struct CodeGen* cg, struct TACAddress addr, int offset, struct ActivationRecord* frame)
 {
-    switch (addr.kind)
-    {
-        case TACA_NAME:
-            cg_mangle_sym(cg, &cg->code, addr.name);
-            array_appendf(&cg->code, "@GOTPCREL+%d(%%rip)", offset);
-            break;
-        case TACA_LNAME:
-            cg_mangle_sym(cg, &cg->code, addr.name);
-            array_appendf(&cg->code, "+%d(%%rip)", offset);
-            break;
-        case TACA_CONST:
-            cg_mangle_const(cg, &cg->code, addr.const_idx);
-            array_appendf(&cg->code, "+%d(%%rip)", offset);
-            break;
-        case TACA_REF:
-            if (frame->temp_offset + frame->frame_slots[addr.ref] * 8 >= frame->total_frame_size) abort();
-            array_appendf(&cg->code, "%zu(%%rsp)", offset + frame->temp_offset + frame->frame_slots[addr.ref] * 8);
-            break;
-        case TACA_PARAM:
-            if (addr.param_offset >= frame->locals_offset) abort();
-            array_appendf(&cg->code, "%zu(%%rsp)", offset + addr.param_offset);
-            break;
-        case TACA_FRAME:
-            if (frame->temp_offset <= frame->locals_offset + addr.frame_offset) abort();
-            array_appendf(&cg->code, "%zu(%%rsp)", offset + frame->locals_offset + addr.frame_offset);
-            break;
-        case TACA_THROUGH_REG: array_appendf(&cg->code, "%d(%s)", offset, s_reg_names[addr.reg]); break;
-        case TACA_ARG:
-            array_appendf(&cg->code, "%zu(%%rsp)", offset + 8 + frame->total_frame_size + addr.arg_offset);
-            break;
-        default: parser_ferror(NULL, "error: unimplemented offset TACA: %s\n", taca_to_string(addr.kind)); break;
-    }
+    addr.offset += offset;
+    cg_gen_taca(cg, addr, frame);
 }
 
 static void cg_gen_inst_a(struct CodeGen* cg, const char* inst, struct TACAddress addr, struct ActivationRecord* frame)
@@ -517,6 +509,7 @@ static void cg_gen_store(struct CodeGen* cg, struct TACAddress addr, int reg, st
             addr.sizing = s_sizing_u[3];
             const int tmp = ar_tmp_reg(frame);
             cg_gen_load(cg, addr, tmp, frame);
+            memset(&addr, 0, sizeof(addr));
             addr.reg = tmp;
             addr.sizing = orig;
         }
@@ -1080,9 +1073,9 @@ int cg_gen_taces(struct CodeGen* cg, const struct TACEntry* taces, size_t n_tace
                 frame_slots[ref] = ffs_pop(&ffs);
             }
         }
-        if (tace->arg1.kind == TACA_PARAM && tace->arg1.param_offset + tace->arg1.sizing.width > max_param_size)
+        if (tace->arg1.kind == TACA_PARAM && tace->arg1.offset + tace->arg1.sizing.width > max_param_size)
         {
-            max_param_size = tace->arg1.param_offset + tace->arg1.sizing.width;
+            max_param_size = tace->arg1.offset + tace->arg1.sizing.width;
         }
     }
 

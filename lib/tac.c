@@ -56,16 +56,17 @@ void debug_taca(Array* arr, const TACAddress* addr)
         array_push_byte(arr, ' ');
         debug_sizing(arr, addr->sizing);
     }
+    if (addr->offset) array_appendf(arr, " %zu", addr->offset);
     switch (addr->kind)
     {
-        case TACA_FRAME: array_appendf(arr, " %d", addr->frame_offset); break;
+        case TACA_FRAME: break;
         case TACA_IMM: array_appendf(arr, " %zu", addr->imm); break;
-        case TACA_ARG: array_appendf(arr, " %zu", addr->arg_offset); break;
+        case TACA_ARG: break;
         case TACA_REG: array_appendf(arr, " %s", register_to_string(addr->reg)); break;
         case TACA_REF: array_appendf(arr, " %zu", addr->ref); break;
         case TACA_ALABEL: array_appendf(arr, " %zu", addr->alabel); break;
         case TACA_LLABEL: array_appendf(arr, " %s", addr->literal); break;
-        case TACA_PARAM: array_appendf(arr, " %zu", addr->param_offset); break;
+        case TACA_PARAM: break;
         case TACA_NAME: array_appendf(arr, " \"%s\"", addr->name ? addr->name : "(null)"); break;
         case TACA_LNAME: array_appendf(arr, " \"%s\"", addr->name ? addr->name : "(null)"); break;
         case TACA_CONST: array_appendf(arr, " %zu", addr->const_idx); break;

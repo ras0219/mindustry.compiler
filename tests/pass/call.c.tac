@@ -14,17 +14,17 @@ TACO_CALL
   TACA_NAME u0 is_addr mi_call
   TACA_IMM i4 1
 TACO_ASSIGN
-  TACA_PARAM u32 is_addr 0
+  TACA_PARAM u32 is_addr
   TACA_FRAME u32 32
 TACO_ASSIGN
   TACA_REG u8 is_addr REG_RDI
-  TACA_FRAME u0 is_addr 0
+  TACA_FRAME u0 is_addr
 TACO_CALL
   TACA_NAME u0 is_addr mm_call
   TACA_IMM i4 1
 TACO_ASSIGN
-  TACA_PARAM u32 is_addr 0
-  TACA_FRAME u32 0
+  TACA_PARAM u32 is_addr
+  TACA_FRAME u32
 TACO_CALL
   TACA_NAME u0 is_addr im_call
   TACA_IMM i4 1

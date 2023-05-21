@@ -117,6 +117,7 @@ typedef struct TACAddress
     enum TACAKind kind;
     uint8_t is_addr : 1;
     Sizing sizing;
+    size_t offset;
     union
     {
         const char* literal;
@@ -125,9 +126,6 @@ typedef struct TACAddress
         size_t reg;
         size_t ref;
         size_t const_idx;
-        size_t arg_offset;
-        size_t frame_offset;
-        size_t param_offset;
         size_t alabel;
     };
 } TACAddress;

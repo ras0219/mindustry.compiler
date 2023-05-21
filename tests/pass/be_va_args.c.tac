@@ -1,5 +1,5 @@
 TACO_ASSIGN
-  TACA_FRAME u8 is_addr 0
+  TACA_FRAME u8 is_addr
   TACA_REG u8 REG_RDI
 TACO_ASSIGN
   TACA_FRAME u8 is_addr 8
@@ -24,13 +24,13 @@ TACO_ASSIGN
   TACA_IMM i4 48
 TACO_ASSIGN
   TACA_FRAME u8 is_addr 56
-  TACA_ARG u0 is_addr 0
+  TACA_ARG u0 is_addr
 TACO_ASSIGN
   TACA_FRAME u8 is_addr 64
-  TACA_FRAME u0 is_addr 0
+  TACA_FRAME u0 is_addr
 TACO_ASSIGN
   TACA_REG u8 is_addr REG_RDI
-  TACA_FRAME u8 0
+  TACA_FRAME u8
 TACO_ASSIGN
   TACA_REG u8 is_addr REG_RSI
   TACA_FRAME u0 is_addr 48
@@ -77,7 +77,7 @@ TACO_ASSIGN
   TACA_FRAME i4 is_addr 72
   TACA_FRAME i4 76
 TACO_ASSIGN
-  TACA_PARAM u8 is_addr 0
+  TACA_PARAM u8 is_addr
   TACA_IMM i4 2
 TACO_ASSIGN
   TACA_REG u8 is_addr REG_RDI

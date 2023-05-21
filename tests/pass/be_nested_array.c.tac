@@ -1,5 +1,5 @@
 TACO_ASSIGN
-  TACA_FRAME u8 is_addr 0
+  TACA_FRAME u8 is_addr
   TACA_LNAME u0 is_addr mode
 TACO_ADD
   TACA_LNAME u0 is_addr mode
