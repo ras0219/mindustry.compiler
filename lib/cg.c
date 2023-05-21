@@ -375,6 +375,264 @@ static void cg_gen_inst_a(struct CodeGen* cg, const char* inst, struct TACAddres
     array_push_byte(&cg->code, '\n');
 }
 
+enum InstKind
+{
+    MOV,
+    LEAQ,
+};
+
+enum InstArgKind
+{
+    IA_U,
+    IA_I,
+    IA_REG,
+    IA_REG_D,
+    IA_RSP,
+    IA_NAME,
+    IA_LNAME,
+    IA_LITERAL,
+    IA_LABEL,
+    IA_CONST,
+};
+
+typedef struct InstArg
+{
+    enum InstArgKind kind;
+    union
+    {
+        struct
+        {
+            unsigned reg;
+            unsigned regw;
+        };
+        size_t u8;
+        long long i8;
+        const char* s;
+        size_t cnst;
+    };
+    union
+    {
+        size_t offset;
+        size_t lbl;
+    };
+} InstArg;
+
+typedef struct Instruction
+{
+    enum InstKind kind;
+    InstArg a1, a2;
+} Instruction;
+
+#define IA_I(x)                                                                                                        \
+    {                                                                                                                  \
+        .kind = IA_I, .i8 = (x)                                                                                        \
+    }
+
+#define IA_U(x)                                                                                                        \
+    {                                                                                                                  \
+        .kind = IA_U, .u8 = (x)                                                                                        \
+    }
+
+#define IA_REG(x)                                                                                                      \
+    {                                                                                                                  \
+        .kind = IA_REG, .reg = (x), .regw = 8,                                                                         \
+    }
+
+#define IA_REG_W(x, w)                                                                                                 \
+    {                                                                                                                  \
+        .kind = IA_REG, .reg = (x), .regw = (w)                                                                        \
+    }
+
+#define IA_REG_D(x, o)                                                                                                 \
+    {                                                                                                                  \
+        .kind = IA_REG_D, .reg = (x), .offset = (o)                                                                    \
+    }
+
+#define IA_RSP(o)                                                                                                      \
+    {                                                                                                                  \
+        .kind = IA_RSP, .offset = (o)                                                                                  \
+    }
+
+#define IA_NAME(x, o)                                                                                                  \
+    {                                                                                                                  \
+        .kind = IA_NAME, .s = (x), .offset = (o)                                                                       \
+    }
+#define IA_LNAME(x, o)                                                                                                 \
+    {                                                                                                                  \
+        .kind = IA_LNAME, .s = (x), .offset = (o)                                                                      \
+    }
+#define IA_LITERAL(x)                                                                                                  \
+    {                                                                                                                  \
+        .kind = IA_LITERAL, .s = (x)                                                                                   \
+    }
+#define IA_LABEL(x, l)                                                                                                 \
+    {                                                                                                                  \
+        .kind = IA_LABEL, .s = (l), .lbl = (x)                                                                         \
+    }
+#define IA_CONST(x, o)                                                                                                 \
+    {                                                                                                                  \
+        .kind = IA_CONST, .cnst = (x), .offset = (o)                                                                   \
+    }
+
+static const char s_op_neumon[][6] = {
+    [MOV] = "mov",
+    [LEAQ] = "leaq",
+};
+
+static void cg_push_instarg(CodeGen* cg, const InstArg* a)
+{
+    switch (a->kind)
+    {
+        case IA_I: array_appendf(&cg->code, "$%zd", a->i8); break;
+        case IA_U: array_appendf(&cg->code, "$%zu", a->u8); break;
+        case IA_REG:;
+            const char* const* names = s_reg_names;
+            if (a->regw == 4)
+                names = s_reg_names_4;
+            else if (a->regw == 2)
+                names = s_reg_names_2;
+            else if (a->regw == 1)
+                names = s_reg_names_1;
+            array_appendf(&cg->code, "%s", names[a->reg]);
+            break;
+        case IA_REG_D:
+            if (a->offset) array_appendf(&cg->code, "%zu", a->offset);
+            array_appendf(&cg->code, "(%s)", s_reg_names[a->reg]);
+            break;
+        case IA_RSP:
+            array_appendf(&cg->code, "%zu", a->offset);
+            array_appends(&cg->code, "(%rsp)");
+            break;
+        case IA_LITERAL: array_appendf(&cg->code, "%s", a->s); break;
+        case IA_NAME:
+            cg_mangle_sym(cg, &cg->code, a->s);
+            array_appends(&cg->code, "@GOTPCREL");
+            if (a->offset) array_appendf(&cg->code, "+%zu", a->offset);
+            array_appends(&cg->code, "(%rip)");
+            break;
+        case IA_LNAME:
+            cg_mangle_sym(cg, &cg->code, a->s);
+            if (a->offset) array_appendf(&cg->code, "+%zu", a->offset);
+            array_appends(&cg->code, "(%rip)");
+            break;
+        case IA_LABEL:
+            cg_mangle_label(cg, &cg->code, a->lbl);
+            if (a->s) array_appendf(&cg->code, "_%s", a->s);
+            break;
+        case IA_CONST:
+            cg_mangle_const(cg, &cg->code, a->cnst);
+            if (a->offset) array_appendf(&cg->code, "+%zu", a->offset);
+            array_appends(&cg->code, "(%rip)");
+            break;
+        default: abort();
+    }
+}
+
+static InstArg taca_to_ia(const CodeGen* cg, const TACAddress addr, const ActivationRecord* frame)
+{
+    switch (addr.kind)
+    {
+        case TACA_NAME:
+        {
+            InstArg a = IA_NAME(addr.name, addr.offset);
+            return a;
+        }
+        case TACA_LNAME:
+        {
+            InstArg a = IA_LNAME(addr.name, addr.offset);
+            return a;
+        }
+        case TACA_LITERAL:
+        {
+            if (addr.offset) goto offset_unsupported;
+            InstArg a = IA_LITERAL(addr.name);
+            return a;
+        }
+        case TACA_IMM:
+            if (addr.offset) goto offset_unsupported;
+            if (addr.sizing.is_signed)
+            {
+                InstArg a = IA_I((long long)addr.imm);
+                return a;
+            }
+            else
+            {
+                InstArg a = IA_U(addr.imm);
+                return a;
+            }
+        case TACA_ALABEL:
+        {
+            if (addr.offset) goto offset_unsupported;
+            InstArg a = IA_LABEL(addr.alabel, NULL);
+            return a;
+        }
+        case TACA_LLABEL:
+        {
+            if (addr.offset) goto offset_unsupported;
+            InstArg a = IA_LABEL(cg->cur_fn_lbl_prefix, addr.literal);
+            return a;
+        }
+        case TACA_REG:
+            if (addr.offset) goto offset_unsupported;
+            InstArg a = IA_REG_W(addr.reg, addr.sizing.width);
+            return a;
+        case TACA_THROUGH_REG:
+        {
+            InstArg a = IA_REG_D(addr.reg, addr.offset);
+            return a;
+        }
+        case TACA_CONST:
+        {
+            InstArg a = IA_CONST(addr.const_idx, addr.offset);
+            return a;
+        }
+        case TACA_REF:
+        {
+            if (frame->temp_offset + frame->frame_slots[addr.ref] * 8 + addr.offset >= frame->total_frame_size) abort();
+            InstArg a = IA_RSP(addr.offset + frame->temp_offset + frame->frame_slots[addr.ref] * 8);
+            return a;
+        }
+        case TACA_PARAM:
+        {
+            if (addr.offset >= frame->locals_offset) abort();
+            InstArg a = IA_RSP(addr.offset);
+            return a;
+        }
+        case TACA_FRAME:
+        {
+            if (frame->temp_offset <= frame->locals_offset + addr.offset) abort();
+            InstArg a = IA_RSP(addr.offset + frame->locals_offset);
+            return a;
+        }
+        case TACA_ARG:
+        {
+            InstArg a = IA_RSP(addr.offset + 8 + frame->total_frame_size);
+            return a;
+        }
+        default: parser_ferror(NULL, "error: unimplemented TACA: %s\n", taca_to_string(addr.kind)); break;
+    }
+
+offset_unsupported:
+    parser_ferror(NULL, "error: unimplemented offset TACA: %s\n", taca_to_string(addr.kind));
+    InstArg a = {0};
+    return a;
+}
+
+static void cg_push_insts(CodeGen* cg, const Instruction* inst, size_t n)
+{
+    for (size_t i = 0; i < n; ++i)
+    {
+        array_appends(&cg->code, "    ");
+        array_appends(&cg->code, s_op_neumon[inst[i].kind]);
+        array_push_byte(&cg->code, ' ');
+        cg_push_instarg(cg, &inst[i].a1);
+        array_appends(&cg->code, ", ");
+        cg_push_instarg(cg, &inst[i].a2);
+        array_push_byte(&cg->code, '\n');
+    }
+}
+static void cg_push_inst(CodeGen* cg, Instruction inst) { return cg_push_insts(cg, &inst, 1); }
+
 static void cg_gen_load(struct CodeGen* cg, struct TACAddress addr, int reg, struct ActivationRecord* frame)
 {
     if (addr.kind == TACA_REG && !addr.is_addr && addr.reg == reg) return;
@@ -382,16 +640,21 @@ static void cg_gen_load(struct CodeGen* cg, struct TACAddress addr, int reg, str
     if (addr.kind == TACA_IMM)
     {
         if (addr.sizing.is_signed)
-            array_appendf(&cg->code, "    mov $%zd, %s\n", (long long)addr.imm, s_reg_names[reg]);
+        {
+            Instruction i = {.kind = MOV, .a1 = IA_I((long long)addr.imm), .a2 = IA_REG(reg)};
+            cg_push_inst(cg, i);
+        }
         else
-            array_appendf(&cg->code, "    mov $%zu, %s\n", addr.imm, s_reg_names[reg]);
+        {
+            Instruction i = {.kind = MOV, .a1 = IA_U(addr.imm), .a2 = IA_REG(reg)};
+            cg_push_inst(cg, i);
+        }
         return;
     }
     if (addr.is_addr)
     {
-        array_appends(&cg->code, "    leaq ");
-        cg_gen_taca(cg, addr, frame);
-        array_appendf(&cg->code, ", %s\n", s_reg_names[reg]);
+        Instruction i = {.kind = LEAQ, .a1 = taca_to_ia(cg, addr, frame), .a2 = IA_REG(reg)};
+        cg_push_inst(cg, i);
         return;
     }
 

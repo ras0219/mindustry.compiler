@@ -50,7 +50,6 @@ void debug_taca(Array* arr, const TACAddress* addr)
 {
     array_push_byte(arr, '(');
     array_appends(arr, taca_to_string(addr->kind));
-    if (addr->is_addr) array_appends(arr, " is_addr");
     if (addr->sizing.width != 0)
     {
         array_push_byte(arr, ' ');
