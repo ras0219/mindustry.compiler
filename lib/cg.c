@@ -378,7 +378,14 @@ static void cg_gen_inst_a(struct CodeGen* cg, const char* inst, struct TACAddres
 enum InstKind
 {
     MOV,
+    MOVSB,
+    MOVZB,
+    MOVSW,
+    MOVZW,
+    MOVSL,
     LEAQ,
+    SHL,
+    INST_OR,
 };
 
 enum InstArgKind
@@ -476,7 +483,14 @@ typedef struct Instruction
 
 static const char s_op_neumon[][6] = {
     [MOV] = "mov",
+    [MOVSB] = "movsb",
+    [MOVZB] = "movzb",
+    [MOVSW] = "movsw",
+    [MOVZW] = "movzw",
+    [MOVSL] = "movsl",
     [LEAQ] = "leaq",
+    [SHL] = "shl",
+    [INST_OR] = "or",
 };
 
 static void cg_push_instarg(CodeGen* cg, const InstArg* a)
@@ -639,16 +653,18 @@ static void cg_gen_load(struct CodeGen* cg, struct TACAddress addr, int reg, str
 
     if (addr.kind == TACA_IMM)
     {
+        Instruction i = {.kind = MOV, .a2 = IA_REG(reg)};
         if (addr.sizing.is_signed)
         {
-            Instruction i = {.kind = MOV, .a1 = IA_I((long long)addr.imm), .a2 = IA_REG(reg)};
-            cg_push_inst(cg, i);
+            InstArg a = IA_I((long long)addr.imm);
+            i.a1 = a;
         }
         else
         {
-            Instruction i = {.kind = MOV, .a1 = IA_U(addr.imm), .a2 = IA_REG(reg)};
-            cg_push_inst(cg, i);
+            InstArg a = IA_U(addr.imm);
+            i.a1 = a;
         }
+        cg_push_inst(cg, i);
         return;
     }
     if (addr.is_addr)
@@ -658,75 +674,67 @@ static void cg_gen_load(struct CodeGen* cg, struct TACAddress addr, int reg, str
         return;
     }
 
+    Instruction i = {.a1 = taca_to_ia(cg, addr, frame), .a2 = IA_REG(reg)};
+
     size_t offset = 0;
-    switch (addr.sizing.width)
+    if (addr.sizing.width == 8)
     {
-        case 1:
-            array_appendf(&cg->code, "    mov%cb ", addr.sizing.is_signed ? 's' : 'z');
-            offset += 1;
-            break;
-        case 2:
-        case 3:
-            array_appendf(&cg->code, "    mov%cw ", addr.sizing.is_signed ? 's' : 'z');
-            offset += 2;
-            break;
-        case 4:
-        case 5:
-        case 6:
-        case 7:
-            offset += 4;
-            if (addr.sizing.is_signed)
-            {
-                array_appends(&cg->code, "    movsl ");
-                break;
-            }
-            else
-            {
-                array_appends(&cg->code, "    mov ");
-                cg_gen_taca(cg, addr, frame);
-                array_appendf(&cg->code, ", %s\n", s_reg_names_4[reg]);
-                goto skip;
-            }
-        case 8:
-            array_appends(&cg->code, "    mov ");
-            offset += 8;
-            break;
-        default: abort();
+        i.kind = MOV;
+        offset += 8;
     }
-    cg_gen_taca(cg, addr, frame);
-    array_appendf(&cg->code, ", %s\n", s_reg_names[reg]);
-skip:
+    else if (addr.sizing.width >= 4)
+    {
+        if (addr.sizing.is_signed)
+        {
+            i.kind = MOVSL;
+        }
+        else
+        {
+            i.kind = MOV;
+            InstArg a2 = IA_REG_W(reg, 4);
+            i.a2 = a2;
+        }
+        offset += 4;
+    }
+    else if (addr.sizing.width >= 2)
+    {
+        i.kind = addr.sizing.is_signed ? MOVSW : MOVZW;
+        offset += 2;
+    }
+    else if (addr.sizing.width >= 1)
+    {
+        i.kind = addr.sizing.is_signed ? MOVSB : MOVZB;
+        offset += 1;
+    }
+    else
+        abort();
+    cg_push_inst(cg, i);
+
     if (addr.sizing.width - offset >= 2)
     {
+        TACAddress addr2 = addr;
+        addr2.offset += offset;
         const int tmp = ar_tmp_reg(frame);
-        array_appends(&cg->code, "    movzw ");
-        cg_gen_taca_offset(cg, addr, offset, frame);
-        array_appendf(&cg->code,
-                      ", %s\n"
-                      "    shl $%d, %s\n"
-                      "    or %s, %s\n",
-                      s_reg_names[tmp],
-                      offset * 8,
-                      s_reg_names[tmp],
-                      s_reg_names[tmp],
-                      s_reg_names[reg]);
+        Instruction i[3] = {
+            {MOVZW, taca_to_ia(cg, addr2, frame), IA_REG(tmp)},
+            {SHL, IA_U(offset * 8), IA_REG(tmp)},
+            {INST_OR, IA_REG(tmp), IA_REG(reg)},
+        };
+        cg_push_insts(cg, i, 3);
         ar_reg_free(frame, tmp);
         offset += 2;
     }
     if (addr.sizing.width - offset >= 1)
     {
+        TACAddress addr2 = addr;
+        addr2.offset += offset;
         const int tmp = ar_tmp_reg(frame);
-        array_appends(&cg->code, "    movzb ");
-        cg_gen_taca_offset(cg, addr, offset, frame);
-        array_appendf(&cg->code,
-                      ", %s\n"
-                      "    shl $%d, %s\n"
-                      "    or %s, %s\n",
-                      s_reg_names[tmp],
-                      offset * 8,
-                      s_reg_names[tmp],
-                      s_reg_names[tmp],
-                      s_reg_names[reg]);
+        Instruction i[3] = {
+            {MOVZB, taca_to_ia(cg, addr2, frame), IA_REG(tmp)},
+            {SHL, IA_U(offset * 8), IA_REG(tmp)},
+            {INST_OR, IA_REG(tmp), IA_REG(reg)},
+        };
+        cg_push_insts(cg, i, 3);
         ar_reg_free(frame, tmp);
         offset += 1;
     }
