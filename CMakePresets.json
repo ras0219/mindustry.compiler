@@ -1,0 +1,23 @@
+{
+    "version": 5,
+    "configurePresets": [
+        {
+            "name": "macos",
+            "binaryDir": "out",
+            "generator": "Ninja",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "macos",
+            "configurePreset": "macos",
+            "targets": [
+                "test",
+                "main"
+            ]
+        }
+    ]
+}
