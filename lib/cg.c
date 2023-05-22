@@ -362,12 +362,6 @@ offset_unsupported:
     return;
 }
 
-static void cg_gen_taca_offset(struct CodeGen* cg, struct TACAddress addr, int offset, struct ActivationRecord* frame)
-{
-    addr.offset += offset;
-    cg_gen_taca(cg, addr, frame);
-}
-
 static void cg_gen_inst_a(struct CodeGen* cg, const char* inst, struct TACAddress addr, struct ActivationRecord* frame)
 {
     array_appendf(&cg->code, "    %s ", inst);
@@ -378,18 +372,33 @@ static void cg_gen_inst_a(struct CodeGen* cg, const char* inst, struct TACAddres
 enum InstKind
 {
     MOV,
+    MOVQ,
+    MOVL,
+    MOVW,
+    MOVB,
     MOVSB,
     MOVZB,
     MOVSW,
     MOVZW,
     MOVSL,
+    MOVSD,
+    MOVSQ,
+    MOVSX,
+    MOVZX,
+    REP_MOVSB,
+    REP_STOSB,
     LEAQ,
     SHL,
+    SHR,
+    CLD,
     INST_OR,
+    INST_ADD,
+    INST_XOR,
 };
 
 enum InstArgKind
 {
+    IA_NONE,
     IA_U,
     IA_I,
     IA_REG,
@@ -445,6 +454,12 @@ typedef struct Instruction
         .kind = IA_REG, .reg = (x), .regw = 8,                                                                         \
     }
 
+// static __forceinline InstArg ia_reg(unsigned reg)
+// {
+//     InstArg x = IA_REG(reg);
+//     return x;
+// }
+
 #define IA_REG_W(x, w)                                                                                                 \
     {                                                                                                                  \
         .kind = IA_REG, .reg = (x), .regw = (w)                                                                        \
@@ -454,6 +469,12 @@ typedef struct Instruction
     {                                                                                                                  \
         .kind = IA_REG_D, .reg = (x), .offset = (o)                                                                    \
     }
+
+static __forceinline InstArg ia_reg_d(unsigned reg, size_t offset)
+{
+    InstArg x = IA_REG_D(reg, offset);
+    return x;
+}
 
 #define IA_RSP(o)                                                                                                      \
     {                                                                                                                  \
@@ -481,16 +502,30 @@ typedef struct Instruction
         .kind = IA_CONST, .cnst = (x), .offset = (o)                                                                   \
     }
 
-static const char s_op_neumon[][6] = {
+static const char s_op_neumon[][10] = {
     [MOV] = "mov",
+    [MOVQ] = "movq",
+    [MOVL] = "movl",
+    [MOVW] = "movw",
+    [MOVB] = "movb",
     [MOVSB] = "movsb",
     [MOVZB] = "movzb",
     [MOVSW] = "movsw",
     [MOVZW] = "movzw",
     [MOVSL] = "movsl",
+    [MOVSD] = "movsd",
+    [MOVSQ] = "movsq",
+    [MOVSX] = "movsx",
+    [MOVZX] = "movzx",
+    [REP_MOVSB] = "rep movsb",
+    [REP_STOSB] = "rep stosb",
     [LEAQ] = "leaq",
     [SHL] = "shl",
+    [SHR] = "shr",
+    [CLD] = "cld",
     [INST_OR] = "or",
+    [INST_ADD] = "add",
+    [INST_XOR] = "xor",
 };
 
 static void cg_push_instarg(CodeGen* cg, const InstArg* a)
@@ -638,10 +673,16 @@ static void cg_push_insts(CodeGen* cg, const Instruction* inst, size_t n)
     {
         array_appends(&cg->code, "    ");
         array_appends(&cg->code, s_op_neumon[inst[i].kind]);
-        array_push_byte(&cg->code, ' ');
-        cg_push_instarg(cg, &inst[i].a1);
-        array_appends(&cg->code, ", ");
-        cg_push_instarg(cg, &inst[i].a2);
+        if (inst[i].a1.kind != IA_NONE)
+        {
+            array_push_byte(&cg->code, ' ');
+            cg_push_instarg(cg, &inst[i].a1);
+            if (inst[i].a2.kind != IA_NONE)
+            {
+                array_appends(&cg->code, ", ");
+                cg_push_instarg(cg, &inst[i].a2);
+            }
+        }
         array_push_byte(&cg->code, '\n');
     }
 }
@@ -763,13 +804,6 @@ static void ffs_push(struct FreeFrameSlots* ffs, unsigned char s)
     ffs->freestack[i] = s - i;
 }
 
-static const Sizing s_sizing_u[] = {
-    {0, 1},
-    {0, 2},
-    {0, 4},
-    {0, 8},
-};
-
 static void cg_gen_store(struct CodeGen* cg, struct TACAddress addr, int reg, struct ActivationRecord* frame)
 {
     if (!addr.is_addr)
@@ -777,7 +811,7 @@ static void cg_gen_store(struct CodeGen* cg, struct TACAddress addr, int reg, st
         if (addr.kind != TACA_REG)
         {
             Sizing orig = addr.sizing;
-            addr.sizing = s_sizing_u[3];
+            addr.sizing = s_sizing_ptr;
             const int tmp = ar_tmp_reg(frame);
             cg_gen_load(cg, addr, tmp, frame);
             memset(&addr, 0, sizeof(addr));
@@ -788,41 +822,45 @@ static void cg_gen_store(struct CodeGen* cg, struct TACAddress addr, int reg, st
         addr.is_addr = 1;
     }
 
-    int i = 0;
+    size_t offset = 1;
     if (addr.sizing.width == 8)
-        i = 3;
+        offset = 8;
     else if (addr.sizing.width >= 4)
-        i = 2;
+        offset = 4;
     else if (addr.sizing.width >= 2)
-        i = 1;
-    else
-        i = 0;
-    size_t offset = s_sizing_u[i].width;
-    array_appends(&cg->code, "    mov ");
-    cg_gen_taca_reg(cg, reg, s_sizing_u[i]);
-    array_appends(&cg->code, ", ");
-    cg_gen_taca(cg, addr, frame);
-    array_push_byte(&cg->code, '\n');
+        offset = 2;
+    Instruction i1 = {MOV, IA_REG_W(reg, offset), taca_to_ia(cg, addr, frame)};
+    cg_push_inst(cg, i1);
     if (addr.sizing.width - offset > 0)
     {
         const int tmp = ar_tmp_reg(frame);
-        array_appends(&cg->code, "    mov ");
-        cg_gen_taca_reg(cg, reg, s_sizing_u[3]);
-        array_appendf(&cg->code, ", %s\n", s_reg_names[tmp]);
-        array_appendf(&cg->code, "    shr $%d, %s\n", offset * 8, s_reg_names[tmp]);
+        Instruction i2[] = {
+            {MOV, IA_REG(reg), IA_REG(tmp)},
+            {SHR, IA_U(offset * 8), IA_REG(tmp)},
+        };
+        cg_push_insts(cg, i2, 2);
+
         if (addr.sizing.width - offset >= 2)
         {
-            array_appendf(&cg->code, "    mov %s, ", s_reg_names_2[tmp]);
-            cg_gen_taca_offset(cg, addr, offset, frame);
-            array_push_byte(&cg->code, '\n');
+            TACAddress addr_offset = addr;
+            addr_offset.offset += offset;
+
+            Instruction i4 = {MOV, IA_REG_W(tmp, 2), taca_to_ia(cg, addr_offset, frame)};
+            cg_push_inst(cg, i4);
             offset += 2;
-            if (addr.sizing.width - offset > 0) array_appendf(&cg->code, "    shr $16, %s\n", s_reg_names[tmp]);
+            if (addr.sizing.width - offset > 0)
+            {
+                Instruction i5 = {SHR, IA_U(16), IA_REG(tmp)};
+                cg_push_inst(cg, i5);
+            }
         }
         if (addr.sizing.width - offset > 0)
         {
-            array_appendf(&cg->code, "    mov %s, ", s_reg_names_1[tmp]);
-            cg_gen_taca_offset(cg, addr, offset, frame);
-            array_push_byte(&cg->code, '\n');
+            TACAddress addr_offset = addr;
+            addr_offset.offset += offset;
+
+            Instruction i4 = {MOV, IA_REG_W(tmp, 1), taca_to_ia(cg, addr_offset, frame)};
+            cg_push_inst(cg, i4);
         }
         ar_reg_free(frame, tmp);
     }
@@ -846,19 +884,28 @@ static void cg_add(struct CodeGen* cg, size_t i, const struct TACEntry* tace, st
     if (tace->arg1.kind == TACA_IMM && tace->arg1.imm < INT32_MAX)
     {
         cg_gen_load(cg, tace->arg2, t, frame);
-        if (tace->arg1.imm != 0) array_appendf(&cg->code, "    add $%zu, %s\n", tace->arg1.imm, s_reg_names[t]);
+        if (tace->arg1.imm != 0)
+        {
+            Instruction i = {INST_ADD, IA_U(tace->arg1.imm), IA_REG(t)};
+            cg_push_inst(cg, i);
+        }
     }
     else if (tace->arg2.kind == TACA_IMM && tace->arg2.imm < INT32_MAX)
     {
         cg_gen_load(cg, tace->arg1, t, frame);
-        if (tace->arg2.imm != 0) array_appendf(&cg->code, "    add $%zu, %s\n", tace->arg2.imm, s_reg_names[t]);
+        if (tace->arg2.imm != 0)
+        {
+            Instruction i = {INST_ADD, IA_U(tace->arg2.imm), IA_REG(t)};
+            cg_push_inst(cg, i);
+        }
     }
     else
     {
         const int t2 = ar_tmp_reg(frame);
         cg_gen_load(cg, tace->arg1, t, frame);
         cg_gen_load(cg, tace->arg2, t2, frame);
-        array_appendf(&cg->code, "    add %s, %s\n", s_reg_names[t2], s_reg_names[t]);
+        Instruction i = {INST_ADD, IA_REG(t2), IA_REG(t)};
+        cg_push_inst(cg, i);
     }
     cg_gen_store_frame(cg, i, t, frame);
 }
@@ -876,33 +923,41 @@ static int cg_memcpy(
         const int t = ar_tmp_reg(frame);
         cg_gen_load(cg, arg2, t, frame);
         cg_gen_store(cg, arg1, t, frame);
+        ar_reg_free(frame, t);
         goto fail;
     }
     ar_reg_use(frame, REG_RSI);
     ar_reg_use(frame, REG_RDI);
     cg_gen_load(cg, arg2, REG_RSI, frame);
     cg_gen_load(cg, arg1, REG_RDI, frame);
+    Instruction i = {0};
     if (bytes == 8)
     {
-        array_appendf(&cg->code, "    movsq\n");
+        i.kind = MOVSQ;
     }
     else if (bytes == 4)
     {
-        array_appendf(&cg->code, "    movsd\n");
+        i.kind = MOVSD;
     }
     else if (bytes == 2)
     {
-        array_appendf(&cg->code, "    movsw\n");
+        i.kind = MOVSW;
     }
     else if (bytes == 1)
     {
-        array_appendf(&cg->code, "    movsb\n");
+        i.kind = MOVSB;
     }
     else
     {
         ar_reg_use(frame, REG_RCX);
-        array_appendf(&cg->code, "    mov $%zu, %%rcx\n    cld\n    rep movsb\n", bytes);
+        Instruction i2[] = {
+            {MOV, IA_U(bytes), IA_REG(REG_RCX)},
+            {CLD},
+        };
+        cg_push_insts(cg, i2, 2);
+        i.kind = REP_MOVSB;
     }
+    cg_push_inst(cg, i);
 fail:
     return rc;
 }
@@ -911,26 +966,24 @@ static void cg_extend_reg(struct CodeGen* cg, int src_reg, Sizing src, int dst_r
 {
     if (src.width < dst.width)
     {
-        if (src.is_signed)
-            array_appends(&cg->code, "    movsx ");
-        else
-            array_appends(&cg->code, "    movzx ");
-        cg_gen_taca_reg(cg, src_reg, src);
-        array_appends(&cg->code, ", ");
-        cg_gen_taca_reg(cg, dst_reg, dst);
-        array_push_byte(&cg->code, '\n');
+        Instruction i = {
+            src.is_signed ? MOVSX : MOVZX,
+            IA_REG_W(src_reg, src.width),
+            IA_REG_W(dst_reg, dst.width),
+        };
+        cg_push_inst(cg, i);
     }
 }
 
-static char sizing_suffix(int width)
+static char mov_inst(int width)
 {
     switch (width)
     {
-        case 8: return 'q';
-        case 4: return 'l';
-        case 2: return 'w';
-        case 1: return 'b';
-        default: return '\0';
+        case 8: return MOVQ;
+        case 4: return MOVL;
+        case 2: return MOVW;
+        case 1: return MOVB;
+        default: abort();
     }
 }
 
@@ -945,33 +998,16 @@ static void cg_assign(struct CodeGen* cg,
     {
         cg_gen_load(cg, arg2, arg1.reg, frame);
     }
-    else if (arg2.kind == TACA_REG)
-    {
-        if (arg2.is_addr) abort();
-        if (arg1.sizing.width > arg2.sizing.width)
-        {
-            const int t = ar_tmp_reg(frame);
-            ar_reg_use(frame, t);
-            cg_extend_reg(cg, arg2.reg, arg2.sizing, t, arg1.sizing);
-            cg_gen_store(cg, arg1, t, frame);
-        }
-        else
-        {
-            cg_gen_store(cg, arg1, arg2.reg, frame);
-        }
-    }
     else if (arg2.kind == TACA_IMM && (arg2.imm <= INT32_MAX || arg2.imm >= (size_t)INT32_MIN))
     {
         const Sizing bytes = arg1.sizing;
         arg1.sizing.width = 8;
-        char ch = sizing_suffix(bytes.width);
-        if (ch)
+        if (is_suffix_size(bytes.width))
         {
+            InstArg a1;
             if (arg1.is_addr)
             {
-                array_appendf(&cg->code, "    mov%c $%d, ", sizing_suffix(bytes.width), (int)arg2.imm);
-                cg_gen_taca(cg, arg1, frame);
-                array_appends(&cg->code, "\n");
+                a1 = taca_to_ia(cg, arg1, frame);
             }
             else
             {
@@ -983,28 +1019,49 @@ static void cg_assign(struct CodeGen* cg,
                     ar_reg_use(frame, REG_RDI);
                     cg_gen_load(cg, arg1, REG_RDI, frame);
                 }
-                array_appendf(
-                    &cg->code, "    mov%c $%d, (%s)\n", sizing_suffix(bytes.width), (int)arg2.imm, s_reg_names[reg]);
+                a1 = ia_reg_d(reg, 0);
             }
+            Instruction i = {mov_inst(bytes.width), IA_I((long long)arg2.imm), a1};
+            cg_push_inst(cg, i);
         }
         else
         {
-            // Storing immediates of non-power-of-two size is not implemented
+            // Storing nonzero immediates of non-power-of-two size is not implemented
             if (arg2.imm != 0) abort();
             ar_reg_use(frame, REG_RDI);
             cg_gen_load(cg, arg1, REG_RDI, frame);
             ar_reg_use(frame, REG_RCX);
-            array_appendf(&cg->code, "    mov $%zu, %%rcx\n", bytes.width);
-            array_appends(&cg->code,
-                          "    xor %rax, %rax\n"
-                          "    rep stosb\n");
+            ar_reg_use(frame, REG_RAX);
+            Instruction i[] = {
+                {MOV, IA_U(bytes.width), IA_REG(REG_RCX)},
+                {INST_XOR, IA_REG(REG_RAX), IA_REG(REG_RAX)},
+                {REP_STOSB},
+            };
+            cg_push_insts(cg, i, 3);
         }
     }
-    else if (arg2.is_addr || is_suffix_size(arg1.sizing.width))
+    else if (arg2.kind == TACA_REG || arg2.is_addr || is_suffix_size(arg1.sizing.width))
     {
-        int reg = ar_tmp_reg(frame);
-        cg_gen_load(cg, arg2, reg, frame);
-        cg_gen_store(cg, arg1, reg, frame);
+        int t;
+        if (arg2.kind == TACA_REG && arg1.sizing.width <= arg2.sizing.width)
+        {
+            t = arg2.reg;
+        }
+        else
+        {
+            t = ar_tmp_reg(frame);
+            if (arg2.is_addr || is_suffix_size(arg1.sizing.width))
+            {
+                cg_gen_load(cg, arg2, t, frame);
+            }
+            else
+            {
+                // no test hits this, abort to find a test case
+                abort();
+                cg_extend_reg(cg, arg2.reg, arg2.sizing, t, arg1.sizing);
+            }
+        }
+        cg_gen_store(cg, arg1, t, frame);
     }
     else
     {

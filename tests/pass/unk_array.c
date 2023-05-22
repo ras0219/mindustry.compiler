@@ -5,7 +5,7 @@ void foo()
     {
         int x, y;
     } points5[] = {[3] = 1, 2, 3};
-    char txt7[] = {"hello"};
+    char txt7[] = {"hello1"};
     static const char mode[][5] = {"EPRT", "PORT"};
     struct Foo
     {
