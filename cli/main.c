@@ -348,6 +348,7 @@ static int parse_arguments(int argc, const char* const* argv, struct Arguments* 
 
 #ifdef __APPLE__
     strlist_appendz(&out->inc, "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include");
+    strlist_appendz(&out->inc, "/Library/Developer/CommandLineTools/usr/lib/clang/14.0.0/include");
     strlist_appendz(&out->inc, "/Library/Developer/CommandLineTools/usr/lib/clang/13.0.0/include");
     strlist_appendz(&out->inc, "/Library/Developer/CommandLineTools/usr/lib/clang/12.0.0/include");
 #else

@@ -384,7 +384,9 @@ enum InstKind
     REP_STOSB,
     LEAQ,
     SHL,
+    SHLQ,
     SHR,
+    SHRQ,
     CLD,
     INST_OR,
     INST_ORQ,
@@ -542,7 +544,9 @@ static const char s_op_neumon[][10] = {
     [REP_STOSB] = "rep stosb",
     [LEAQ] = "leaq",
     [SHL] = "shl",
+    [SHLQ] = "shlq",
     [SHR] = "shr",
+    [SHRQ] = "shrq",
     [CLD] = "cld",
     [INST_ADD] = "add",
     [INST_ADDQ] = "addq",
@@ -935,6 +939,19 @@ static int is_i32_imm(const TACAddress* a)
 
 static void cg_add(struct CodeGen* cg, size_t i, const struct TACEntry* tace, struct ActivationRecord* frame)
 {
+    // if (tace->arg2.kind == TACA_REF && frame->frame_slots[tace->arg2.ref] == frame->frame_slots[i])
+    // {
+    //     if (is_i32_imm(&tace->arg1))
+    //     {
+    //         if (tace->arg1.imm != 0)
+    //         {
+    //             Instruction i = {INST_ADDQ, IA_I(tace->arg1.imm), taca_to_ia(cg, tace->arg2, frame)};
+    //             cg_push_inst(cg, i);
+    //         }
+    //     }
+    //     return;
+    // }
+
     const int t = ar_tmp_reg(frame);
     if (is_i32_imm(&tace->arg1))
     {
@@ -1257,16 +1274,22 @@ static void cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t
         case TACO_BAND: instk = INST_ANDQ; goto simple_binary;
         case TACO_BOR: instk = INST_ORQ; goto simple_binary;
         case TACO_BXOR: instk = INST_XORQ; goto simple_binary;
-        case TACO_SHL: instk = SHL; goto shift;
+        case TACO_SHL: instk = SHLQ; goto shift;
         case TACO_SHR:
-            instk = SHR;
+            instk = SHRQ;
         shift:
             ar_reg_use(frame, REG_RAX);
-            ar_reg_use(frame, REG_RCX);
             cg_gen_load(cg, tace.arg1, REG_RAX, frame);
-            cg_gen_load(cg, tace.arg2, REG_RCX, frame);
+            if (is_i32_imm(&tace.arg2))
             {
-                Instruction j = {instk, IA_REG_W(REG_RCX, 2), IA_REG(REG_RAX)};
+                Instruction j = {instk == SHLQ ? SHL : SHR, IA_I(tace.arg2.imm), IA_REG(REG_RAX)};
+                cg_push_inst(cg, j);
+            }
+            else
+            {
+                ar_reg_use(frame, REG_RCX);
+                cg_gen_load(cg, tace.arg2, REG_RCX, frame);
+                Instruction j = {instk, IA_REG_W(REG_RCX, 1), IA_REG(REG_RAX)};
                 cg_push_inst(cg, j);
             }
             cg_gen_store_frame(cg, i, REG_RAX, frame);
