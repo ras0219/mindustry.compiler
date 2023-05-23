@@ -5,10 +5,10 @@ _f:
     movb $0, %al
     callq *_g(%rip)
     movb $0, %al
-    callq _h
-    movq _i@GOTPCREL(%rip), %r10
+    callq _h@PLT
+    movq _i@GOTPCREL(%rip), %r11
     movb $0, %al
-    callq *(%r10)
+    callq *(%r11)
     leaq _f(%rip), %r11
     mov %r11, _g(%rip)
     mov _g(%rip), %r11

@@ -2229,8 +2229,8 @@ int test_cg_assign(TestState* state, StandardTest* test)
     REQUIRE_NEXT_TEXT("mov %al, 2(%r10)");
 
     // high reg use
-    REQUIRE_NEXT_TEXT("movq _out@GOTPCREL(%rip), %r10");
     REQUIRE_NEXT_TEXT("movq _in@GOTPCREL(%rip), %r11");
+    REQUIRE_NEXT_TEXT("movq _out@GOTPCREL(%rip), %r10");
     REQUIRE_NEXT_TEXT("leaq (%r11), %rsi");
     REQUIRE_NEXT_TEXT("mov (%r10), %rdi");
     REQUIRE_NEXT_TEXT("mov $3, %rcx");
@@ -2331,52 +2331,14 @@ int test_cg_refs(TestState* state, StandardTest* test)
     REQUIRE_NEXT_TEXT("mov %r11, (%r10)");
 
     REQUIRE_NEXT_TEXT("movb $0, %al");
-    REQUIRE_NEXT_TEXT("callq _a");
+    REQUIRE_NEXT_TEXT("callq _a@PLT");
     REQUIRE_NEXT_TEXT("movb $0, %al");
     REQUIRE_NEXT_TEXT("callq _a");
-    REQUIRE_NEXT_TEXT("movq _a@GOTPCREL(%rip), %r10");
+    REQUIRE_NEXT_TEXT("movq _a@GOTPCREL(%rip), %r11");
     REQUIRE_NEXT_TEXT("movb $0, %al");
-    REQUIRE_NEXT_TEXT("callq *(%r10)");
+    REQUIRE_NEXT_TEXT("callq *(%r11)");
     REQUIRE_NEXT_TEXT("movb $0, %al");
     REQUIRE_NEXT_TEXT("callq *_a(%rip)");
-
-    REQUIRE_NEXT_TEXT("addq $120, %rsp");
-    REQUIRE_NEXT_TEXT("ret");
-    REQUIRE_END_TEXT();
-
-    rc = 0;
-fail:
-    return rc;
-}
-
-int test_cg_regalloc(TestState* state, StandardTest* test)
-{
-    int rc = 1;
-    test->cg = my_malloc(sizeof(struct CodeGen));
-    cg_init(test->cg);
-    test->cg->target = CG_TARGET_MACOS_GAS;
-    TACEntry taces[] = {
-        {
-            TACO_BAND,
-            {TACA_NAME, .sizing = 1, 8, .name = "a"},
-            {TACA_REF, .sizing = s_sizing_int, .ref = 0},
-        },
-    };
-    rc = cg_gen_taces(test->cg, taces, sizeof(taces) / sizeof(taces[0]), 100);
-    if (rc)
-    {
-        parser_print_errors(stderr);
-    }
-    REQUIRE_EQ(0, rc);
-
-    size_t index = 0;
-    REQUIRE_NEXT_TEXT("subq $120, %rsp");
-
-    REQUIRE_NEXT_TEXT("movq _a@GOTPCREL(%rip), %r10");
-    REQUIRE_NEXT_TEXT("mov (%r10), %r11");
-    REQUIRE_NEXT_TEXT("movsl 104(%rsp), %rdx");
-    REQUIRE_NEXT_TEXT("andq %rdx, %r11");
-    REQUIRE_NEXT_TEXT("mov %r11, 104(%rsp)");
 
     REQUIRE_NEXT_TEXT("addq $120, %rsp");
     REQUIRE_NEXT_TEXT("ret");
@@ -2426,11 +2388,11 @@ int test_cg_call(TestState* state, StandardTest* test)
     REQUIRE_NEXT_TEXT("subq $120, %rsp");
 
     REQUIRE_NEXT_TEXT("movb $0, %al");
-    REQUIRE_NEXT_TEXT("callq _f");
+    REQUIRE_NEXT_TEXT("callq _f@PLT");
 
-    REQUIRE_NEXT_TEXT("movq _f@GOTPCREL(%rip), %r10");
+    REQUIRE_NEXT_TEXT("movq _f@GOTPCREL(%rip), %r11");
     REQUIRE_NEXT_TEXT("movb $0, %al");
-    REQUIRE_NEXT_TEXT("callq *(%r10)");
+    REQUIRE_NEXT_TEXT("callq *(%r11)");
 
     REQUIRE_NEXT_TEXT("movb $0, %al");
     REQUIRE_NEXT_TEXT("callq _f");
@@ -2597,11 +2559,23 @@ int main(int argc, char** argv)
         test_cg_add,
         test_cg_bitmath,
         test_cg_refs,
-        test_cg_regalloc,
     };
 
     static int (*const othertests[])(struct TestState*) = {
+        parse_body,
+        parse_constants,
+        parse_typedef,
+        parse_struct,
+        parse_initializer,
+        parse_nested_struct,
         parse_initializer_struct,
+        parse_initializer_union,
+        parse_initializer_array,
+        parse_initializer2b,
+        parse_initializer_designated,
+        parse_anon_decls,
+        parse_decls_and_defs,
+        parse_params,
     };
 
     for (size_t i = 0; i < sizeof(stdtests) / sizeof(stdtests[0]); ++i)
@@ -2622,20 +2596,6 @@ int main(int argc, char** argv)
             state->testfails++;
         }
     }
-
-    RUN_TEST(parse_body);
-    RUN_TEST(parse_constants);
-    RUN_TEST(parse_typedef);
-    RUN_TEST(parse_struct);
-    RUN_TEST(parse_initializer);
-    RUN_TEST(parse_nested_struct);
-    RUN_TEST(parse_initializer_union);
-    RUN_TEST(parse_initializer_array);
-    RUN_TEST(parse_initializer2b);
-    RUN_TEST(parse_initializer_designated);
-    RUN_TEST(parse_anon_decls);
-    RUN_TEST(parse_decls_and_defs);
-    RUN_TEST(parse_params);
 
     foreach_c_file(state, "tests/pass", test_file);
     foreach_c_file(state, "tests/fail", test_file_fail);

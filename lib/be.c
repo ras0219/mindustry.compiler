@@ -639,6 +639,7 @@ static int be_compile_ExprCall(struct BackEnd* be, struct ExprCall* e, struct TA
         *out = be_alloc_temp(be, e->sizing, 8);
         TACEntry* tace_arg = array_push_zeroes(&param_addr, sizeof(struct TACEntry));
         tace_arg->op = TACO_ASSIGN;
+        tace_arg->rc = call.rc;
         tace_arg->arg1 = taca_reg(s_sysv_arg_reg[0], s_sizing_ptr);
         be_take_address(be, &tace_arg->arg1);
         tace_arg->arg2 = *out;

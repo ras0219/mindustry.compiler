@@ -427,6 +427,7 @@ enum InstArgKind
     IA_LNAME,
     IA_LITERAL,
     IA_SYM,
+    IA_SYM_PLT,
     IA_LABEL,
     IA_CONST,
 };
@@ -514,6 +515,10 @@ static __forceinline InstArg ia_reg_d(unsigned reg, size_t offset)
     {                                                                                                                  \
         .kind = IA_SYM, .s = (x)                                                                                       \
     }
+#define IA_SYM_PLT(x)                                                                                                  \
+    {                                                                                                                  \
+        .kind = IA_SYM_PLT, .s = (x)                                                                                   \
+    }
 #define IA_LABEL(x, l)                                                                                                 \
     {                                                                                                                  \
         .kind = IA_LABEL, .s = (l), .lbl = (x)                                                                         \
@@ -596,10 +601,14 @@ static void cg_push_instarg(CodeGen* cg, const InstArg* a)
             break;
         case IA_LITERAL: array_appendf(&cg->code, "%s", a->s); break;
         case IA_SYM: cg_mangle_sym(cg, &cg->code, a->s); break;
+        case IA_SYM_PLT:
+            cg_mangle_sym(cg, &cg->code, a->s);
+            array_appends(&cg->code, "@PLT");
+            break;
         case IA_NAME:
             cg_mangle_sym(cg, &cg->code, a->s);
-            array_appends(&cg->code, "@GOTPCREL");
             if (a->offset) array_appendf(&cg->code, "+%zu", a->offset);
+            array_appends(&cg->code, "@GOTPCREL");
             array_appends(&cg->code, "(%rip)");
             break;
         case IA_LNAME:
@@ -1166,53 +1175,32 @@ static void cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t
     enum InstKind instk;
     TACEntry tace = taces[i];
     ar_reg_clearall(frame);
+    if (tace.arg1.kind == TACA_REG || tace.arg1.kind == TACA_THROUGH_REG) ar_reg_use(frame, tace.arg1.reg);
+    if (tace.arg2.kind == TACA_REG || tace.arg2.kind == TACA_THROUGH_REG) ar_reg_use(frame, tace.arg2.reg);
 
     // On MacOS, NAMEs go through the GOT. x@GOTPCREL(%rip) is the pointer to the actual object x.
-    if (tace.arg1.kind == TACA_NAME)
+    TACAddress* args[] = {&tace.arg2, &tace.arg1};
+    for (size_t i = 0; i < 2; ++i)
     {
-        if (tace.arg1.is_addr)
+        if (args[i]->kind == TACA_NAME)
         {
-            if (tace.op == TACO_CALL)
+            if (args[i]->is_addr)
             {
-                tace.arg1.kind = TACA_LNAME;
+                args[i]->is_addr = 0;
+                args[i]->sizing.is_signed = 0;
+                args[i]->sizing.width = 8;
             }
             else
             {
-                tace.arg1.is_addr = 0;
-                tace.arg1.sizing.is_signed = 0;
-                tace.arg1.sizing.width = 8;
+                int reg = ar_tmp_reg(frame);
+                Instruction in = {MOVQ, IA_NAME(args[i]->name, args[i]->offset), IA_REG(reg)};
+                cg_push_inst(cg, in);
+
+                args[i]->kind = TACA_THROUGH_REG;
+                args[i]->reg = reg;
             }
         }
-        else
-        {
-            Instruction i = {MOVQ, taca_to_ia(cg, tace.arg1, frame), IA_REG(REG_R10)};
-            cg_push_inst(cg, i);
-
-            tace.arg1.kind = TACA_THROUGH_REG;
-            tace.arg1.reg = REG_R10;
-        }
     }
-
-    if (tace.arg2.kind == TACA_NAME)
-    {
-        if (tace.arg2.is_addr)
-        {
-            tace.arg2.is_addr = 0;
-            tace.arg2.sizing.is_signed = 0;
-            tace.arg2.sizing.width = 8;
-        }
-        else
-        {
-            Instruction i = {MOVQ, taca_to_ia(cg, tace.arg2, frame), IA_REG(REG_R11)};
-            cg_push_inst(cg, i);
-
-            tace.arg2.kind = TACA_THROUGH_REG;
-            tace.arg2.reg = REG_R11;
-        }
-    }
-
-    if (tace.arg1.kind == TACA_REG || tace.arg1.kind == TACA_THROUGH_REG) ar_reg_use(frame, tace.arg1.reg);
-    if (tace.arg2.kind == TACA_REG || tace.arg2.kind == TACA_THROUGH_REG) ar_reg_use(frame, tace.arg2.reg);
 
     switch (tace.op)
     {
@@ -1323,9 +1311,14 @@ static void cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t
                     {MOVB, IA_U(0), IA_REG_W(REG_RAX, 1)},
                     {INST_CALLQ},
                 };
-                if ((tace.arg1.kind == TACA_LNAME || tace.arg1.kind == TACA_NAME) && tace.arg1.is_addr)
+                if (tace.arg1.kind == TACA_LNAME && tace.arg1.is_addr)
                 {
                     InstArg a1 = IA_SYM(tace.arg1.name);
+                    j[1].a1 = a1;
+                }
+                else if (tace.arg1.kind == TACA_NAME)
+                {
+                    InstArg a1 = IA_SYM_PLT(tace.arg1.name);
                     j[1].a1 = a1;
                 }
                 else
