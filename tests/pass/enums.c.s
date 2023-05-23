@@ -13,7 +13,7 @@ _main:
     mov %r11, 32(%rsp)
     mov 32(%rsp), %eax
     cmp $0, %rax
-    jz  L$0
+    jz L$0
 L$0:
     mov 4(%rsp), %r11d
     mov %r11, 32(%rsp)
@@ -24,7 +24,7 @@ L$0:
     mov %rax, 32(%rsp)
     movsl 32(%rsp), %rax
     cmp $0, %rax
-    jz  L$1
+    jz L$1
 L$1:
     leaq 8(%rsp), %r11
     mov %r11, 16(%rsp)

@@ -14,7 +14,7 @@ _main:
     mov %r11d, 48(%rsp)
     movsl 0(%rsp), %rax
     cmp $0, %rax
-    jz  L$1
+    jz L$1
     movl $0, 48(%rsp)
 L$1:
     movsl 48(%rsp), %rax
@@ -24,7 +24,7 @@ L$1:
     mov %rax, 56(%rsp)
     movsl 56(%rsp), %rax
     cmp $0, %rax
-    jz  L$0
+    jz L$0
     movl $5, 48(%rsp)
 L$0:
     movl $5, 52(%rsp)

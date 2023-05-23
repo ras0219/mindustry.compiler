@@ -8,7 +8,7 @@ _f:
     mov %rax, 8(%rsp)
     movsl 8(%rsp), %rax
     cmp $0, %rax
-    jz  L$0
+    jz L$0
     movl $10, 4(%rsp)
     jmp L$1
 L$0:

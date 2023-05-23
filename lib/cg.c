@@ -224,12 +224,14 @@ void cg_reserve_zeroes(struct CodeGen* cg, const char* name, size_t sz)
     array_appendf(&cg->data, ": .skip %zu\n", sz);
 }
 
-static const char* const s_reg_names[] = {"%rax", "%rbx", "%rcx", "%rdx", "%rdi", "%rsi", "%r8", "%r9", "%r10", "%r11"};
+static const char* const s_reg_names[] = {
+    "%rax", "%rbx", "%rcx", "%rdx", "%rdi", "%rsi", "%r8", "%r9", "%r10", "%r11", "%rsp", "%rbp"};
 static const char* const s_reg_names_4[] = {
-    "%eax", "%ebx", "%ecx", "%edx", "%edi", "%esi", "%r8d", "%r9d", "%r10d", "%r11d"};
-static const char* const s_reg_names_2[] = {"%ax", "%bx", "%cx", "%dx", "%di", "%si", "%r8w", "%r9w", "%r10w", "%r11w"};
+    "%eax", "%ebx", "%ecx", "%edx", "%edi", "%esi", "%r8d", "%r9d", "%r10d", "%r11d", "%esp", "%ebp"};
+static const char* const s_reg_names_2[] = {
+    "%ax", "%bx", "%cx", "%dx", "%di", "%si", "%r8w", "%r9w", "%r10w", "%r11w", "%sp", "%bp"};
 static const char* const s_reg_names_1[] = {
-    "%al", "%bl", "%cl", "%dl", "%dil", "%sil", "%r8b", "%r9b", "%r10b", "%r11b"};
+    "%al", "%bl", "%cl", "%dl", "%dil", "%sil", "%r8b", "%r9b", "%r10b", "%r11b", "%spl", "%bpl"};
 
 typedef struct ActivationRecord
 {
@@ -362,13 +364,6 @@ offset_unsupported:
     return;
 }
 
-static void cg_gen_inst_a(struct CodeGen* cg, const char* inst, struct TACAddress addr, struct ActivationRecord* frame)
-{
-    array_appendf(&cg->code, "    %s ", inst);
-    cg_gen_taca(cg, addr, frame);
-    array_push_byte(&cg->code, '\n');
-}
-
 enum InstKind
 {
     MOV,
@@ -392,8 +387,33 @@ enum InstKind
     SHR,
     CLD,
     INST_OR,
-    INST_ADD,
+    INST_ORQ,
+    INST_AND,
+    INST_ANDQ,
     INST_XOR,
+    INST_XORQ,
+    INST_ADD,
+    INST_ADDQ,
+    INST_CMP,
+    INST_SETL,
+    INST_SETLE,
+    INST_SETB,
+    INST_SETBE,
+    INST_SETE,
+    INST_SETNE,
+    INST_JNZ,
+    INST_JZ,
+    INST_JMP,
+    INST_RET,
+    INST_CQTO,
+    INST_IDIVQ,
+    INST_DIVQ,
+    INST_SUBQ,
+    INST_IMUL,
+    INST_NOT,
+    INST_CALLQ,
+    INST_CALLQ_INDIRECT,
+    BSWAP,
 };
 
 enum InstArgKind
@@ -403,10 +423,10 @@ enum InstArgKind
     IA_I,
     IA_REG,
     IA_REG_D,
-    IA_RSP,
     IA_NAME,
     IA_LNAME,
     IA_LITERAL,
+    IA_SYM,
     IA_LABEL,
     IA_CONST,
 };
@@ -476,10 +496,7 @@ static __forceinline InstArg ia_reg_d(unsigned reg, size_t offset)
     return x;
 }
 
-#define IA_RSP(o)                                                                                                      \
-    {                                                                                                                  \
-        .kind = IA_RSP, .offset = (o)                                                                                  \
-    }
+#define IA_RSP(o) IA_REG_D(REG_RSP, o)
 
 #define IA_NAME(x, o)                                                                                                  \
     {                                                                                                                  \
@@ -492,6 +509,10 @@ static __forceinline InstArg ia_reg_d(unsigned reg, size_t offset)
 #define IA_LITERAL(x)                                                                                                  \
     {                                                                                                                  \
         .kind = IA_LITERAL, .s = (x)                                                                                   \
+    }
+#define IA_SYM(x)                                                                                                      \
+    {                                                                                                                  \
+        .kind = IA_SYM, .s = (x)                                                                                       \
     }
 #define IA_LABEL(x, l)                                                                                                 \
     {                                                                                                                  \
@@ -523,9 +544,34 @@ static const char s_op_neumon[][10] = {
     [SHL] = "shl",
     [SHR] = "shr",
     [CLD] = "cld",
-    [INST_OR] = "or",
     [INST_ADD] = "add",
+    [INST_ADDQ] = "addq",
+    [INST_OR] = "or",
+    [INST_ORQ] = "orq",
+    [INST_AND] = "and",
+    [INST_ANDQ] = "andq",
     [INST_XOR] = "xor",
+    [INST_XORQ] = "xorq",
+    [INST_CMP] = "cmp",
+    [INST_SETL] = "setl",
+    [INST_SETLE] = "setle",
+    [INST_SETB] = "setb",
+    [INST_SETBE] = "setbe",
+    [INST_SETE] = "sete",
+    [INST_SETNE] = "setne",
+    [INST_JNZ] = "jnz",
+    [INST_JZ] = "jz",
+    [INST_JMP] = "jmp",
+    [INST_RET] = "ret",
+    [INST_CQTO] = "cqto",
+    [INST_IDIVQ] = "idivq",
+    [INST_DIVQ] = "divq",
+    [INST_SUBQ] = "subq",
+    [INST_IMUL] = "imul",
+    [INST_NOT] = "not",
+    [INST_CALLQ] = "callq",
+    [INST_CALLQ_INDIRECT] = "callq",
+    [BSWAP] = "bswap",
 };
 
 static void cg_push_instarg(CodeGen* cg, const InstArg* a)
@@ -545,14 +591,11 @@ static void cg_push_instarg(CodeGen* cg, const InstArg* a)
             array_appendf(&cg->code, "%s", names[a->reg]);
             break;
         case IA_REG_D:
-            if (a->offset) array_appendf(&cg->code, "%zu", a->offset);
+            if (a->offset || a->reg == REG_RSP) array_appendf(&cg->code, "%zu", a->offset);
             array_appendf(&cg->code, "(%s)", s_reg_names[a->reg]);
             break;
-        case IA_RSP:
-            array_appendf(&cg->code, "%zu", a->offset);
-            array_appends(&cg->code, "(%rsp)");
-            break;
         case IA_LITERAL: array_appendf(&cg->code, "%s", a->s); break;
+        case IA_SYM: cg_mangle_sym(cg, &cg->code, a->s); break;
         case IA_NAME:
             cg_mangle_sym(cg, &cg->code, a->s);
             array_appends(&cg->code, "@GOTPCREL");
@@ -676,6 +719,7 @@ static void cg_push_insts(CodeGen* cg, const Instruction* inst, size_t n)
         if (inst[i].a1.kind != IA_NONE)
         {
             array_push_byte(&cg->code, ' ');
+            if (inst[i].kind == INST_CALLQ_INDIRECT) array_push_byte(&cg->code, '*');
             cg_push_instarg(cg, &inst[i].a1);
             if (inst[i].a2.kind != IA_NONE)
             {
@@ -687,6 +731,12 @@ static void cg_push_insts(CodeGen* cg, const Instruction* inst, size_t n)
     }
 }
 static void cg_push_inst(CodeGen* cg, Instruction inst) { return cg_push_insts(cg, &inst, 1); }
+
+static void cg_gen_inst_a(struct CodeGen* cg, enum InstKind k, struct TACAddress addr, struct ActivationRecord* frame)
+{
+    Instruction i = {k, taca_to_ia(cg, addr, frame)};
+    cg_push_inst(cg, i);
+}
 
 static void cg_gen_load(struct CodeGen* cg, struct TACAddress addr, int reg, struct ActivationRecord* frame)
 {
@@ -1074,30 +1124,19 @@ static void cg_assign(struct CodeGen* cg,
 
 static void cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t i, struct ActivationRecord* frame)
 {
-    const char* inst;
+    enum InstKind instk;
     TACEntry tace = taces[i];
     ar_reg_clearall(frame);
 
     if (tace.arg1.kind == TACA_NAME)
     {
-        if (tace.op == TACO_CALL)
+        if (tace.arg1.is_addr)
         {
-            if (!tace.arg1.is_addr)
-            {
-                array_appends(&cg->code, "    movq ");
-                cg_gen_taca(cg, tace.arg1, frame);
-                array_appends(&cg->code, ", %r11\n");
-                tace.arg1.kind = TACA_THROUGH_REG;
-                tace.arg1.reg = REG_R11;
-            }
-            else
+            if (tace.op == TACO_CALL)
             {
                 tace.arg1.kind = TACA_LNAME;
             }
-        }
-        else
-        {
-            if (tace.arg1.is_addr)
+            else
             {
                 tace.arg1.is_addr = 0;
                 if (tace.op != TACO_ASSIGN)
@@ -1106,16 +1145,17 @@ static void cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t
                     tace.arg1.sizing.width = 8;
                 }
             }
-            else
-            {
-                array_appends(&cg->code, "    movq ");
-                cg_gen_taca(cg, tace.arg1, frame);
-                array_appends(&cg->code, ", %rax\n");
-                tace.arg1.kind = TACA_THROUGH_REG;
-                tace.arg1.reg = REG_RAX;
-            }
+        }
+        else
+        {
+            Instruction i = {MOVQ, taca_to_ia(cg, tace.arg1, frame), IA_REG(REG_R10)};
+            cg_push_inst(cg, i);
+
+            tace.arg1.kind = TACA_THROUGH_REG;
+            tace.arg1.reg = REG_R10;
         }
     }
+
     if (tace.arg2.kind == TACA_NAME)
     {
         if (tace.arg2.is_addr)
@@ -1126,9 +1166,9 @@ static void cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t
         }
         else
         {
-            array_appends(&cg->code, "    movq ");
-            cg_gen_taca(cg, tace.arg2, frame);
-            array_appends(&cg->code, ", %r11\n");
+            Instruction i = {MOVQ, taca_to_ia(cg, tace.arg2, frame), IA_REG(REG_R11)};
+            cg_push_inst(cg, i);
+
             tace.arg2.kind = TACA_THROUGH_REG;
             tace.arg2.reg = REG_R11;
         }
@@ -1153,32 +1193,36 @@ static void cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t
             cg_gen_load(cg, tace.arg1, REG_RAX, frame);
             if (tace.arg2.kind == TACA_IMM && tace.arg2.imm < INT32_MAX)
             {
-                array_appendf(&cg->code, "    cmp $%zu, %%%cax\n", tace.arg2.imm, wid == 4 ? 'e' : 'r');
+                Instruction i = {INST_CMP, IA_U(tace.arg2.imm), IA_REG_W(REG_RAX, wid)};
+                cg_push_inst(cg, i);
             }
             else
             {
                 ar_reg_use(frame, REG_RDX);
                 cg_gen_load(cg, tace.arg2, REG_RDX, frame);
-                if (wid == 4)
-                    array_appends(&cg->code, "    cmp %edx, %eax\n");
-                else
-                    array_appends(&cg->code, "    cmp %rdx, %rax\n");
+                Instruction i = {INST_CMP, IA_REG_W(REG_RDX, wid), IA_REG_W(REG_RAX, wid)};
+                cg_push_inst(cg, i);
             }
+            int op;
             switch (tace.op)
             {
-                case TACO_LT: array_appends(&cg->code, "    setl %al\n"); break;
-                case TACO_LTEQ: array_appends(&cg->code, "    setle %al\n"); break;
-                case TACO_LTU: array_appends(&cg->code, "    setb %al\n"); break;
-                case TACO_LTEQU: array_appends(&cg->code, "    setbe %al\n"); break;
-                case TACO_EQ: array_appends(&cg->code, "    sete %al\n"); break;
-                case TACO_NEQ: array_appends(&cg->code, "    setne %al\n"); break;
+                case TACO_LT: op = INST_SETL; break;
+                case TACO_LTEQ: op = INST_SETLE; break;
+                case TACO_LTU: op = INST_SETB; break;
+                case TACO_LTEQU: op = INST_SETBE; break;
+                case TACO_EQ: op = INST_SETE; break;
+                case TACO_NEQ: op = INST_SETNE; break;
                 default: abort();
             }
-            array_appends(&cg->code, "    movzx %al, %rax\n");
+            Instruction i2[] = {
+                {op, IA_REG_W(REG_RAX, 1)},
+                {MOVZX, IA_REG_W(REG_RAX, 1), IA_REG(REG_RAX)},
+            };
+            cg_push_insts(cg, i2, 2);
             cg_gen_store_frame(cg, i, REG_RAX, frame);
             break;
-        case TACO_SUB: inst = "subq"; goto simple_binary;
-        case TACO_MUL: inst = "imul"; goto simple_binary;
+        case TACO_SUB: instk = INST_SUBQ; goto simple_binary;
+        case TACO_MUL: instk = INST_IMUL; goto simple_binary;
         case TACO_DIV:
         case TACO_IDIV:
         case TACO_MOD:
@@ -1190,56 +1234,67 @@ static void cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t
             cg_gen_load(cg, tace.arg2, REG_RCX, frame);
             if (tace.op == TACO_IMOD || tace.op == TACO_IDIV)
             {
-                array_appends(&cg->code, "    cqto\n");
-                array_appends(&cg->code, "    idivq %rcx\n");
+                Instruction j[] = {{INST_CQTO}, {INST_IDIVQ, IA_REG(REG_RCX)}};
+                cg_push_insts(cg, j, 2);
             }
             else
             {
-                array_appends(&cg->code, "    mov $0, %rdx\n");
-                array_appends(&cg->code, "    divq %rcx\n");
+                Instruction j[] = {{MOV, IA_U(0), IA_REG(REG_RDX)}, {INST_DIVQ, IA_REG(REG_RCX)}};
+                cg_push_insts(cg, j, 2);
             }
             if (tace.op == TACO_MOD || tace.op == TACO_IMOD)
                 cg_gen_store_frame(cg, i, REG_RDX, frame);
             else
                 cg_gen_store_frame(cg, i, REG_RAX, frame);
             break;
-        case TACO_BAND: inst = "andq"; goto simple_binary;
-        case TACO_BOR: inst = "orq"; goto simple_binary;
-        case TACO_BXOR: inst = "xorq"; goto simple_binary;
-        case TACO_SHL: inst = "shl"; goto shift;
+        case TACO_BAND: instk = INST_ANDQ; goto simple_binary;
+        case TACO_BOR: instk = INST_ORQ; goto simple_binary;
+        case TACO_BXOR: instk = INST_XORQ; goto simple_binary;
+        case TACO_SHL: instk = SHL; goto shift;
         case TACO_SHR:
-            inst = "shr";
+            instk = SHR;
         shift:
             ar_reg_use(frame, REG_RAX);
             ar_reg_use(frame, REG_RCX);
             cg_gen_load(cg, tace.arg1, REG_RAX, frame);
             cg_gen_load(cg, tace.arg2, REG_RCX, frame);
-            array_appendf(&cg->code, "    %s %%cl, %%rax\n", inst);
+            {
+                Instruction j = {instk, IA_REG_W(REG_RCX, 2), IA_REG(REG_RAX)};
+                cg_push_inst(cg, j);
+            }
             cg_gen_store_frame(cg, i, REG_RAX, frame);
             break;
         case TACO_BNOT:
             ar_reg_use(frame, REG_RAX);
             cg_gen_load(cg, tace.arg1, REG_RAX, frame);
-            array_appends(&cg->code, "    not %rax\n");
+            {
+                Instruction j = {INST_NOT, IA_REG(REG_RAX)};
+                cg_push_inst(cg, j);
+            }
             cg_gen_store_frame(cg, i, REG_RAX, frame);
             break;
         case TACO_CALL:
             ar_reg_use(frame, REG_RAX);
-            array_appends(&cg->code, "    movb $0, %al\n");
-            array_appends(&cg->code, "    callq ");
-            if ((tace.arg1.kind == TACA_LNAME || tace.arg1.kind == TACA_NAME) && tace.arg1.is_addr)
             {
-                cg_mangle_sym(cg, &cg->code, tace.arg1.name);
-            }
-            else
-            {
-                if (taca_is_memory(&tace.arg1))
+                Instruction j[] = {
+                    {MOVB, IA_U(0), IA_REG_W(REG_RAX, 1)},
+                    {INST_CALLQ},
+                };
+                if ((tace.arg1.kind == TACA_LNAME || tace.arg1.kind == TACA_NAME) && tace.arg1.is_addr)
                 {
-                    array_push_byte(&cg->code, '*');
+                    InstArg a1 = IA_SYM(tace.arg1.name);
+                    j[1].a1 = a1;
                 }
-                cg_gen_taca(cg, tace.arg1, frame);
+                else
+                {
+                    if (taca_is_memory(&tace.arg1))
+                    {
+                        j[1].kind = INST_CALLQ_INDIRECT;
+                    }
+                    j[1].a1 = taca_to_ia(cg, tace.arg1, frame);
+                }
+                cg_push_insts(cg, j, 2);
             }
-            array_push_byte(&cg->code, '\n');
             cg_gen_store_frame(cg, i, REG_RAX, frame);
             break;
         case TACO_LOAD:
@@ -1251,15 +1306,17 @@ static void cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t
         simple_binary:;
             const int tmp = ar_tmp_reg(frame);
             cg_gen_load(cg, tace.arg1, tmp, frame);
-            if (tace.arg2.kind == TACA_IMM && tace.arg2.imm < INT32_MAX)
+            if (tace.arg2.kind == TACA_IMM && (tace.arg2.imm <= INT32_MAX || tace.arg2.imm >= INT32_MIN))
             {
-                array_appendf(&cg->code, "    %s $%zu, %s\n", inst, tace.arg2.imm, s_reg_names[tmp]);
+                Instruction i = {instk, IA_I(tace.arg2.imm), IA_REG(tmp)};
+                cg_push_inst(cg, i);
             }
             else
             {
                 ar_reg_use(frame, REG_RDX);
                 cg_gen_load(cg, tace.arg2, REG_RDX, frame);
-                array_appendf(&cg->code, "    %s %%rdx, %s\n", inst, s_reg_names[tmp]);
+                Instruction i = {instk, IA_REG(REG_RDX), IA_REG(tmp)};
+                cg_push_inst(cg, i);
             }
             cg_gen_store_frame(cg, i, tmp, frame);
             break;
@@ -1283,52 +1340,72 @@ static void cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t
                     cg_assign(cg, arg2, tace.arg1, frame);
                 }
             }
-            array_appendf(&cg->code, "\n    addq $%zu, %%rsp\n    ret\n", frame->total_frame_size);
+            {
+                Instruction j[] = {
+                    {INST_ADDQ, IA_U(frame->total_frame_size), IA_REG(REG_RSP)},
+                    INST_RET,
+                };
+                cg_push_insts(cg, j, 2);
+            }
             break;
-        case TACO_JUMP: cg_gen_inst_a(cg, "jmp", tace.arg1, frame); break;
+        case TACO_JUMP: cg_gen_inst_a(cg, INST_JMP, tace.arg1, frame); break;
         case TACO_BRZ:
             if (tace.arg1.kind == TACA_IMM)
             {
-                if (tace.arg1.imm == 0) cg_gen_inst_a(cg, "jmp", tace.arg2, frame);
+                if (tace.arg1.imm == 0) cg_gen_inst_a(cg, INST_JMP, tace.arg2, frame);
             }
             else
             {
                 ar_reg_use(frame, REG_RAX);
                 cg_gen_load(cg, tace.arg1, REG_RAX, frame);
-                array_appends(&cg->code, "    cmp $0, %rax\n");
-                cg_gen_inst_a(cg, "jz ", tace.arg2, frame);
+                Instruction j[] = {
+                    {INST_CMP, IA_U(0), IA_REG(REG_RAX)},
+                    {INST_JZ, taca_to_ia(cg, tace.arg2, frame)},
+                };
+                cg_push_insts(cg, j, 2);
             }
             break;
         case TACO_BRNZ:
             if (tace.arg1.kind == TACA_IMM)
             {
-                if (tace.arg1.imm != 0) cg_gen_inst_a(cg, "jmp", tace.arg2, frame);
+                if (tace.arg1.imm != 0) cg_gen_inst_a(cg, INST_JMP, tace.arg2, frame);
             }
             else
             {
                 ar_reg_use(frame, REG_RAX);
                 cg_gen_load(cg, tace.arg1, REG_RAX, frame);
-                array_appends(&cg->code, "    cmp $0, %rax\n");
-                cg_gen_inst_a(cg, "jnz ", tace.arg2, frame);
+                Instruction j[] = {
+                    {INST_CMP, IA_U(0), IA_REG(REG_RAX)},
+                    {INST_JNZ, taca_to_ia(cg, tace.arg2, frame)},
+                };
+                cg_push_insts(cg, j, 2);
             }
             break;
         case TACO_CTBZ:
+        {
             if (tace.arg1.kind != TACA_IMM) abort();
             ar_reg_use(frame, REG_RCX);
-            array_appendf(&cg->code, "    cmp $%zu, %%rcx\n", tace.arg1.imm);
-            cg_gen_inst_a(cg, "jz ", tace.arg2, frame);
+            Instruction j[] = {
+                {INST_CMP, IA_U(tace.arg1.imm), IA_REG(REG_RCX)},
+                {INST_JZ, taca_to_ia(cg, tace.arg2, frame)},
+            };
+            cg_push_insts(cg, j, 2);
             break;
+        }
         case TACO_LABEL:
             cg_gen_taca(cg, tace.arg1, frame);
             array_appends(&cg->code, ":\n");
             break;
         case TACO_BSWAP32:
         case TACO_BSWAP64:
+        {
             ar_reg_use(frame, REG_RAX);
             cg_gen_load(cg, tace.arg1, REG_RAX, frame);
-            array_appendf(&cg->code, "    bswap %%%cax\n", tace.op == TACO_BSWAP32 ? 'e' : 'r');
+            Instruction j = {BSWAP, IA_REG_W(REG_RAX, tace.op == TACO_BSWAP32 ? 4 : 8)};
+            cg_push_inst(cg, j);
             cg_gen_store_frame(cg, i, REG_RAX, frame);
             break;
+        }
         default: parser_ferror(tace.rc, "error: unimplemented TACO: %s\n", taco_to_string(tace.op)); break;
     }
 }

@@ -93,7 +93,9 @@ enum TACAKind
     Y(REG_R8)                                                                                                          \
     Y(REG_R9)                                                                                                          \
     Y(REG_R10)                                                                                                         \
-    Y(REG_R11)
+    Y(REG_R11)                                                                                                         \
+    Y(REG_RSP)                                                                                                         \
+    Y(REG_RBP)
 
 enum Register
 {

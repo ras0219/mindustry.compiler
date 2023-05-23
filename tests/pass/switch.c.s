@@ -18,9 +18,9 @@ L$4:
 L$1:
     movsl 0(%rsp), %rcx
     cmp $1, %rcx
-    jz  L$2
+    jz L$2
     cmp $2, %rcx
-    jz  L$3
+    jz L$3
     jmp L$4
 L$0:
     addq $24, %rsp

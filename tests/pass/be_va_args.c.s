@@ -12,7 +12,7 @@ _g:
     mov %rax, 48(%rsp)
     mov 48(%rsp), %rax
     cmp $0, %rax
-    jz  L$1
+    jz L$1
     mov 8(%rsp), %r11
     add $16, %r11
     mov %r11, 48(%rsp)
@@ -79,7 +79,7 @@ _f:
     mov %rax, 88(%rsp)
     mov 88(%rsp), %rax
     cmp $0, %rax
-    jz  L$3
+    jz L$3
     mov 72(%rsp), %r11
     movsl 56(%rsp), %r10
     add %r10, %r11

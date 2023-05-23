@@ -2298,10 +2298,10 @@ int test_cg_assign(TestState* state, StandardTest* test)
     REQUIRE_NEXT_TEXT("mov %al, 2(%r10)");
 
     // high reg use
-    REQUIRE_NEXT_TEXT("movq _out@GOTPCREL(%rip), %rax");
+    REQUIRE_NEXT_TEXT("movq _out@GOTPCREL(%rip), %r10");
     REQUIRE_NEXT_TEXT("movq _in@GOTPCREL(%rip), %r11");
     REQUIRE_NEXT_TEXT("leaq (%r11), %rsi");
-    REQUIRE_NEXT_TEXT("mov (%rax), %rdi");
+    REQUIRE_NEXT_TEXT("mov (%r10), %rdi");
     REQUIRE_NEXT_TEXT("mov $3, %rcx");
     REQUIRE_NEXT_TEXT("cld");
     REQUIRE_NEXT_TEXT("rep movsb");
@@ -2401,9 +2401,9 @@ int test_cg_refs(TestState* state, StandardTest* test)
     REQUIRE_NEXT_TEXT("callq _a");
     REQUIRE_NEXT_TEXT("movb $0, %al");
     REQUIRE_NEXT_TEXT("callq _a");
-    REQUIRE_NEXT_TEXT("movq _a@GOTPCREL(%rip), %r11");
+    REQUIRE_NEXT_TEXT("movq _a@GOTPCREL(%rip), %r10");
     REQUIRE_NEXT_TEXT("movb $0, %al");
-    REQUIRE_NEXT_TEXT("callq *(%r11)");
+    REQUIRE_NEXT_TEXT("callq *(%r10)");
     REQUIRE_NEXT_TEXT("movb $0, %al");
     REQUIRE_NEXT_TEXT("callq *_a(%rip)");
 
@@ -2439,8 +2439,8 @@ int test_cg_regalloc(TestState* state, StandardTest* test)
     size_t index = 0;
     REQUIRE_NEXT_TEXT("subq $120, %rsp");
 
-    REQUIRE_NEXT_TEXT("movq _a@GOTPCREL(%rip), %rax");
-    REQUIRE_NEXT_TEXT("mov (%rax), %r11");
+    REQUIRE_NEXT_TEXT("movq _a@GOTPCREL(%rip), %r10");
+    REQUIRE_NEXT_TEXT("mov (%r10), %r11");
     REQUIRE_NEXT_TEXT("movsl 104(%rsp), %rdx");
     REQUIRE_NEXT_TEXT("andq %rdx, %r11");
     REQUIRE_NEXT_TEXT("mov %r11, 104(%rsp)");
@@ -2495,9 +2495,9 @@ int test_cg_call(TestState* state, StandardTest* test)
     REQUIRE_NEXT_TEXT("movb $0, %al");
     REQUIRE_NEXT_TEXT("callq _f");
 
-    REQUIRE_NEXT_TEXT("movq _f@GOTPCREL(%rip), %r11");
+    REQUIRE_NEXT_TEXT("movq _f@GOTPCREL(%rip), %r10");
     REQUIRE_NEXT_TEXT("movb $0, %al");
-    REQUIRE_NEXT_TEXT("callq *(%r11)");
+    REQUIRE_NEXT_TEXT("callq *(%r10)");
 
     REQUIRE_NEXT_TEXT("movb $0, %al");
     REQUIRE_NEXT_TEXT("callq _f");
