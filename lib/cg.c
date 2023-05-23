@@ -928,34 +928,41 @@ static void cg_gen_store_frame(struct CodeGen* cg, size_t i, int reg, struct Act
     return cg_gen_store(cg, addr, reg, frame);
 }
 
+static int is_i32_imm(const TACAddress* a)
+{
+    return a->kind == TACA_IMM && (a->imm <= INT32_MAX || a->imm >= (size_t)INT32_MIN);
+}
+
 static void cg_add(struct CodeGen* cg, size_t i, const struct TACEntry* tace, struct ActivationRecord* frame)
 {
     const int t = ar_tmp_reg(frame);
-    if (tace->arg1.kind == TACA_IMM && tace->arg1.imm < INT32_MAX)
+    if (is_i32_imm(&tace->arg1))
     {
         cg_gen_load(cg, tace->arg2, t, frame);
         if (tace->arg1.imm != 0)
         {
-            Instruction i = {INST_ADD, IA_U(tace->arg1.imm), IA_REG(t)};
-            cg_push_inst(cg, i);
-        }
-    }
-    else if (tace->arg2.kind == TACA_IMM && tace->arg2.imm < INT32_MAX)
-    {
-        cg_gen_load(cg, tace->arg1, t, frame);
-        if (tace->arg2.imm != 0)
-        {
-            Instruction i = {INST_ADD, IA_U(tace->arg2.imm), IA_REG(t)};
+            Instruction i = {INST_ADD, IA_I(tace->arg1.imm), IA_REG(t)};
             cg_push_inst(cg, i);
         }
     }
     else
     {
-        const int t2 = ar_tmp_reg(frame);
         cg_gen_load(cg, tace->arg1, t, frame);
-        cg_gen_load(cg, tace->arg2, t2, frame);
-        Instruction i = {INST_ADD, IA_REG(t2), IA_REG(t)};
-        cg_push_inst(cg, i);
+        if (is_i32_imm(&tace->arg2))
+        {
+            if (tace->arg2.imm != 0)
+            {
+                Instruction i = {INST_ADD, IA_I(tace->arg2.imm), IA_REG(t)};
+                cg_push_inst(cg, i);
+            }
+        }
+        else
+        {
+            const int t2 = ar_tmp_reg(frame);
+            cg_gen_load(cg, tace->arg2, t2, frame);
+            Instruction i = {INST_ADD, IA_REG(t2), IA_REG(t)};
+            cg_push_inst(cg, i);
+        }
     }
     cg_gen_store_frame(cg, i, t, frame);
 }
@@ -1048,7 +1055,7 @@ static void cg_assign(struct CodeGen* cg,
     {
         cg_gen_load(cg, arg2, arg1.reg, frame);
     }
-    else if (arg2.kind == TACA_IMM && (arg2.imm <= INT32_MAX || arg2.imm >= (size_t)INT32_MIN))
+    else if (is_i32_imm(&arg2))
     {
         const Sizing bytes = arg1.sizing;
         arg1.sizing.width = 8;
@@ -1191,9 +1198,9 @@ static void cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t
 
             ar_reg_use(frame, REG_RAX);
             cg_gen_load(cg, tace.arg1, REG_RAX, frame);
-            if (tace.arg2.kind == TACA_IMM && tace.arg2.imm < INT32_MAX)
+            if (is_i32_imm(&tace.arg2))
             {
-                Instruction i = {INST_CMP, IA_U(tace.arg2.imm), IA_REG_W(REG_RAX, wid)};
+                Instruction i = {INST_CMP, IA_I(tace.arg2.imm), IA_REG_W(REG_RAX, wid)};
                 cg_push_inst(cg, i);
             }
             else
@@ -1306,7 +1313,7 @@ static void cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t
         simple_binary:;
             const int tmp = ar_tmp_reg(frame);
             cg_gen_load(cg, tace.arg1, tmp, frame);
-            if (tace.arg2.kind == TACA_IMM && (tace.arg2.imm <= INT32_MAX || tace.arg2.imm >= INT32_MIN))
+            if (is_i32_imm(&tace.arg2))
             {
                 Instruction i = {instk, IA_I(tace.arg2.imm), IA_REG(tmp)};
                 cg_push_inst(cg, i);
