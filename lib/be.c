@@ -123,17 +123,7 @@ void be_init(struct BackEnd* be, struct Parser* p, struct Elaborator* e, struct 
     be->cg = cg;
 }
 
-static int is_constant(const TACAddress* a)
-{
-    switch (a->kind)
-    {
-        case TACA_IMM: return 1;
-        case TACA_FRAME: return a->is_addr;
-        case TACA_ARG: return a->is_addr;
-        case TACA_PARAM: return a->is_addr;
-        default: return 0;
-    }
-}
+static int is_constant(const TACAddress* a) { return a->kind == TACA_IMM || a->is_addr; }
 
 static int is_constant_zero(const TACAddress* a) { return a->kind == TACA_IMM && a->imm == 0; }
 
@@ -141,8 +131,10 @@ static TACAddress taca_add(TACAddress lhs, size_t imm, Sizing sizing)
 {
     switch (lhs.kind)
     {
-        case TACA_FRAME: lhs.offset += imm; break;
-        case TACA_PARAM: lhs.offset += imm; break;
+        case TACA_NAME:
+        case TACA_LNAME:
+        case TACA_FRAME:
+        case TACA_PARAM:
         case TACA_ARG: lhs.offset += imm; break;
         case TACA_IMM: lhs.imm += imm; break;
         default: abort();
@@ -168,11 +160,8 @@ static struct TACAddress be_push_tace(struct BackEnd* be, const struct TACEntry*
             if (e->arg2.kind == TACA_IMM && is_constant(&e->arg1)) return taca_add(e->arg1, e->arg2.imm, sizing);
             if (e->arg1.kind == TACA_REF && is_constant_zero(&e->arg2) && sizing.width <= e->arg1.sizing.width)
             {
-                TACAddress ret = {
-                    .kind = TACA_REF,
-                    .sizing = sizing,
-                    .ref = e->arg1.ref,
-                };
+                TACAddress ret = e->arg1;
+                ret.sizing = sizing;
                 return ret;
             }
         }

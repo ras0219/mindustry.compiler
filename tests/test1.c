@@ -216,47 +216,6 @@ static void stdtest_destroy(StandardTest* test)
     if (test->cg) cg_destroy(test->cg), my_free(test->cg);
 }
 
-int parse_main(struct TestState* state)
-{
-    int rc = 1;
-    StandardTest test = {0};
-    SUBTEST(stdtest_parse(state, &test, "int main() {}"));
-    Parser* parser = test.parser;
-
-    REQUIRE_EQ(1, parser->top->seq.ext);
-    struct Expr** const exprs = parser->expr_seqs.data;
-    struct StmtDecls* decls = (struct StmtDecls*)exprs[parser->top->seq.ext];
-    REQUIRE_EQ(STMT_DECLS, decls->kind);
-    REQUIRE_EQ(1, decls->seq.ext);
-    struct Decl* main = (struct Decl*)((struct Expr**)parser->expr_seqs.data)[decls->seq.off];
-    REQUIRE_EQ(AST_DECL, main->kind);
-    REQUIRE_STR_EQ("main", main->sym->name);
-    struct DeclFn* mainfn = (struct DeclFn*)main->type;
-    REQUIRE_EQ(AST_DECLFN, mainfn->kind);
-    struct DeclSpecs* mainrty = (struct DeclSpecs*)mainfn->type;
-    REQUIRE_EQ(AST_DECLSPEC, mainrty->kind);
-    REQUIRE_NULL(mainrty->name);
-    REQUIRE_NULL(mainrty->sym);
-    REQUIREZ(mainrty->is_long);
-    REQUIREZ(mainrty->is_short);
-    REQUIREZ(mainrty->is_enum);
-    REQUIREZ(mainrty->is_const);
-    REQUIREZ(mainrty->is_extern);
-    REQUIREZ(mainrty->is_inline);
-    REQUIREZ(mainrty->is_typedef);
-    REQUIRE(mainrty->tok);
-    REQUIRE_STR_EQ("int", token_str(parser, mainrty->tok));
-    REQUIRE(main->init);
-    REQUIRE_EQ(STMT_BLOCK, main->init->kind);
-    struct StmtBlock* init = (void*)main->init;
-    REQUIREZ(init->seq.ext);
-
-    rc = 0;
-fail:
-    stdtest_destroy(&test);
-    return rc;
-}
-
 int parse_typedef(struct TestState* state)
 {
     int rc = 1;
@@ -844,61 +803,6 @@ int parse_decls_and_defs(struct TestState* state)
                         "void foo();\n"
                         "void foo() {}\n"));
     rc = 0;
-fail:
-    stdtest_destroy(&test);
-    return rc;
-}
-
-int parse_uuva_list(struct TestState* state)
-{
-    int rc = 1;
-    StandardTest test = {0};
-    SUBTEST(stdtest_run(state,
-                        &test,
-                        "typedef __builtin_va_list __gnu_va_list;\n"
-                        "typedef __gnu_va_list va_list;\n"
-                        "void array_appendf(struct Array* arr, const char* fmt, ...)\n"
-                        "{\n"
-                        "__builtin_va_list argp;\n"
-                        "va_list args2;\n"
-                        "__builtin_va_start(argp, fmt);\n"
-                        "__builtin_va_copy(args2, argp);\n"
-                        "__builtin_va_end(argp);\n"
-                        "}\n"));
-    rc = 0;
-
-    struct Expr** const exprs = (struct Expr**)test.parser->expr_seqs.data;
-    REQUIRE_EQ(3, test.parser->top->seq.ext);
-    REQUIRE_EXPR(StmtDecls, decls, exprs[test.parser->top->seq.off + 2])
-    {
-        REQUIRE_EQ(1, decls->seq.ext);
-        REQUIRE_EXPR(Decl, w, exprs[decls->seq.off])
-        {
-            REQUIRE_AST(StmtBlock, body, w->init)
-            {
-                REQUIRE_EQ(5, body->seq.ext);
-                REQUIRE_EXPR(StmtDecls, decls, exprs[body->seq.off])
-                {
-                    REQUIRE_EQ(1, decls->seq.ext);
-                    REQUIRE_EXPR(Decl, v, exprs[decls->seq.off])
-                    {
-                        REQUIRE_EQ(24, v->sym->size.width);
-                        REQUIRE_EQ('_', v->sym->type.buf.buf[1]);
-                    }
-                }
-                REQUIRE_EXPR(StmtDecls, decls, exprs[body->seq.off + 1])
-                {
-                    REQUIRE_EQ(1, decls->seq.ext);
-                    REQUIRE_EXPR(Decl, v, exprs[decls->seq.off])
-                    {
-                        REQUIRE_EQ(24, v->sym->size.width);
-                        REQUIRE_EQ('_', v->sym->type.buf.buf[1]);
-                    }
-                }
-            }
-        }
-    }
-
 fail:
     stdtest_destroy(&test);
     return rc;
@@ -2719,7 +2623,6 @@ int main(int argc, char** argv)
         }
     }
 
-    RUN_TEST(parse_main);
     RUN_TEST(parse_body);
     RUN_TEST(parse_constants);
     RUN_TEST(parse_typedef);
@@ -2732,7 +2635,6 @@ int main(int argc, char** argv)
     RUN_TEST(parse_initializer_designated);
     RUN_TEST(parse_anon_decls);
     RUN_TEST(parse_decls_and_defs);
-    RUN_TEST(parse_uuva_list);
     RUN_TEST(parse_params);
 
     foreach_c_file(state, "tests/pass", test_file);

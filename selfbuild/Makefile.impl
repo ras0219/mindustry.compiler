@@ -45,7 +45,7 @@ $(idiffs) $(astdiffs) $(asmdiffs): stage3/%.diff: stage2/% stage3/%
 	diff -u $^ >$@ || true
 
 $(diffchecks): %.check: %
-	[ ! -s $^ ]
+	[ ! -s $^ ] && touch $@
 
 .PHONY: check
 
