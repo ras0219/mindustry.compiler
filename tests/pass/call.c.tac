@@ -1,32 +1,32 @@
-TACO_ASSIGN
-  TACA_REG u8 is_addr REG_RDI
+TACO_ASSIGN 4
+  TACA_REG is_addr REG_RDI
   TACA_IMM i4 10
 TACO_CALL
-  TACA_NAME u0 is_addr ii_call
+  TACA_NAME is_addr ii_call
   TACA_IMM i4 1
-TACO_ASSIGN
-  TACA_REG u8 is_addr REG_RDI
-  TACA_FRAME u0 is_addr 32
-TACO_ASSIGN
-  TACA_REG u8 is_addr REG_RSI
+TACO_ASSIGN 8
+  TACA_REG is_addr REG_RDI
+  TACA_FRAME is_addr 32
+TACO_ASSIGN 4
+  TACA_REG is_addr REG_RSI
   TACA_IMM i4 5
 TACO_CALL
-  TACA_NAME u0 is_addr mi_call
+  TACA_NAME is_addr mi_call
   TACA_IMM i4 1
-TACO_ASSIGN
-  TACA_PARAM u32 is_addr
+TACO_ASSIGN 32
+  TACA_PARAM is_addr
   TACA_FRAME u32 32
-TACO_ASSIGN
-  TACA_REG u8 is_addr REG_RDI
-  TACA_FRAME u0 is_addr
+TACO_ASSIGN 8
+  TACA_REG is_addr REG_RDI
+  TACA_FRAME is_addr
 TACO_CALL
-  TACA_NAME u0 is_addr mm_call
+  TACA_NAME is_addr mm_call
   TACA_IMM i4 1
-TACO_ASSIGN
-  TACA_PARAM u32 is_addr
+TACO_ASSIGN 32
+  TACA_PARAM is_addr
   TACA_FRAME u32
 TACO_CALL
-  TACA_NAME u0 is_addr im_call
+  TACA_NAME is_addr im_call
   TACA_IMM i4 1
 TACO_CALL
   TACA_NAME u8 f

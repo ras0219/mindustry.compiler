@@ -139,6 +139,7 @@ typedef struct TACEntry
     enum TACOKind op;
     struct TACAddress arg1, arg2;
     const struct RowCol* rc;
+    uint32_t assign_width;
 } TACEntry;
 
 void debug_tace(struct Array* arr, const TACEntry* tace);

@@ -768,7 +768,11 @@ static void cg_gen_load(struct CodeGen* cg, struct TACAddress addr, int reg, str
     Instruction i = {.a1 = taca_to_ia(cg, addr, frame), .a2 = IA_REG(reg)};
 
     size_t offset = 0;
-    if (addr.sizing.width == 8)
+    if (addr.sizing.width > 8)
+    {
+        abort();
+    }
+    else if (addr.sizing.width == 8)
     {
         i.kind = MOV;
         offset += 8;
@@ -854,7 +858,8 @@ static void ffs_push(struct FreeFrameSlots* ffs, unsigned char s)
     ffs->freestack[i] = s - i;
 }
 
-static void cg_gen_store(struct CodeGen* cg, struct TACAddress addr, int reg, struct ActivationRecord* frame)
+static void cg_gen_store(
+    struct CodeGen* cg, struct TACAddress addr, int reg, uint32_t bytes, struct ActivationRecord* frame)
 {
     if (!addr.is_addr)
     {
@@ -870,18 +875,19 @@ static void cg_gen_store(struct CodeGen* cg, struct TACAddress addr, int reg, st
         }
         addr.kind = TACA_THROUGH_REG;
         addr.is_addr = 1;
+        addr.sizing.width = 0;
     }
 
     size_t offset = 1;
-    if (addr.sizing.width == 8)
+    if (bytes == 8)
         offset = 8;
-    else if (addr.sizing.width >= 4)
+    else if (bytes >= 4)
         offset = 4;
-    else if (addr.sizing.width >= 2)
+    else if (bytes >= 2)
         offset = 2;
     Instruction i1 = {MOV, IA_REG_W(reg, offset), taca_to_ia(cg, addr, frame)};
     cg_push_inst(cg, i1);
-    if (addr.sizing.width - offset > 0)
+    if (bytes - offset > 0)
     {
         const int tmp = ar_tmp_reg(frame);
         Instruction i2[] = {
@@ -890,7 +896,7 @@ static void cg_gen_store(struct CodeGen* cg, struct TACAddress addr, int reg, st
         };
         cg_push_insts(cg, i2, 2);
 
-        if (addr.sizing.width - offset >= 2)
+        if (bytes - offset >= 2)
         {
             TACAddress addr_offset = addr;
             addr_offset.offset += offset;
@@ -898,13 +904,13 @@ static void cg_gen_store(struct CodeGen* cg, struct TACAddress addr, int reg, st
             Instruction i4 = {MOV, IA_REG_W(tmp, 2), taca_to_ia(cg, addr_offset, frame)};
             cg_push_inst(cg, i4);
             offset += 2;
-            if (addr.sizing.width - offset > 0)
+            if (bytes - offset > 0)
             {
                 Instruction i5 = {SHR, IA_U(16), IA_REG(tmp)};
                 cg_push_inst(cg, i5);
             }
         }
-        if (addr.sizing.width - offset > 0)
+        if (bytes - offset > 0)
         {
             TACAddress addr_offset = addr;
             addr_offset.offset += offset;
@@ -923,9 +929,8 @@ static void cg_gen_store_frame(struct CodeGen* cg, size_t i, int reg, struct Act
         .kind = TACA_REF,
         .is_addr = 1,
         .ref = i,
-        .sizing.width = 8,
     };
-    return cg_gen_store(cg, addr, reg, frame);
+    return cg_gen_store(cg, addr, reg, 8, frame);
 }
 
 static int is_i32_imm(const TACAddress* a)
@@ -1019,7 +1024,7 @@ static int cg_memcpy(
         arg2.sizing.width = bytes;
         const int t = ar_tmp_reg(frame);
         cg_gen_load(cg, arg2, t, frame);
-        cg_gen_store(cg, arg1, t, frame);
+        cg_gen_store(cg, arg1, t, bytes, frame);
         ar_reg_free(frame, t);
         goto fail;
     }
@@ -1059,18 +1064,18 @@ fail:
     return rc;
 }
 
-static void cg_extend_reg(struct CodeGen* cg, int src_reg, Sizing src, int dst_reg, Sizing dst)
-{
-    if (src.width < dst.width)
-    {
-        Instruction i = {
-            src.is_signed ? MOVSX : MOVZX,
-            IA_REG_W(src_reg, src.width),
-            IA_REG_W(dst_reg, dst.width),
-        };
-        cg_push_inst(cg, i);
-    }
-}
+// static void cg_extend_reg(struct CodeGen* cg, int src_reg, Sizing src, int dst_reg, Sizing dst)
+// {
+//     if (src.width < dst.width)
+//     {
+//         Instruction i = {
+//             src.is_signed ? MOVSX : MOVZX,
+//             IA_REG_W(src_reg, src.width),
+//             IA_REG_W(dst_reg, dst.width),
+//         };
+//         cg_push_inst(cg, i);
+//     }
+// }
 
 static char mov_inst(int width)
 {
@@ -1086,10 +1091,8 @@ static char mov_inst(int width)
 
 static int is_suffix_size(uint32_t i) { return i == 8 || i == 4 || i == 2 || i == 1; }
 
-static void cg_assign(struct CodeGen* cg,
-                      struct TACAddress arg1,
-                      struct TACAddress arg2,
-                      struct ActivationRecord* frame)
+static void cg_assign(
+    struct CodeGen* cg, const TACAddress arg1, struct TACAddress arg2, uint32_t bytes, struct ActivationRecord* frame)
 {
     if (arg1.kind == TACA_REG && arg1.is_addr)
     {
@@ -1097,9 +1100,7 @@ static void cg_assign(struct CodeGen* cg,
     }
     else if (is_i32_imm(&arg2))
     {
-        const Sizing bytes = arg1.sizing;
-        arg1.sizing.width = 8;
-        if (is_suffix_size(bytes.width))
+        if (is_suffix_size(bytes))
         {
             InstArg a1;
             if (arg1.is_addr)
@@ -1118,7 +1119,7 @@ static void cg_assign(struct CodeGen* cg,
                 }
                 a1 = ia_reg_d(reg, 0);
             }
-            Instruction i = {mov_inst(bytes.width), IA_I((long long)arg2.imm), a1};
+            Instruction i = {mov_inst(bytes), IA_I((long long)arg2.imm), a1};
             cg_push_inst(cg, i);
         }
         else
@@ -1130,41 +1131,32 @@ static void cg_assign(struct CodeGen* cg,
             ar_reg_use(frame, REG_RCX);
             ar_reg_use(frame, REG_RAX);
             Instruction i[] = {
-                {MOV, IA_U(bytes.width), IA_REG(REG_RCX)},
+                {MOV, IA_U(bytes), IA_REG(REG_RCX)},
                 {INST_XOR, IA_REG(REG_RAX), IA_REG(REG_RAX)},
                 {REP_STOSB},
             };
             cg_push_insts(cg, i, 3);
         }
     }
-    else if (arg2.kind == TACA_REG || arg2.is_addr || is_suffix_size(arg1.sizing.width))
+    else if (arg2.kind == TACA_REG || arg2.is_addr || is_suffix_size(bytes))
     {
         int t;
-        if (arg2.kind == TACA_REG && arg1.sizing.width <= arg2.sizing.width)
+        if (arg2.kind == TACA_REG && bytes <= arg2.sizing.width)
         {
             t = arg2.reg;
         }
         else
         {
             t = ar_tmp_reg(frame);
-            if (arg2.is_addr || is_suffix_size(arg1.sizing.width))
-            {
-                cg_gen_load(cg, arg2, t, frame);
-            }
-            else
-            {
-                // no test hits this, abort to find a test case
-                abort();
-                cg_extend_reg(cg, arg2.reg, arg2.sizing, t, arg1.sizing);
-            }
+            cg_gen_load(cg, arg2, t, frame);
         }
-        cg_gen_store(cg, arg1, t, frame);
+        cg_gen_store(cg, arg1, t, bytes, frame);
     }
     else
     {
         arg2.is_addr = 1;
-        size_t bytes = arg1.sizing.width;
-        arg1.sizing.width = 8;
+        arg2.sizing.width = 0;
+        arg2.sizing.is_signed = 0;
         cg_memcpy(cg, arg1, arg2, bytes, frame);
     }
 }
@@ -1175,6 +1167,7 @@ static void cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t
     TACEntry tace = taces[i];
     ar_reg_clearall(frame);
 
+    // On MacOS, NAMEs go through the GOT. x@GOTPCREL(%rip) is the pointer to the actual object x.
     if (tace.arg1.kind == TACA_NAME)
     {
         if (tace.arg1.is_addr)
@@ -1186,11 +1179,8 @@ static void cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t
             else
             {
                 tace.arg1.is_addr = 0;
-                if (tace.op != TACO_ASSIGN)
-                {
-                    tace.arg1.sizing.is_signed = 0;
-                    tace.arg1.sizing.width = 8;
-                }
+                tace.arg1.sizing.is_signed = 0;
+                tace.arg1.sizing.width = 8;
             }
         }
         else
@@ -1374,7 +1364,7 @@ static void cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t
             cg_gen_store_frame(cg, i, tmp, frame);
             break;
         case TACO_ADD: cg_add(cg, i, &tace, frame); break;
-        case TACO_ASSIGN: cg_assign(cg, tace.arg1, tace.arg2, frame); break;
+        case TACO_ASSIGN: cg_assign(cg, tace.arg1, tace.arg2, tace.assign_width, frame); break;
         case TACO_RETURN:
             if (tace.arg1.kind != TACA_VOID)
             {
@@ -1385,12 +1375,8 @@ static void cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t
                 }
                 else
                 {
-                    struct TACAddress arg2 = {
-                        .kind = TACA_PARAM,
-                        .sizing = tace.arg1.sizing,
-                        .is_addr = 1,
-                    };
-                    cg_assign(cg, arg2, tace.arg1, frame);
+                    struct TACAddress arg2 = {.kind = TACA_PARAM, .is_addr = 1};
+                    cg_assign(cg, arg2, tace.arg1, tace.arg1.sizing.width, frame);
                 }
             }
             {
@@ -1531,9 +1517,10 @@ int cg_gen_taces(struct CodeGen* cg, const struct TACEntry* taces, size_t n_tace
                 frame_slots[ref] = ffs_pop(&ffs);
             }
         }
-        if (tace->arg1.kind == TACA_PARAM && tace->arg1.offset + tace->arg1.sizing.width > max_param_size)
+        if (tace->op == TACO_ASSIGN && tace->arg1.kind == TACA_PARAM && tace->arg1.is_addr)
         {
-            max_param_size = tace->arg1.offset + tace->arg1.sizing.width;
+            if (tace->arg1.offset + tace->assign_width > max_param_size)
+                max_param_size = tace->arg1.offset + tace->assign_width;
         }
     }
 

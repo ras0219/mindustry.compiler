@@ -1,11 +1,11 @@
-TACO_ASSIGN
-  TACA_FRAME u8 is_addr
-  TACA_LNAME u0 is_addr mode
+TACO_ASSIGN 8
+  TACA_FRAME is_addr
+  TACA_LNAME is_addr mode
 TACO_ADD
-  TACA_LNAME u0 is_addr mode
+  TACA_LNAME is_addr mode
   TACA_IMM i4 5
-TACO_ASSIGN
-  TACA_REG u8 is_addr REG_RAX
+TACO_ASSIGN 8
+  TACA_REG is_addr REG_RAX
   TACA_REF u8 1
 TACO_RETURN
   TACA_VOID

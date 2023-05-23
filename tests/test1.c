@@ -1448,8 +1448,12 @@ static void format_taca(Array* buf, TACAddress addr)
         array_appends(buf, "TACA_VOID");
         return;
     }
-    array_appendf(buf, "%s ", taca_to_string(addr.kind));
-    format_sizing(buf, addr.sizing);
+    array_appendf(buf, "%s", taca_to_string(addr.kind));
+    if (addr.sizing.width != 0)
+    {
+        array_push_byte(buf, ' ');
+        format_sizing(buf, addr.sizing);
+    }
     if (addr.is_addr) array_appends(buf, " is_addr");
     if (addr.offset) array_appendf(buf, " %zu", addr.offset);
     switch (addr.kind)
@@ -1475,7 +1479,10 @@ static void format_all_tac(Array* out, const BackEnd* be)
 
     for (size_t i = 0; i < n; ++i)
     {
-        array_appendf(out, "%s\n  ", taco_to_string(e[i].op));
+        if (e[i].op == TACO_ASSIGN)
+            array_appendf(out, "TACO_ASSIGN %u\n  ", e[i].assign_width);
+        else
+            array_appendf(out, "%s\n  ", taco_to_string(e[i].op));
         format_taca(out, e[i].arg1);
         array_appends(out, "\n  ");
         format_taca(out, e[i].arg2);
@@ -2112,117 +2119,137 @@ int test_cg_assign(TestState* state, StandardTest* test)
         // stores from reg
         {
             TACO_ASSIGN,
-            {TACA_FRAME, .is_addr = 1, .sizing = s_sizing_ptr},
+            {TACA_FRAME, .is_addr = 1},
             {TACA_REG, .sizing = s_sizing_ptr, .reg = REG_RDI},
+            .assign_width = 8,
         },
         {
             TACO_ASSIGN,
-            {TACA_FRAME, .is_addr = 1, .sizing = s_sizing_uint},
+            {TACA_FRAME, .is_addr = 1},
             {TACA_REG, .sizing = s_sizing_uint, .reg = REG_RDI},
+            .assign_width = 4,
         },
         {
             TACO_ASSIGN,
-            {TACA_FRAME, .is_addr = 1, .sizing.width = 2},
+            {TACA_FRAME, .is_addr = 1},
             {TACA_REG, .sizing.width = 2, .reg = REG_RDI},
+            .assign_width = 2,
         },
         {
             TACO_ASSIGN,
-            {TACA_FRAME, .is_addr = 1, .sizing = s_sizing_uchar},
+            {TACA_FRAME, .is_addr = 1},
             {TACA_REG, .sizing = s_sizing_uchar, .reg = REG_RDI},
+            .assign_width = 1,
         },
         // loads to reg
         {
             TACO_ASSIGN,
-            {TACA_REG, .is_addr = 1, .sizing = s_sizing_ptr, .reg = REG_RDI},
+            {TACA_REG, .is_addr = 1, .reg = REG_RDI},
             {TACA_FRAME, .sizing = s_sizing_ptr},
+            .assign_width = 8,
         },
         {
             TACO_ASSIGN,
-            {TACA_REG, .is_addr = 1, .sizing = s_sizing_uint, .reg = REG_RDI},
+            {TACA_REG, .is_addr = 1, .reg = REG_RDI},
             {TACA_FRAME, .sizing = s_sizing_uint},
+            .assign_width = 4,
         },
         // memory load+store
         {
             TACO_ASSIGN,
-            {TACA_FRAME, .is_addr = 1, .sizing = s_sizing_uint, .offset = 20},
+            {TACA_FRAME, .is_addr = 1, .offset = 20},
             {TACA_FRAME, .sizing = s_sizing_uint, .offset = 24},
+            .assign_width = 4,
         },
         // leaq
         {
             TACO_ASSIGN,
-            {TACA_REG, .is_addr = 1, .sizing = s_sizing_ptr, .reg = REG_RAX},
+            {TACA_REG, .is_addr = 1, .reg = REG_RAX},
             {TACA_FRAME, .is_addr = 1, .offset = 24},
+            .assign_width = 8,
         },
         // assign through: mov %ebx, 0(%rax)
         {
             TACO_ASSIGN,
-            {TACA_REG, .sizing = s_sizing_uint, .reg = REG_RAX},
+            {TACA_REG, .sizing = s_sizing_ptr, .reg = REG_RAX},
             {TACA_REG, .sizing = s_sizing_uint, .reg = REG_RBX},
+            .assign_width = 4,
         },
         // store address
         {
             TACO_ASSIGN,
             {TACA_REG, .sizing = s_sizing_ptr, .reg = REG_RAX},
             {TACA_FRAME, .is_addr = 1, .offset = 1},
+            .assign_width = 8,
         },
         // calc address
         {
             TACO_ASSIGN,
-            {TACA_REG, .is_addr = 1, .sizing = s_sizing_ptr, .reg = REG_RAX},
+            {TACA_REG, .is_addr = 1, .reg = REG_RAX},
             {TACA_ARG, .is_addr = 1},
+            .assign_width = 8,
         },
         {
             TACO_ASSIGN,
-            {TACA_PARAM, .is_addr = 1, .sizing = s_sizing_ptr},
+            {TACA_PARAM, .is_addr = 1},
             {TACA_REG, .sizing = s_sizing_ptr, .reg = REG_RAX},
+            .assign_width = 8,
         },
         // memset 0
         {
             TACO_ASSIGN,
-            {TACA_FRAME, .is_addr = 1, .sizing.width = 32},
+            {TACA_FRAME, .is_addr = 1},
             {TACA_IMM, .sizing = s_sizing_int, .imm = 0},
+            .assign_width = 32,
         },
         // memcpy
         {
             TACO_ASSIGN,
-            {TACA_FRAME, .sizing.width = 32},
+            {TACA_FRAME, .sizing = s_sizing_ptr},
             {TACA_FRAME, .sizing.width = 32, .offset = 8},
+            .assign_width = 32,
         },
         // assign through ref
         {
             TACO_ASSIGN,
-            {TACA_REF, .sizing = s_sizing_int, .ref = 0},
+            {TACA_REF, .sizing = s_sizing_ptr, .ref = 0},
             {TACA_IMM, .sizing = s_sizing_int, .imm = 1},
+            .assign_width = 4,
         },
         // mixed sizes
         {
             TACO_ASSIGN,
-            {TACA_FRAME, .is_addr = 1, .sizing = s_sizing_int, .offset = 4},
+            {TACA_FRAME, .is_addr = 1, .offset = 4},
             {TACA_FRAME, .sizing = s_sizing_schar},
+            .assign_width = 4,
         },
         // small odd size load
         {
             TACO_ASSIGN,
-            {TACA_FRAME, .is_addr = 1, .sizing = s_sizing_ptr, .offset = 4},
+            {TACA_FRAME, .is_addr = 1, .offset = 4},
             {TACA_FRAME, .sizing = 0, 3},
+            .assign_width = 8,
         },
         // small odd size store
         {
             TACO_ASSIGN,
-            {TACA_FRAME, .is_addr = 1, .sizing = 0, 3, .offset = 4},
+            {TACA_FRAME, .is_addr = 1, .offset = 4},
             {TACA_FRAME, .sizing = 0, 8},
+            .assign_width = 3,
         },
         // high reg use
         {
             TACO_ASSIGN,
-            {TACA_NAME, .sizing = 0, 3, .name = "out"},
+            {TACA_NAME, .sizing = s_sizing_ptr, .name = "out"},
             {TACA_NAME, .sizing = 0, 3, .name = "in"},
+            .assign_width = 3,
         },
         // high reg use 2
         {
             TACO_ASSIGN,
-            {TACA_NAME, .is_addr = 1, .sizing = 0, 3, .name = "out"},
+            {TACA_NAME, .is_addr = 1, .name = "out"},
             {TACA_NAME, .sizing = 0, 3, .name = "in"},
+            .assign_width = 3,
         },
     };
     rc = cg_gen_taces(test->cg, taces, sizeof(taces) / sizeof(taces[0]), 100);
@@ -2342,13 +2369,15 @@ int test_cg_refs(TestState* state, StandardTest* test)
         },
         {
             TACO_ASSIGN,
-            {TACA_NAME, .is_addr = 1, .sizing = 0, 8, .name = "a"},
+            {TACA_NAME, .is_addr = 1, .name = "a"},
             {TACA_IMM, .sizing = s_sizing_int, .imm = 10},
+            .assign_width = 8,
         },
         {
             TACO_ASSIGN,
-            {TACA_NAME, .is_addr = 1, .sizing = 0, 8, .name = "a"},
+            {TACA_NAME, .is_addr = 1, .name = "a"},
             {TACA_FRAME, .sizing = s_sizing_int},
+            .assign_width = 8,
         },
         {
             TACO_CALL,
