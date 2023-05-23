@@ -26,25 +26,25 @@ _f:
     movl $1, 16(%rsp)
     mov 12(%rsp), %eax
     mov 16(%rsp), %ecx
-    shlq %cx, %rax
+    shl %cl, %rax
     mov %rax, 24(%rsp)
     mov 24(%rsp), %r11d
     mov %r11d, 12(%rsp)
     mov 12(%rsp), %eax
     mov 16(%rsp), %ecx
-    shlq %cx, %rax
+    shl %cl, %rax
     mov %rax, 24(%rsp)
     mov 24(%rsp), %r11d
     mov %r11d, 12(%rsp)
     mov 12(%rsp), %eax
     mov 16(%rsp), %ecx
-    shrq %cx, %rax
+    shr %cl, %rax
     mov %rax, 24(%rsp)
     mov 24(%rsp), %r11d
     mov %r11d, 12(%rsp)
     mov 12(%rsp), %eax
     mov 16(%rsp), %ecx
-    shrq %cx, %rax
+    shr %cl, %rax
     mov %rax, 24(%rsp)
     mov 24(%rsp), %r11d
     mov %r11d, 12(%rsp)

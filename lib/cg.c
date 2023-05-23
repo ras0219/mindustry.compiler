@@ -384,9 +384,7 @@ enum InstKind
     REP_STOSB,
     LEAQ,
     SHL,
-    SHLQ,
     SHR,
-    SHRQ,
     CLD,
     INST_OR,
     INST_ORQ,
@@ -544,9 +542,7 @@ static const char s_op_neumon[][10] = {
     [REP_STOSB] = "rep stosb",
     [LEAQ] = "leaq",
     [SHL] = "shl",
-    [SHLQ] = "shlq",
     [SHR] = "shr",
-    [SHRQ] = "shrq",
     [CLD] = "cld",
     [INST_ADD] = "add",
     [INST_ADDQ] = "addq",
@@ -939,18 +935,45 @@ static int is_i32_imm(const TACAddress* a)
 
 static void cg_add(struct CodeGen* cg, size_t i, const struct TACEntry* tace, struct ActivationRecord* frame)
 {
-    // if (tace->arg2.kind == TACA_REF && frame->frame_slots[tace->arg2.ref] == frame->frame_slots[i])
-    // {
-    //     if (is_i32_imm(&tace->arg1))
-    //     {
-    //         if (tace->arg1.imm != 0)
-    //         {
-    //             Instruction i = {INST_ADDQ, IA_I(tace->arg1.imm), taca_to_ia(cg, tace->arg2, frame)};
-    //             cg_push_inst(cg, i);
-    //         }
-    //     }
-    //     return;
-    // }
+    if (tace->arg2.kind == TACA_REF && frame->frame_slots[tace->arg2.ref] == frame->frame_slots[i])
+    {
+        if (is_i32_imm(&tace->arg1))
+        {
+            if (tace->arg1.imm != 0)
+            {
+                Instruction i = {INST_ADDQ, IA_I(tace->arg1.imm), taca_to_ia(cg, tace->arg2, frame)};
+                cg_push_inst(cg, i);
+            }
+        }
+        else
+        {
+            const int t = ar_tmp_reg(frame);
+            cg_gen_load(cg, tace->arg1, t, frame);
+            Instruction i = {INST_ADDQ, IA_REG(t), taca_to_ia(cg, tace->arg2, frame)};
+            cg_push_inst(cg, i);
+        }
+        return;
+    }
+
+    if (tace->arg1.kind == TACA_REF && frame->frame_slots[tace->arg1.ref] == frame->frame_slots[i])
+    {
+        if (is_i32_imm(&tace->arg2))
+        {
+            if (tace->arg2.imm != 0)
+            {
+                Instruction i = {INST_ADDQ, IA_I(tace->arg2.imm), taca_to_ia(cg, tace->arg1, frame)};
+                cg_push_inst(cg, i);
+            }
+        }
+        else
+        {
+            const int t = ar_tmp_reg(frame);
+            cg_gen_load(cg, tace->arg2, t, frame);
+            Instruction i = {INST_ADDQ, IA_REG(t), taca_to_ia(cg, tace->arg1, frame)};
+            cg_push_inst(cg, i);
+        }
+        return;
+    }
 
     const int t = ar_tmp_reg(frame);
     if (is_i32_imm(&tace->arg1))
@@ -1274,15 +1297,15 @@ static void cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t
         case TACO_BAND: instk = INST_ANDQ; goto simple_binary;
         case TACO_BOR: instk = INST_ORQ; goto simple_binary;
         case TACO_BXOR: instk = INST_XORQ; goto simple_binary;
-        case TACO_SHL: instk = SHLQ; goto shift;
+        case TACO_SHL: instk = SHL; goto shift;
         case TACO_SHR:
-            instk = SHRQ;
+            instk = SHR;
         shift:
             ar_reg_use(frame, REG_RAX);
             cg_gen_load(cg, tace.arg1, REG_RAX, frame);
             if (is_i32_imm(&tace.arg2))
             {
-                Instruction j = {instk == SHLQ ? SHL : SHR, IA_I(tace.arg2.imm), IA_REG(REG_RAX)};
+                Instruction j = {instk, IA_I(tace.arg2.imm), IA_REG(REG_RAX)};
                 cg_push_inst(cg, j);
             }
             else

@@ -7,15 +7,11 @@ _main:
     mov %r11, 24(%rsp)
     movsb 24(%rsp), %r11
     mov %r11b, 0(%rsp)
-    movsb 16(%rsp), %r11
-    mov %r11, 16(%rsp)
     movsl 16(%rsp), %r11
     mov %r11d, 4(%rsp)
     movsb 0(%rsp), %r11
     mov %r11, 16(%rsp)
-    movsl 16(%rsp), %r11
-    add $2, %r11
-    mov %r11, 16(%rsp)
+    addq $2, 16(%rsp)
     movsl 16(%rsp), %r11
     mov %r11d, 8(%rsp)
     movl $255, 12(%rsp)
