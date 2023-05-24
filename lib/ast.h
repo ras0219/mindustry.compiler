@@ -232,6 +232,7 @@ typedef struct ExprAssign
     int32_t mult;
     // whether the op should be performed with signed numbers
     Sizing common_sz;
+    Sizing lhs_sizing;
 } ExprAssign;
 #define AST_STRUCT_EXPR_ASSIGN ExprAssign
 #define AST_KIND_ExprAssign EXPR_ASSIGN
@@ -283,6 +284,7 @@ typedef struct ExprIncr
 
     uint32_t postfix : 1;
     uint32_t sizeof_;
+    Sizing inner_sizing;
 
     struct Expr* lhs;
 } ExprIncr;
@@ -303,8 +305,7 @@ typedef struct CallParam
     Expr* expr;
 
     // elaboration info to track implicit conversion
-    Sizing sizing;
-    int32_t align;
+    SizAlign sz;
 } CallParam;
 
 typedef struct Designator

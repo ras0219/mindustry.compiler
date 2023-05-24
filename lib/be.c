@@ -212,6 +212,11 @@ static struct TACAddress be_push_tace(struct BackEnd* be, const struct TACEntry*
         if (e->arg1.kind == TACA_REG && e->op != TACO_ASSIGN) abort();
         if (e->arg1.sizing.width != 0) abort();
     }
+    else if (e->arg1.sizing.width == 0 && (e->arg1.kind != TACA_VOID && e->arg1.kind != TACA_ALABEL))
+    {
+        parser_ferror(e->rc, "0 sized arg\n");
+        abort();
+    }
 
     if (e->arg2.is_addr)
     {
@@ -614,8 +619,8 @@ static int be_compile_ExprRef(struct BackEnd* be, struct ExprRef* esym, struct T
     else
     {
         *out = esym->sym->addr;
+        out->sizing = esym->sizing;
     }
-    // fail:
     return rc;
 }
 
@@ -657,17 +662,18 @@ static int be_compile_ExprCall(struct BackEnd* be, struct ExprCall* e, struct TA
         TACEntry* tace_arg = array_push_zeroes(&param_addr, sizeof(struct TACEntry));
         tace_arg->op = TACO_ASSIGN;
         tace_arg->rc = token_rc(param->expr->tok);
-        tace_arg->assign_width = param->sizing.width;
-        if (param->sizing.width <= 8 && j < 6)
+        tace_arg->assign_width = param->sz.width;
+        if (param->sz.width <= 8 && j < 6)
         {
             tace_arg->arg1 = taca_reg(s_sysv_arg_reg[j], s_sizing_ptr);
             ++j;
         }
         else
         {
-            param_offset = round_to_alignment(param_offset, param->align);
-            tace_arg->arg1 = taca_param(param_offset, param->sizing);
-            param_offset += param->sizing.width;
+            param_offset = round_to_alignment(param_offset, param->sz.align);
+            Sizing sz = {.width = param->sz.width};
+            tace_arg->arg1 = taca_param(param_offset, sz);
+            param_offset += param->sz.width;
         }
         be_take_address(be, &tace_arg->arg1);
         UNWRAP(be_compile_expr(be, param->expr, &tace_arg->arg2));
@@ -962,7 +968,7 @@ static int be_compile_ExprIncr(struct BackEnd* be, struct ExprIncr* e, struct TA
     TACEntry tace = {
         .rc = trc,
         .op = e->tok->type == TOKEN_SYM2('+', '+') ? TACO_ADD : TACO_SUB,
-        .arg1 = be_deref(be, &lhs_lvalue, e->lhs->sizing, trc),
+        .arg1 = be_deref(be, &lhs_lvalue, e->inner_sizing, trc),
         .arg2 = taca_imm(e->sizeof_),
     };
     if (e->postfix)
@@ -1060,7 +1066,7 @@ binary_op_assign:
     else
         UNWRAP(be_compile_expr(be, e->rhs, &tace.arg2));
     UNWRAP(be_compile_expr(be, e->lhs, out));
-    tace.arg1 = be_deref(be, out, e->lhs->sizing, tace.rc);
+    tace.arg1 = be_deref(be, out, e->lhs_sizing, tace.rc);
     tace.arg2 = be_push_tace(be, &tace, e->sizing);
     tace.arg1 = *out;
     tace.assign_width = e->sizing.width;

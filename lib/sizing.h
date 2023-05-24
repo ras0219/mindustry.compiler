@@ -7,6 +7,12 @@ typedef struct Sizing
     uint32_t is_signed : 1, width : 31;
 } Sizing;
 
+typedef struct SizAlign
+{
+    uint32_t is_signed : 1, width : 31;
+    uint32_t align;
+} SizAlign;
+
 static const Sizing s_sizing_ptr = {.width = 8};
 static const Sizing s_sizing_int = {
     .is_signed = 1,

@@ -50,9 +50,11 @@ static __forceinline unsigned long long typestr_get_size(const struct TypeTable*
     return tsb_get_size_i(types, &ts->buf, ts->buf.buf[0], rc);
 }
 
-static __forceinline unsigned long long typestr_get_align(const struct TypeTable* types, const struct TypeStr* ts)
+static __forceinline unsigned long long typestr_get_align(const struct TypeTable* types,
+                                                          const struct TypeStr* ts,
+                                                          const struct RowCol* rc)
 {
-    return tsb_get_align_i(types, &ts->buf, ts->buf.buf[0]);
+    return tsb_get_align_i(types, &ts->buf, ts->buf.buf[0], rc);
 }
 
 static __forceinline unsigned long long typestr_get_add_size(const struct TypeTable* types,
@@ -74,6 +76,13 @@ static __forceinline struct Sizing typestr_calc_sizing_zero_void(const struct Ty
                                                                  const struct RowCol* rc)
 {
     return tsb_calc_sizing_zero_void(types, &ts->buf, rc);
+}
+
+static __forceinline SizAlign typestr_calc_sizalign(const struct TypeTable* types,
+                                                    const struct TypeStr* ts,
+                                                    const struct RowCol* rc)
+{
+    return tsb_calc_sizalign(types, &ts->buf, rc);
 }
 
 static __forceinline struct Sizing typestr_calc_elem_sizing(const struct TypeTable* types,

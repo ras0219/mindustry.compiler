@@ -20,8 +20,7 @@ typedef struct TypeSymbol
     struct DeclSpecs* def;
     struct Symbol* first_member;
     size_t idx;
-    Sizing size;
-    size_t align;
+    SizAlign size;
 } TypeSymbol;
 
 typedef struct AstType
@@ -147,6 +146,7 @@ typedef struct Symbol
     // elaboration information
     unsigned char is_enum_constant : 1;
     unsigned char is_aggregate : 1;
+    unsigned char is_fn : 1;
     unsigned char is_array_or_fn : 1;
     unsigned char is_complete : 1;
     TypeStr type;

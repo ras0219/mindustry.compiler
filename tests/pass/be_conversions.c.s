@@ -6,11 +6,6 @@ _cg_declare_extern:
     mov %r11d, 4(%rsp)
     movsb 0(%rsp), %r11
     mov %r11d, 4(%rsp)
-    movsb 0(%rsp), %r11
-    add $1, %r11
-    mov %r11, 48(%rsp)
-    movsb 48(%rsp), %r11
-    mov %r11b, 0(%rsp)
     leaq 0(%rsp), %r11
     mov %r11, 8(%rsp)
     movsb 0(%rsp), %r11

@@ -439,6 +439,7 @@ static void elaborate_expr_ExprAssign(struct Elaborator* elab, struct ExprAssign
     const RowCol* const rc = &e->tok->rc;
     elaborate_expr_lvalue(elab, e->lhs, rty);
     typestr_dereference(rty);
+    e->lhs_sizing = typestr_calc_sizing(elab->types, rty, token_rc(e->tok));
     const struct TypeStr orig_lhs = *rty;
     if (typestr_is_const(rty))
     {
@@ -792,6 +793,7 @@ static void elaborate_expr_ExprIncr(struct Elaborator* elab, struct ExprIncr* e,
 {
     elaborate_expr_lvalue(elab, e->lhs, rty);
     typestr_dereference(rty);
+    e->inner_sizing = typestr_calc_sizing(elab->types, rty, token_rc(e->tok));
     const struct TypeStr orig_lhs = *rty;
     unsigned int lhs_mask = typestr_mask(rty);
     if (!(lhs_mask & TYPE_MASK_SCALAR))
@@ -1033,26 +1035,18 @@ static void elaborate_init_ty_AstInit(struct Elaborator* elab, size_t offset, co
             }
             Expr* expr = (Expr*)init->init;
             // standard expression initialization
-            struct TypeStr ts, ts_decay;
-            elaborate_expr(elab, expr, &ts);
-            ts_decay = ts;
-            const int ts_decay_addr_taken = typestr_decay(&ts_decay);
+            struct TypeStr ts;
             const int ts_is_strlit = expr->kind == EXPR_STRLIT;
+            elaborate_expr_decay(elab, expr, &ts);
 
             while (typestr_is_aggregate(&back->ty))
             {
-                if (tsb_match(&back->ty.buf, &ts.buf)) break;
                 if (ts_is_strlit && typestr_is_char_array(&back->ty)) goto skip_conversion;
-                if (tsb_match(&back->ty.buf, &ts_decay.buf))
-                {
-                    expr->take_address = ts_decay_addr_taken;
-                    break;
-                }
+                if (tsb_match(&back->ty.buf, &ts.buf)) break;
                 if (di_enter(&iter, elab, &init->tok->rc)) goto fail;
                 back = array_back(&iter.stk, sizeof(*back));
             }
-            typestr_implicit_conversion(elab->types, rc, &ts_decay, &back->ty);
-            expr->take_address = ts_decay_addr_taken;
+            typestr_implicit_conversion(elab->types, rc, &ts, &back->ty);
         skip_conversion:
             init->is_aggregate_init = typestr_is_aggregate(&back->ty);
             init->offset = back->offset;
@@ -1337,8 +1331,11 @@ static void elaborate_expr_ExprCall(struct Elaborator* elab,
         {
             const struct TypeStrBuf* orig_tt_arg = typestr_get_arg(elab->types, &fn_info, i);
             typestr_implicit_conversion2(elab->types, rc, &arg_expr_ty, orig_tt_arg);
-            param->sizing = tsb_calc_sizing(elab->types, orig_tt_arg, rc);
-            param->align = tsb_get_align(elab->types, orig_tt_arg);
+            param->sz = tsb_calc_sizalign(elab->types, orig_tt_arg, rc);
+            if (param->sz.width == 0 || param->sz.align == 0)
+            {
+                tsb_error1(&expr->tok->rc, elab->types, "error: incomplete param type '%.*s'\n", orig_tt_arg);
+            }
         }
         else
         {
@@ -1351,9 +1348,8 @@ static void elaborate_expr_ExprCall(struct Elaborator* elab,
                                "error: expected scalar type in variadic arguments but got '%.*s'\n",
                                &orig_arg_expr_ty);
             }
-            param->sizing.is_signed = 0;
-            param->sizing.width = 8;
-            param->align = 8;
+            param->sz.width = 8;
+            param->sz.align = 8;
         }
     }
 
@@ -1398,11 +1394,6 @@ static void elaborate_expr_lvalue_ExprRef(Elaborator* elab, ExprRef* e, TypeStr*
 {
     *rty = e->sym->type;
     expr_addressof(&e->expr_base, rty);
-}
-static void elaborate_expr_lvalue_ExprAssign(Elaborator* elab, ExprAssign* expr, TypeStr* rty)
-{
-    elaborate_expr_ExprAssign(elab, expr, rty);
-    expr_addressof(&expr->expr_base, rty);
 }
 
 static void elaborate_expr_ExprField_lhs(struct Elaborator* elab, struct ExprField* e, struct TypeStr* rty)
@@ -1498,7 +1489,6 @@ static void elaborate_expr_lvalue(struct Elaborator* elab, struct Expr* expr, st
     switch (expr->kind)
     {
         DISPATCH_EXPR_LVALUE(ExprRef);
-        DISPATCH_EXPR_LVALUE(ExprAssign);
         DISPATCH_EXPR_LVALUE(ExprDeref);
         DISPATCH_EXPR_LVALUE(ExprField);
         default:
@@ -1508,7 +1498,7 @@ static void elaborate_expr_lvalue(struct Elaborator* elab, struct Expr* expr, st
             *rty = s_type_unknown;
             break;
     }
-    expr->sizing = typestr_calc_elem_sizing(elab->types, rty, token_rc(expr->tok));
+    expr->sizing = s_sizing_ptr;
     expr->c = rty->c;
     constant_load_lvalue(&expr->c);
     expr->elaborated = 1;
@@ -1521,7 +1511,13 @@ static void elaborate_expr_decay(struct Elaborator* elab, struct Expr* expr, str
     {
         expr->take_address = 1;
     }
-    expr->sizing = typestr_calc_sizing_zero_void(elab->types, rty, token_rc(expr->tok));
+    if (rty->buf.buf[0] == 1 && rty->buf.buf[1] == TYPE_BYTE_VOID)
+    {
+    }
+    else
+    {
+        expr->sizing = typestr_calc_sizing(elab->types, rty, token_rc(expr->tok));
+    }
     expr->c = rty->c;
     constant_load_lvalue(&expr->c);
     expr->elaborated = 1;
@@ -1530,10 +1526,10 @@ static void elaborate_expr_decay(struct Elaborator* elab, struct Expr* expr, str
 static void elaborate_expr_ExprRef(Elaborator* elab, ExprRef* e, TypeStr* rty)
 {
     *rty = e->sym->type;
-    if (e->sym->size.width == 0)
-    {
-        e->sym->size = typestr_calc_sizing(elab->types, rty, token_rc(e->tok));
-    }
+    // if (e->sym->size.width == 0)
+    // {
+    //     e->sym->size = typestr_calc_sizing(elab->types, rty, token_rc(e->tok));
+    // }
 }
 static void elaborate_expr_ExprCast(Elaborator* elab, ExprCast* e, TypeStr* rty)
 {
@@ -1666,7 +1662,8 @@ static int elaborate_constinit(
         if (is_aggregate_init && init->is_braced_strlit)
         {
             ast = init->init;
-            goto expr_init;
+            if (ast->kind != EXPR_STRLIT) abort();
+            goto strlit_init;
         }
 
         memset(bytes, 0, sz);
@@ -1679,9 +1676,9 @@ static int elaborate_constinit(
     }
     else
     {
-    expr_init:
         if (is_aggregate_init && ast->kind == EXPR_STRLIT)
         {
+        strlit_init:;
             ExprStrLit* lit = (void*)ast;
             size_t n = sz;
             if (n > lit->tok->tok_len + 1) n = lit->tok->tok_len + 1;
@@ -1698,7 +1695,7 @@ static int elaborate_constinit(
         else
         {
             TypeStr ty = {0};
-            elaborate_expr(elab, (Expr*)ast, &ty);
+            elaborate_expr_decay(elab, (Expr*)ast, &ty);
             if (!ty.c.is_const)
             {
                 return parser_tok_error(ast->tok, "error: expected constant expression\n");
@@ -1706,7 +1703,8 @@ static int elaborate_constinit(
             memcpy(bytes, &ty.c.value.lower, sz);
             if (sz == 8)
             {
-                if (ty.c.is_lvalue && ty.c.sym)
+                if (ty.c.is_lvalue) abort();
+                if (ty.c.sym)
                 {
                     memcpy(elab->constinit_bases.data + constinit_offset + offset, &ty.c.sym, 8);
                 }
@@ -1742,6 +1740,7 @@ static int elaborate_decl(Elaborator* const elab, Decl* const decl)
         typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, &sym->type, decl);
 
         unsigned int t = typestr_mask(&sym->type);
+        sym->is_fn = !!(t & TYPE_FLAGS_FUNCTION);
         sym->is_array_or_fn = !!(t & TYPE_MASK_FN_ARR);
         sym->is_aggregate = !!(t & TYPE_MASK_AGGREGATE);
     }
@@ -1753,7 +1752,7 @@ static int elaborate_decl(Elaborator* const elab, Decl* const decl)
         if (!decl->specs->is_typedef)
         {
             const char tyb = typestr_byte(&sym->type);
-            if (tyb == TYPE_BYTE_FUNCTION)
+            if (sym->is_fn)
             {
                 if (!decl->init) abort();
                 if (decl->type->kind != AST_DECLFN) abort();
@@ -1763,92 +1762,101 @@ static int elaborate_decl(Elaborator* const elab, Decl* const decl)
                 TypeStr ts = sym->type;
                 typestr_pop_offset(&ts);
                 sym->fn_ret_sizing = typestr_calc_sizing_zero_void(elab->types, &ts, token_rc(decl->tok));
-            }
-            if (decl->init && !sym->is_enum_constant)
-            {
+
                 Decl* prev = elab->cur_decl;
                 elab->cur_decl = decl;
                 elaborate_init_ty(elab, 0, &sym->type, &sym->const_init, decl->init);
                 if (!typestr_is_const(&sym->type)) sym->const_init = s_not_constant;
                 elab->cur_decl = prev;
             }
-            if (tyb == TYPE_BYTE_UNK_ARRAY)
+            else
             {
-                const int is_char_array = typestr_is_char_array(&sym->type);
-                typestr_remove_array(&sym->type);
-                const size_t elem_size = typestr_get_size(elab->types, &sym->type, &decl->tok->rc);
-                if (!decl->init)
+                if (decl->init && !sym->is_enum_constant)
                 {
-                    if (!decl->sym->next_field && decl->sym->parent_su)
-                    {
-                        tsb_append_offset(&sym->type.buf, 0, TYPE_BYTE_ARRAY);
-                    }
-                    else
-                    {
-                        UNWRAP(parser_tok_error(
-                            decl->tok,
-                            "error: definition of object with unknown array bounds must have an initializer\n"));
-                    }
+                    Decl* prev = elab->cur_decl;
+                    elab->cur_decl = decl;
+                    elaborate_init_ty(elab, 0, &sym->type, &sym->const_init, decl->init);
+                    if (!typestr_is_const(&sym->type)) sym->const_init = s_not_constant;
+                    elab->cur_decl = prev;
                 }
-                else
+                if (tyb == TYPE_BYTE_UNK_ARRAY)
                 {
-                    Ast* init = decl->init;
-                    if (init->kind == AST_INIT)
+                    const int is_char_array = typestr_is_char_array(&sym->type);
+                    typestr_remove_array(&sym->type);
+                    const size_t elem_size = typestr_get_size(elab->types, &sym->type, &decl->tok->rc);
+                    if (!decl->init)
                     {
-                        AstInit* i = (AstInit*)init;
-                        if (is_char_array && i->is_braced_strlit)
+                        if (!decl->sym->next_field && decl->sym->parent_su)
                         {
-                            init = i->init;
-                            goto strlit_init;
+                            tsb_append_offset(&sym->type.buf, 0, TYPE_BYTE_ARRAY);
                         }
                         else
                         {
-                            uint32_t max_assign = 0;
-                            for (; i->init; i = i->next)
-                            {
-                                uint32_t new_max = i->offset / elem_size;
-                                if (new_max > max_assign) max_assign = new_max;
-                            }
-                            if (max_assign == UINT32_MAX) abort();
-                            tsb_append_offset(&sym->type.buf, max_assign + 1, TYPE_BYTE_ARRAY);
+                            UNWRAP(parser_tok_error(
+                                decl->tok,
+                                "error: definition of object with unknown array bounds must have an initializer\n"));
                         }
                     }
-                    else if (init->kind == EXPR_STRLIT)
-                    {
-                    strlit_init:
-                        tsb_append_offset(&sym->type.buf, init->tok->tok_len + 1, TYPE_BYTE_ARRAY);
-                    }
                     else
                     {
-                        UNWRAP(parser_tok_error(
-                            init->tok,
-                            "error: array initializer must be either a string literal or an initializer list\n"));
+                        Ast* init = decl->init;
+                        if (init->kind == AST_INIT)
+                        {
+                            AstInit* i = (AstInit*)init;
+                            if (is_char_array && i->is_braced_strlit)
+                            {
+                                init = i->init;
+                                goto strlit_init;
+                            }
+                            else
+                            {
+                                uint32_t max_assign = 0;
+                                for (; i->init; i = i->next)
+                                {
+                                    uint32_t new_max = i->offset / elem_size;
+                                    if (new_max > max_assign) max_assign = new_max;
+                                }
+                                if (max_assign == UINT32_MAX) abort();
+                                tsb_append_offset(&sym->type.buf, max_assign + 1, TYPE_BYTE_ARRAY);
+                            }
+                        }
+                        else if (init->kind == EXPR_STRLIT)
+                        {
+                        strlit_init:
+                            tsb_append_offset(&sym->type.buf, init->tok->tok_len + 1, TYPE_BYTE_ARRAY);
+                        }
+                        else
+                        {
+                            UNWRAP(parser_tok_error(
+                                init->tok,
+                                "error: array initializer must be either a string literal or an initializer list\n"));
+                        }
                     }
                 }
-            }
-            sym->align = typestr_get_align(elab->types, &sym->type);
-            if (tyb == TYPE_BYTE_UNK_ARRAY && !sym->next_field && sym->parent_su)
-            {
-            }
-            else
-            {
-                sym->size = typestr_calc_sizing(elab->types, &sym->type, token_rc(decl->tok));
-
-                if (sym->size.width == 0)
+                sym->align = typestr_get_align(elab->types, &sym->type, token_rc(decl->tok));
+                if (tyb == TYPE_BYTE_UNK_ARRAY && !sym->next_field && sym->parent_su)
                 {
-                    /* type may be incomplete */
-                    if (decl->specs->is_extern)
+                }
+                else
+                {
+                    sym->size = typestr_calc_sizing(elab->types, &sym->type, token_rc(decl->tok));
+
+                    if (sym->size.width == 0)
                     {
-                        /* it's extern -- OK */
-                    }
-                    else if (decl->specs->is_fn_arg && !((struct Decl*)decl->specs->parent)->init)
-                    {
-                        /* arg of function prototype -- OK */
-                    }
-                    else
-                    {
-                        parser_tok_error(decl->tok, "error: definition of object with incomplete size\n");
-                        return 0;
+                        /* type may be incomplete */
+                        if (decl->specs->is_extern)
+                        {
+                            /* it's extern -- OK */
+                        }
+                        else if (decl->specs->is_fn_arg && !((struct Decl*)decl->specs->parent)->init)
+                        {
+                            /* arg of function prototype -- OK */
+                        }
+                        else
+                        {
+                            parser_tok_error(decl->tok, "error: definition of object with incomplete size\n");
+                            return 0;
+                        }
                     }
                 }
             }
@@ -1856,7 +1864,7 @@ static int elaborate_decl(Elaborator* const elab, Decl* const decl)
             UNWRAP(parser_has_errors());
 
             if ((!(struct Decl*)decl->specs->parent || decl->specs->is_static) && !decl->specs->is_extern &&
-                tyb != TYPE_BYTE_FUNCTION && decl->init)
+                !sym->is_fn && decl->init)
             {
                 // global object with initializer -- constinit
                 sym->constinit_offset = elab->constinit.sz;
@@ -1869,7 +1877,7 @@ static int elaborate_decl(Elaborator* const elab, Decl* const decl)
     }
     else
     {
-        if (!decl->specs->is_extern && !decl->specs->is_typedef)
+        if (!decl->specs->is_extern && !decl->specs->is_typedef && !sym->is_fn)
         {
             sym->size = typestr_calc_sizing(elab->types, &sym->type, token_rc(decl->tok));
         }
@@ -1896,7 +1904,7 @@ static int elaborate_declspecs(struct Elaborator* elab, struct DeclSpecs* specs)
             {
                 specs->sym->size.is_signed = 1;
                 specs->sym->size.width = 4;
-                specs->sym->align = 4;
+                specs->sym->size.align = 4;
             }
         }
 
@@ -1997,7 +2005,7 @@ static int elaborate_declspecs(struct Elaborator* elab, struct DeclSpecs* specs)
 
             if (struct_size == 0) struct_size = 1;
             struct_size = round_to_alignment(struct_size, struct_align);
-            specs->sym->align = struct_align;
+            specs->sym->size.align = struct_align;
             specs->sym->size.width = struct_size;
         }
     }

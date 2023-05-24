@@ -4,7 +4,7 @@ void cg_declare_extern()
     x = 11;
     int y = x;
     y = x;
-    char* px = &(x += 1);
+    const char* px = &x;
     x++;
     char h[] = "he\\\\\\";
     char* p = h;

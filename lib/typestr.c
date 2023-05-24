@@ -28,6 +28,17 @@ static __forceinline uint32_t tsb_get_offset_i(const TypeStrBuf* ts, int i)
     return ret;
 }
 
+static __forceinline uint32_t tsb_extract_offset_i(const TypeStrBuf* ts, int* p_i)
+{
+    uint32_t ret = UINT32_MAX;
+    if (*p_i >= 1 + sizeof(ret))
+    {
+        memcpy(&ret, ts->buf + *p_i - sizeof(ret), sizeof(ret));
+        *p_i -= sizeof(ret) + 1;
+    }
+    return ret;
+}
+
 static __forceinline unsigned int tsb_skip_cvr_i(const TypeStrBuf* ts, int* p_i)
 {
     int i = *p_i;
@@ -442,60 +453,53 @@ void typestr_from_decltype_Decl(const void* const* expr_seqs, TypeTable* tt, Typ
     }
 }
 
-static __forceinline size_t tsb_get_size_i_inner(const TypeTable* types, const TypeStrBuf* buf, int i)
+static const SizAlign s_sizalign_for_type[] = {
+    [TYPE_BYTE_INVALID] = {0},
+    [TYPE_BYTE_POINTER] = {.align = 8, .width = 8},
+    [TYPE_BYTE_ULLONG] = {.align = 8, .width = 8},
+    [TYPE_BYTE_ULONG] = {.align = 8, .width = 8},
+    [TYPE_BYTE_UINT] = {.align = 4, .width = 4},
+    [TYPE_BYTE_USHORT] = {.align = 2, .width = 2},
+    [TYPE_BYTE_UCHAR] = {.align = 1, .width = 1},
+    [TYPE_BYTE_LLONG] = {.align = 8, .width = 8, .is_signed = 1},
+    [TYPE_BYTE_LONG] = {.align = 8, .width = 8, .is_signed = 1},
+    [TYPE_BYTE_INT] = {.align = 4, .width = 4, .is_signed = 1},
+    [TYPE_BYTE_ENUM] = {.align = 4, .width = 4, .is_signed = 1},
+    [TYPE_BYTE_SHORT] = {.align = 2, .width = 2, .is_signed = 1},
+    [TYPE_BYTE_CHAR] = {.align = 1, .width = 1, .is_signed = 1},
+    [TYPE_BYTE_SCHAR] = {.align = 1, .width = 1, .is_signed = 1},
+    [TYPE_BYTE_UUVALIST] = {.align = 8, .width = 24},
+};
+
+static __forceinline SizAlign tsb_get_sizalign_i_inner(const TypeTable* types, const TypeStrBuf* buf, int i)
 {
-    switch (buf->buf[i])
-    {
-        case TYPE_BYTE_STRUCT:
-        case TYPE_BYTE_UNION: return tt_get(types, tsb_get_offset_i(buf, i))->size.width;
-        case TYPE_BYTE_ENUM: return 4;
-        case TYPE_BYTE_POINTER: return 8;
-        case TYPE_BYTE_UUVALIST: return 24;
-        case TYPE_BYTE_ULLONG:
-        case TYPE_BYTE_ULONG:
-        case TYPE_BYTE_LLONG:
-        case TYPE_BYTE_LONG: return 8;
-        case TYPE_BYTE_UINT:
-        case TYPE_BYTE_INT: return 4;
-        case TYPE_BYTE_USHORT:
-        case TYPE_BYTE_SHORT: return 2;
-        case TYPE_BYTE_VOID:
-        case TYPE_BYTE_UCHAR:
-        case TYPE_BYTE_SCHAR:
-        case TYPE_BYTE_CHAR: return 1;
-        case TYPE_BYTE_FUNCTION: return 1;
-        default: return 0;
-    }
+    unsigned x = buf->buf[i];
+    if (x == TYPE_BYTE_STRUCT || x == TYPE_BYTE_UNION) return tt_get(types, tsb_get_offset_i(buf, i))->size;
+    if (x >= sizeof(s_sizalign_for_type) / sizeof(s_sizalign_for_type[0])) x = TYPE_BYTE_INVALID;
+    return s_sizalign_for_type[x];
 }
 
-unsigned long long tsb_get_size_i(const TypeTable* types, const TypeStrBuf* buf, int i, const RowCol* rc)
+static size_t tsb_skip_multiplier_i(const TypeTable* types, const TypeStrBuf* buf, int* p_i, const RowCol* rc)
 {
     size_t multiplier = 1;
-    for (tsb_skip_cvr_i(buf, &i); buf->buf[i] == TYPE_BYTE_ARRAY; tsb_skip_cvr_i(buf, &i))
+    for (tsb_skip_cvr_i(buf, p_i); buf->buf[*p_i] == TYPE_BYTE_ARRAY; tsb_skip_cvr_i(buf, p_i))
     {
-        multiplier *= tsb_get_offset_i(buf, i);
+        multiplier *= tsb_extract_offset_i(buf, p_i);
         if (multiplier > UINT32_MAX)
         {
             tsb_error1(rc, types, "error: type too large: %.*s\n", buf);
             return 1;
         }
-        i -= sizeof(uint32_t) + 1;
-    }
-    multiplier *= tsb_get_size_i_inner(types, buf, i);
-    if (multiplier == 0)
-    {
-        tsb_error1(rc, types, "error: unable to get size of incomplete type: %.*s\n", buf);
-        return 1;
-    }
-    else if (multiplier > UINT32_MAX)
-    {
-        tsb_error1(rc, types, "error: type too large: %.*s\n", buf);
-        return 1;
     }
     return multiplier;
 }
 
-unsigned long long tsb_get_align_i(const TypeTable* types, const TypeStrBuf* buf, int i)
+unsigned long long tsb_get_size_i(const TypeTable* types, const TypeStrBuf* buf, int i, const RowCol* rc)
+{
+    return tsb_calc_sizalign_i(types, buf, i, rc).width;
+}
+
+unsigned long long tsb_get_align_i(const TypeTable* types, const TypeStrBuf* buf, int i, const RowCol* rc)
 {
 top:
     tsb_skip_cvr_i(buf, &i);
@@ -511,37 +515,15 @@ top:
             i -= 1 + sizeof(uint32_t);
             goto top;
         }
-        case TYPE_BYTE_STRUCT:
-        case TYPE_BYTE_UNION:
-        {
-            TypeSymbol* sym = tt_get(types, tsb_get_offset_i(buf, i));
-            if (!sym->align)
-            {
-                tsb_error1(NULL, types, "error: unable to get align of incomplete type: %.*s\n", buf);
-                return 1;
-            }
-            return sym->align;
-        }
-        case TYPE_BYTE_ENUM: return 4;
-        case TYPE_BYTE_POINTER: return 8;
-        case TYPE_BYTE_UUVALIST: return 8;
-        case TYPE_BYTE_ULLONG:
-        case TYPE_BYTE_ULONG:
-        case TYPE_BYTE_LLONG:
-        case TYPE_BYTE_LONG: return 8;
-        case TYPE_BYTE_UINT:
-        case TYPE_BYTE_INT: return 4;
-        case TYPE_BYTE_USHORT:
-        case TYPE_BYTE_SHORT: return 2;
-        case TYPE_BYTE_VOID:
-        case TYPE_BYTE_UCHAR:
-        case TYPE_BYTE_SCHAR:
-        case TYPE_BYTE_CHAR: return 1;
-        case TYPE_BYTE_FUNCTION: return 1;
         default:
         {
-            tsb_error1(NULL, types, "error: unable to get align of type: %.*s\n", buf);
-            return 1;
+            SizAlign sz = tsb_get_sizalign_i_inner(types, buf, i);
+            if (!sz.align)
+            {
+                tsb_error1(rc, types, "error: unable to get align of incomplete type: %.*s\n", buf);
+                return 1;
+            }
+            return sz.align;
         }
     }
 }
@@ -558,14 +540,32 @@ static const Sizing s_sizing_zero = {0};
 
 static Sizing tsb_calc_sizing_i(const TypeTable* types, const TypeStrBuf* ts, int i, const RowCol* rc)
 {
-    tsb_skip_cvr_i(ts, &i);
-    const size_t sz = tsb_get_size_i(types, ts, i, rc);
-    if (sz > INT32_MAX) abort();
+    SizAlign sz = tsb_calc_sizalign_i(types, ts, i, rc);
     const Sizing ret = {
-        .width = sz,
-        .is_signed = !!(s_typestr_mask_data[ts->buf[i]] & TYPE_FLAGS_SIGNED),
+        .width = sz.width,
+        .is_signed = sz.is_signed,
     };
     return ret;
+}
+
+SizAlign tsb_calc_sizalign_i(const struct TypeTable* types, const TypeStrBuf* ts, int i, const struct RowCol* rc)
+{
+    size_t multiplier = tsb_skip_multiplier_i(types, ts, &i, rc);
+    SizAlign sz = tsb_get_sizalign_i_inner(types, ts, i);
+    multiplier *= sz.width;
+    if (multiplier == 0)
+    {
+        tsb_error1(rc, types, "error: unable to get size of incomplete type: %.*s\n", ts);
+    }
+    else if (multiplier > UINT32_MAX)
+    {
+        tsb_error1(rc, types, "error: type too large: %.*s\n", ts);
+    }
+    else
+    {
+        sz.width = multiplier;
+    }
+    return sz;
 }
 
 Sizing tsb_calc_elem_sizing(const TypeTable* types, const TypeStrBuf* ts, const RowCol* rc)

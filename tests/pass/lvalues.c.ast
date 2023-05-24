@@ -53,4 +53,4 @@
      (EXPR_REF x take_addr)
      (EXPR_LIT 7 D))
     (EXPR_ADDRESS &
-     (EXPR_REF z take_addr __i4) __u8)))))
+     (EXPR_REF z take_addr __u8) __u8)))))

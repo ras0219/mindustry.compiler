@@ -1248,6 +1248,9 @@ static void cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t
             break;
         case TACO_SUB: instk = INST_SUBQ; goto simple_binary;
         case TACO_MUL: instk = INST_IMUL; goto simple_binary;
+        case TACO_BAND: instk = INST_ANDQ; goto simple_binary;
+        case TACO_BOR: instk = INST_ORQ; goto simple_binary;
+        case TACO_BXOR: instk = INST_XORQ; goto simple_binary;
         case TACO_DIV:
         case TACO_IDIV:
         case TACO_MOD:
@@ -1272,9 +1275,6 @@ static void cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t
             else
                 cg_gen_store_frame(cg, i, REG_RAX, frame);
             break;
-        case TACO_BAND: instk = INST_ANDQ; goto simple_binary;
-        case TACO_BOR: instk = INST_ORQ; goto simple_binary;
-        case TACO_BXOR: instk = INST_XORQ; goto simple_binary;
         case TACO_SHL: instk = SHL; goto shift;
         case TACO_SHR:
             instk = SHR;
