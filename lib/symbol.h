@@ -155,7 +155,7 @@ typedef struct Symbol
     Sizing fn_ret_sizing;
     size_t field_offset;
     Sizing size;
-    size_t align;
+    uint32_t align;
 
     size_t constinit_offset;
     int enum_value;

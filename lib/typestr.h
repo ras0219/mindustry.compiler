@@ -123,7 +123,7 @@ static __forceinline unsigned int typestr_strip_cvr(struct TypeStr* ts) { return
 static __forceinline unsigned int typestr_get_cvr(const TypeStr* ts) { return tsb_get_cvr(&ts->buf); }
 void typestr_remove_array(struct TypeStr* ts);
 void typestr_dereference(struct TypeStr* ts);
-static __forceinline int typestr_is_const(const struct TypeStr* ts) { return typestr_get_cvr(ts) & TYPESTR_CVR_C != 0; }
+static __forceinline int typestr_is_const(const struct TypeStr* ts) { return (typestr_get_cvr(ts) & TYPESTR_CVR_C) != 0; }
 
 // fmt should contain exactly one %.*s
 void typestr_error1(const struct RowCol* rc, const struct TypeTable* e, const char* fmt, const struct TypeStr* ts);

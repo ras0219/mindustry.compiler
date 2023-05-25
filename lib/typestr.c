@@ -532,7 +532,14 @@ unsigned long long tsb_get_add_size(const TypeTable* types, const TypeStrBuf* ts
 {
     int i = ts->buf[0];
     tsb_skip_cvr_i(ts, &i);
-    return ts->buf[i] == TYPE_BYTE_POINTER ? tsb_get_size_i(types, ts, i - 1, rc) : 1;
+    if (ts->buf[i] == TYPE_BYTE_POINTER)
+    {
+        --i;
+        tsb_skip_cvr_i(ts, &i);
+        if (i == 1 && ts->buf[1] == TYPE_BYTE_VOID) return 1;
+        return tsb_get_size_i(types, ts, i, rc);
+    }
+    return 1;
 }
 
 static const Sizing s_sizing_zero = {0};

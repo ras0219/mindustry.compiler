@@ -5,7 +5,7 @@ _f:
     movb $0, %al
     callq *_g(%rip)
     movb $0, %al
-    callq _h@PLT
+    callq _h
     movq _i@GOTPCREL(%rip), %r11
     movb $0, %al
     callq *(%r11)

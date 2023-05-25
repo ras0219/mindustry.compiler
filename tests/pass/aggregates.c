@@ -7,6 +7,7 @@ struct A
         char c;
     };
 };
+
 int foo()
 {
     struct A a = {.l = 1, .y = 0, {2}};

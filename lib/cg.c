@@ -427,7 +427,6 @@ enum InstArgKind
     IA_LNAME,
     IA_LITERAL,
     IA_SYM,
-    IA_SYM_PLT,
     IA_LABEL,
     IA_CONST,
 };
@@ -515,10 +514,6 @@ static __forceinline InstArg ia_reg_d(unsigned reg, size_t offset)
     {                                                                                                                  \
         .kind = IA_SYM, .s = (x)                                                                                       \
     }
-#define IA_SYM_PLT(x)                                                                                                  \
-    {                                                                                                                  \
-        .kind = IA_SYM_PLT, .s = (x)                                                                                   \
-    }
 #define IA_LABEL(x, l)                                                                                                 \
     {                                                                                                                  \
         .kind = IA_LABEL, .s = (l), .lbl = (x)                                                                         \
@@ -601,10 +596,6 @@ static void cg_push_instarg(CodeGen* cg, const InstArg* a)
             break;
         case IA_LITERAL: array_appendf(&cg->code, "%s", a->s); break;
         case IA_SYM: cg_mangle_sym(cg, &cg->code, a->s); break;
-        case IA_SYM_PLT:
-            cg_mangle_sym(cg, &cg->code, a->s);
-            array_appends(&cg->code, "@PLT");
-            break;
         case IA_NAME:
             cg_mangle_sym(cg, &cg->code, a->s);
             if (a->offset) array_appendf(&cg->code, "+%zu", a->offset);
@@ -1318,7 +1309,7 @@ static void cg_gen_tace(struct CodeGen* cg, const struct TACEntry* taces, size_t
                 }
                 else if (tace.arg1.kind == TACA_NAME)
                 {
-                    InstArg a1 = IA_SYM_PLT(tace.arg1.name);
+                    InstArg a1 = IA_SYM(tace.arg1.name);
                     j[1].a1 = a1;
                 }
                 else

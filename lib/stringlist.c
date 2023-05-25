@@ -16,7 +16,7 @@ void strlist_appendz(StrList* sl, const char* z) { strlist_append(sl, z, strlen(
 
 StrListIterator strlistv_next(StrListV sl, StrListIterator it, const char** s, size_t* n)
 {
-    memcpy(n, sl.data + it, sizeof(size_t));
+    memcpy(n, (char*)sl.data + it, sizeof(size_t));
     *s = (char*)sl.data + it + sizeof(size_t);
     return it + sizeof(size_t) + 1 + *n;
 }

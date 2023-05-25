@@ -27,10 +27,10 @@ _square:
     cld
     rep movsb
     movb $0, %al
-    callq _dbl@PLT
+    callq _dbl
     movb $0, %al
     callq _dbl2
     movb $0, %al
-    callq _dbl3@PLT
+    callq _dbl3
     addq $24, %rsp
     ret

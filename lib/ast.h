@@ -22,6 +22,7 @@
     Y(EXPR_ADD)                                                                                                        \
     Y(EXPR_ASSIGN)                                                                                                     \
     Y(EXPR_TERNARY)                                                                                                    \
+    Y(EXPR_COMMA)                                                                                                      \
     Y(EXPR_UNOP)                                                                                                       \
     Y(EXPR_DEREF)                                                                                                      \
     Y(EXPR_ADDRESS)                                                                                                    \
@@ -198,6 +199,16 @@ typedef struct ExprBinOp
 #define AST_STRUCT_EXPR_BINOP ExprBinOp
 #define AST_KIND_ExprBinOp EXPR_BINOP
 
+typedef struct ExprComma
+{
+    INHERIT_EXPR;
+
+    struct Expr* lhs;
+    struct Expr* rhs;
+} ExprComma;
+#define AST_STRUCT_EXPR_COMMA ExprComma
+#define AST_KIND_ExprComma EXPR_COMMA
+
 typedef struct ExprAndOr
 {
     INHERIT_EXPR;
@@ -324,8 +335,8 @@ typedef struct AstInit
     size_t designator_extent;
     struct AstInit* next;
 
-    Sizing sizing;
     uint32_t offset;
+    uint32_t width;
     uint8_t is_aggregate_init;
     uint8_t is_braced_strlit;
 } AstInit;

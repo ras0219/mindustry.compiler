@@ -106,6 +106,7 @@ static void* parse_alloc_expr(Parser* p, const struct Token* tok, int tag, size_
         return e_;                                                                                                     \
     }
 
+DEFINE_PARSE_ALLOC2(ExprComma, Expr*, lhs, Expr*, rhs);
 DEFINE_PARSE_ALLOC2(ExprAndOr, Expr*, lhs, Expr*, rhs);
 DEFINE_PARSE_ALLOC2(ExprBinOp, Expr*, lhs, Expr*, rhs);
 DEFINE_PARSE_ALLOC2(ExprAdd, Expr*, lhs, Expr*, rhs);
@@ -564,6 +565,12 @@ static const struct Token* parse_expr_continue(
                 op_expr = &e->expr_base;
                 rhs = &e->rhs;
             }
+            else if (op_prec == PRECEDENCE_COMMA)
+            {
+                ExprComma* e = parse_alloc_ExprComma(p, tok_op, lhs, NULL);
+                op_expr = &e->expr_base;
+                rhs = &e->rhs;
+            }
             else
             {
                 ExprBinOp* e = parse_alloc_ExprBinOp(p, tok_op, lhs, NULL);
@@ -680,7 +687,7 @@ static const Token* parse_attribute(Parser* p, const Token* cur_tok, struct Attr
         if (token_is_sym(p, cur_tok, ',') || token_is_sym(p, cur_tok, ')'))
         {
             memset(attr->nonnull_addrs, 1, sizeof(attr->nonnull_addrs));
-            goto done;
+            goto fail;
         }
         else if (token_is_sym(p, cur_tok, '('))
         {
@@ -695,14 +702,41 @@ static const Token* parse_attribute(Parser* p, const Token* cur_tok, struct Attr
     }
     else
     {
-        parser_tok_warn(cur_tok, "warning: ill-formed attribute. unrecognized identifier '%s'.\n", attrkind_str);
-        goto error;
+        static const char* skip_attrs[] = {
+            "__format__",
+            "__noreturn__",
+            "__malloc__",
+            "__alloc_size__",
+            "__malloc__",
+            "__warn_unused_result__",
+            "__unused__",
+            "returns_nonnull",
+            "alloc_size",
+            "always_inline",
+            "__always_inline__",
+            "format_arg",
+            "__const__",
+        };
+        size_t i = 0, j = sizeof(skip_attrs) / sizeof(skip_attrs[0]);
+        for (; i < j; ++i)
+        {
+            if (strcmp(attrkind_str, skip_attrs[i]) == 0) break;
+        }
+        if (i < j)
+        {
+            PARSER_DO(parse_until_comma_or_cparen(p, cur_tok));
+        }
+        else
+        {
+            parser_tok_warn(cur_tok, "warning: ill-formed attribute. unrecognized identifier '%s'.\n", attrkind_str);
+            goto error;
+        }
     }
     return cur_tok;
 
 error:
     if (cur_tok) cur_tok = parse_until_comma_or_cparen(p, cur_tok);
-done:
+fail:
     return cur_tok;
 }
 static const struct Token* parse_msdeclspec(Parser* p, const struct Token* cur_tok, struct Attribute* attr)
@@ -2027,7 +2061,7 @@ __attribute__((unused)) static void* find_with_stride(void* arr_start, size_t ar
 {
     for (size_t i = 0; i < arr_size; i += stride)
     {
-        void* elem = arr_start + i;
+        void* elem = (char*)arr_start + i;
         if (*(void**)elem == key) return elem;
     }
     return NULL;

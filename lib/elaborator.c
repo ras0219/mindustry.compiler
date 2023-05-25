@@ -597,6 +597,11 @@ static void elaborate_expr_ExprBinOp(struct Elaborator* elab, struct ExprBinOp* 
         rty->c = s_not_constant;
     }
 }
+static void elaborate_expr_ExprComma(struct Elaborator* elab, struct ExprComma* e, struct TypeStr* rty)
+{
+    elaborate_expr(elab, e->lhs, rty);
+    elaborate_expr(elab, e->rhs, rty);
+}
 
 static void elaborate_expr_ExprAndOr(struct Elaborator* elab, struct ExprAndOr* e, struct TypeStr* rty)
 {
@@ -1023,7 +1028,7 @@ static void elaborate_init_ty_AstInit(struct Elaborator* elab, size_t offset, co
         if (init->init->kind == AST_INIT)
         {
             init->offset = back->offset;
-            init->sizing = typestr_calc_sizing(elab->types, &back->ty, rc);
+            init->width = typestr_calc_sizing(elab->types, &back->ty, rc).width;
             elaborate_init_ty_AstInit(elab, back->offset, &back->ty, (AstInit*)init->init);
         }
         else
@@ -1050,7 +1055,7 @@ static void elaborate_init_ty_AstInit(struct Elaborator* elab, size_t offset, co
         skip_conversion:
             init->is_aggregate_init = typestr_is_aggregate(&back->ty);
             init->offset = back->offset;
-            init->sizing = typestr_calc_sizing(elab->types, &back->ty, rc);
+            init->width = typestr_calc_sizing(elab->types, &back->ty, rc).width;
         }
     }
 
@@ -1583,6 +1588,7 @@ static void elaborate_expr_impl(struct Elaborator* elab, struct Expr* expr, stru
         DISPATCH_EXPR(ExprField);
         DISPATCH_EXPR(ExprBinOp);
         DISPATCH_EXPR(ExprAndOr);
+        DISPATCH_EXPR(ExprComma);
         DISPATCH_EXPR(ExprTernary);
         DISPATCH_EXPR(ExprUnOp);
         DISPATCH_EXPR(ExprDeref);
@@ -1655,7 +1661,7 @@ static int elaborate_constinit(
     Elaborator* elab, size_t constinit_offset, size_t offset, size_t sz, const Ast* ast, uint8_t is_aggregate_init)
 {
     int rc = 0;
-    char* const bytes = elab->constinit.data + constinit_offset + offset;
+    char* const bytes = (char*)elab->constinit.data + constinit_offset + offset;
     if (ast->kind == AST_INIT)
     {
         AstInit* init = (void*)ast;
@@ -1670,7 +1676,7 @@ static int elaborate_constinit(
         while (init->init)
         {
             UNWRAP(elaborate_constinit(
-                elab, constinit_offset, init->offset, init->sizing.width, init->init, init->is_aggregate_init));
+                elab, constinit_offset, init->offset, init->width, init->init, init->is_aggregate_init));
             init = init->next;
         }
     }
@@ -1706,7 +1712,7 @@ static int elaborate_constinit(
                 if (ty.c.is_lvalue) abort();
                 if (ty.c.sym)
                 {
-                    memcpy(elab->constinit_bases.data + constinit_offset + offset, &ty.c.sym, 8);
+                    memcpy((char*)elab->constinit_bases.data + constinit_offset + offset, &ty.c.sym, 8);
                 }
             }
             else

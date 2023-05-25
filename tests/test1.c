@@ -1308,7 +1308,7 @@ int test_cg_refs(TestState* state, StandardTest* test)
     REQUIRE_NEXT_TEXT("mov %r11, (%r10)");
 
     REQUIRE_NEXT_TEXT("movb $0, %al");
-    REQUIRE_NEXT_TEXT("callq _a@PLT");
+    REQUIRE_NEXT_TEXT("callq _a");
     REQUIRE_NEXT_TEXT("movb $0, %al");
     REQUIRE_NEXT_TEXT("callq _a");
     REQUIRE_NEXT_TEXT("movq _a@GOTPCREL(%rip), %r11");
@@ -1365,7 +1365,7 @@ int test_cg_call(TestState* state, StandardTest* test)
     REQUIRE_NEXT_TEXT("subq $120, %rsp");
 
     REQUIRE_NEXT_TEXT("movb $0, %al");
-    REQUIRE_NEXT_TEXT("callq _f@PLT");
+    REQUIRE_NEXT_TEXT("callq _f");
 
     REQUIRE_NEXT_TEXT("movq _f@GOTPCREL(%rip), %r11");
     REQUIRE_NEXT_TEXT("movb $0, %al");

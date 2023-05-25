@@ -28,10 +28,10 @@
                 "-D",
                 "FAIL_ON_FIRST",
                 "-S",
-                "/opt/src/mindustry.compiler/lib/array.c",
+                "/opt/src/mindustry.compiler/lib/pool.c",
                 "-c",
                 "-o",
-                "stage2/array.asm"
+                "stage2/pool.asm"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/selfbuild",
