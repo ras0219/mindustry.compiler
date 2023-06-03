@@ -76,6 +76,7 @@ const char* ast_kind_to_string(enum AstKind k);
 
 #define AST_FIELDS                                                                                                     \
     const struct Token* tok;                                                                                           \
+    size_t id;                                                                                                         \
     enum AstKind kind;                                                                                                 \
     unsigned char elaborated
 
@@ -98,8 +99,7 @@ typedef struct Ast
     INHERIT_AST;                                                                                                       \
     /* filled by elaboration */                                                                                        \
     unsigned char take_address;                                                                                        \
-    Sizing sizing;                                                                                                     \
-    struct Constant c
+    Sizing sizing;
 
 typedef struct Expr
 {
@@ -175,13 +175,12 @@ typedef struct ExprField
 {
     INHERIT_EXPR;
 
-    int is_arrow : 1;
-    const struct Token* field_tok;
-    const char* fieldname;
     struct Expr* lhs;
 
+    const char* fieldname;
+
     /* filled by elaboration */
-    struct Symbol* sym;
+    struct Symbol* field;
     size_t field_offset;
 } ExprField;
 #define AST_STRUCT_EXPR_FIELD ExprField
@@ -448,17 +447,17 @@ struct ASTDInit
     struct Expr* designator;
     struct Expr* next;
 };
-struct StmtLabel
+typedef struct StmtLabel
 {
     INHERIT_AST;
 
     struct Ast* stmt;
-};
-struct StmtBreak
+} StmtLabel;
+typedef struct StmtBreak
 {
     INHERIT_AST;
-};
-struct StmtContinue
+} StmtBreak;
+typedef struct StmtContinue
 {
     INHERIT_AST;
-};
+} StmtContinue;

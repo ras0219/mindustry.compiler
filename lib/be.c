@@ -3,6 +3,7 @@
 #include <assert.h>
 #include <string.h>
 
+#include "ast_elab_info.h"
 #include "cg.h"
 #include "elaborator.h"
 #include "errors.h"
@@ -13,6 +14,8 @@
 #include "tac.h"
 #include "token.h"
 #include "unwrap.h"
+
+#define sym_addr(sym) ((TACAddress*)be->sym_addrs.data + (sym)->idx)
 
 static const struct TACAddress s_taca_void = {};
 
@@ -369,7 +372,7 @@ static struct TACAddress be_from_constant(BackEnd* be, const Constant* c)
     if (c->is_lvalue) abort();
     if (c->sym)
     {
-        TACAddress addr = c->sym->addr;
+        TACAddress addr = *sym_addr(c->sym);
         be_take_address(be, &addr);
         addr.offset += c->value.lower;
         return addr;
@@ -491,6 +494,7 @@ static int be_compile_init(
     {
     expr_init:;
         Expr* expr = (Expr*)e;
+        AstElabInfo* info = elab_info(be->elab, expr);
         struct TACEntry assign = {
             .op = TACO_ASSIGN,
             .arg1 =
@@ -508,9 +512,9 @@ static int be_compile_init(
             assign.arg2.is_addr = 0;
             assign.arg2.sizing.width = width;
         }
-        else if (expr->c.is_const)
+        else if (info->c.is_const)
         {
-            assign.arg2 = be_from_constant(be, &expr->c);
+            assign.arg2 = be_from_constant(be, &info->c);
         }
         be_push_tace(be, &assign, s_sizing_zero);
     }
@@ -540,10 +544,10 @@ static int be_compile_DeclSpecs(struct BackEnd* be, struct DeclSpecs* specs)
         {
             Symbol* sym = ((Decl*)decls[i])->sym;
             if (!sym->is_enum_constant) abort();
-
-            sym->addr.kind = TACA_IMM;
-            sym->addr.imm = sym->enum_value;
-            sym->addr.sizing = s_sizing_int;
+            TACAddress* addr = sym_addr(sym);
+            addr->kind = TACA_IMM;
+            addr->imm = sym->enum_value;
+            addr->sizing = s_sizing_int;
         }
     }
     return 0;
@@ -574,12 +578,13 @@ fail:
 
 static void be_compile_ExprLit_Sym(BackEnd* be, Symbol* sym)
 {
-    if (sym->addr.kind == TACA_VOID)
+    TACAddress* addr = sym_addr(sym);
+    if (addr->kind == TACA_VOID)
     {
         const ExprStrLit* lit = sym->string_constant;
         Sizing sz = {.width = lit->tok->tok_len + 1};
         cg_string_constant(be->cg, be->next_constant, lit->text, lit->tok->tok_len);
-        sym->addr = taca_const(be->next_constant, sz);
+        *addr = taca_const(be->next_constant, sz);
         ++be->next_constant;
     }
 }
@@ -587,7 +592,7 @@ static void be_compile_ExprLit_Sym(BackEnd* be, Symbol* sym)
 static int be_compile_ExprStrLit(struct BackEnd* be, struct ExprStrLit* e, struct TACAddress* out)
 {
     be_compile_ExprLit_Sym(be, e->sym);
-    *out = e->sym->addr;
+    *out = *sym_addr(e->sym);
     return 0;
 }
 static int be_compile_ExprLit(struct BackEnd* be, struct ExprLit* e, struct TACAddress* out)
@@ -600,17 +605,8 @@ static int be_compile_ExprLit(struct BackEnd* be, struct ExprLit* e, struct TACA
 static int be_compile_ExprRef(struct BackEnd* be, struct ExprRef* esym, struct TACAddress* out)
 {
     int rc = 0;
-    if (esym->sym->is_enum_constant && 0)
-    {
-        out->kind = TACA_IMM;
-        out->imm = esym->sym->enum_value;
-        out->sizing = s_sizing_int;
-    }
-    else
-    {
-        *out = esym->sym->addr;
-        out->sizing = esym->sizing;
-    }
+    *out = *sym_addr(esym->sym);
+    out->sizing = esym->sizing;
     return rc;
 }
 
@@ -1115,9 +1111,10 @@ basic_binary:
     UNWRAP(be_compile_expr(be, e->lhs, &tace.arg1));
 push:
     *out = be_push_tace(be, &tace, e->sizing);
-    if (e->c.is_const)
+    AstElabInfo* info = elab_info(be->elab, &e->expr_base);
+    if (info->c.is_const)
     {
-        *out = be_from_constant(be, &e->c);
+        *out = be_from_constant(be, &info->c);
     }
 
 fail:
@@ -1369,9 +1366,10 @@ static int be_compile_StmtIf(struct BackEnd* be, struct StmtIf* stmt)
         .arg2 = {.kind = TACA_ALABEL, .alabel = else_lbl},
     };
     UNWRAP(be_compile_expr(be, stmt->cond, &e.arg1));
-    if (stmt->cond->c.is_const)
+    AstElabInfo* info = elab_info(be->elab, stmt->cond);
+    if (info->c.is_const)
     {
-        if (stmt->cond->c.value.lower || stmt->cond->c.sym)
+        if (info->c.value.lower || info->c.sym)
         {
             UNWRAP(be_compile_stmt(be, stmt->if_body));
         }
@@ -1459,6 +1457,7 @@ fail:
 static void be_compile_global(struct BackEnd* be, Decl* decl)
 {
     struct Symbol* const sym = decl->sym;
+    TACAddress* addr = sym_addr(sym);
     if (!decl->prev_decl)
     {
         const char* name;
@@ -1474,22 +1473,22 @@ static void be_compile_global(struct BackEnd* be, Decl* decl)
             name = sym->name;
         }
 
-        sym->addr.sizing = decl->sym->size;
+        addr->sizing = decl->sym->size;
         struct Decl* def = sym->def ? sym->def : decl;
         if ((decl->type->kind == AST_DECLFN && !def->init) || def->specs->is_extern)
         {
-            sym->addr.kind = TACA_NAME;
+            addr->kind = TACA_NAME;
             cg_declare_extern(be->cg, name);
         }
         else
         {
-            sym->addr.kind = TACA_LNAME;
+            addr->kind = TACA_LNAME;
             if (!decl->specs->is_static && !decl->specs->is_inline)
             {
                 cg_declare_public(be->cg, name);
             }
         }
-        sym->addr.name = name;
+        addr->name = name;
     }
     if (decl->specs->is_extern || decl->type->kind == AST_DECLFN)
     {
@@ -1509,17 +1508,17 @@ static void be_compile_global(struct BackEnd* be, Decl* decl)
             if (ptr)
             {
                 be_compile_ExprLit_Sym(be, ptr);
-                buf[j] = &ptr->addr;
+                buf[j] = sym_addr(ptr);
             }
         }
 
         char* start = (char*)be->elab->constinit.data + sym->constinit_offset;
-        cg_reserve_data(be->cg, sym->addr.name, start, buf, sym->size.width);
+        cg_reserve_data(be->cg, addr->name, start, buf, sym->size.width);
         my_free(buf);
     }
     else
     {
-        cg_reserve_zeroes(be->cg, sym->addr.name, sym->size.width);
+        cg_reserve_zeroes(be->cg, addr->name, sym->size.width);
     }
 }
 
@@ -1538,12 +1537,13 @@ static int be_compile_Decl(struct BackEnd* be, struct Decl* decl)
     }
 
     int rc = 0;
-    sym->addr = be_falloc(be, sym->size, sym->align);
+    TACAddress* addr = sym_addr(sym);
+    *addr = be_falloc(be, sym->size, sym->align);
 
     int start_frame_size = be->frame_size;
     if (decl->init)
     {
-        UNWRAP(be_compile_init(be, decl->init, sym->addr.offset, 0, sym->size.width, sym->is_aggregate));
+        UNWRAP(be_compile_init(be, decl->init, addr->offset, 0, sym->size.width, sym->is_aggregate));
     }
 fail:
     be->frame_size = start_frame_size;
@@ -1670,7 +1670,7 @@ static int be_compile_stmt(struct BackEnd* be, struct Ast* e)
 
 static const TACEntry s_return = {.op = TACO_RETURN};
 
-int be_compile_toplevel_decl(struct BackEnd* be, Decl* decl)
+static int be_compile_toplevel_decl(struct BackEnd* be, Decl* decl)
 {
     int rc = 0;
     array_clear(&be->code);
@@ -1718,9 +1718,10 @@ int be_compile_toplevel_decl(struct BackEnd* be, Decl* decl)
                 {
                     // class MEMORY
                     arg_offset = round_to_alignment(arg_offset, arg_decl->sym->align);
-                    arg_decl->sym->addr.kind = TACA_ARG;
-                    arg_decl->sym->addr.sizing = arg_decl->sym->size;
-                    arg_decl->sym->addr.offset = arg_offset;
+                    TACAddress* addr = sym_addr(arg_decl->sym);
+                    addr->kind = TACA_ARG;
+                    addr->sizing = arg_decl->sym->size;
+                    addr->offset = arg_offset;
                     arg_offset += arg_decl->sym->size.width;
                 }
                 else
@@ -1728,7 +1729,7 @@ int be_compile_toplevel_decl(struct BackEnd* be, Decl* decl)
                     // class INTEGER
                     size_t align = declfn->is_varargs ? 8 : arg_decl->sym->align;
                     save_arg.arg1 = be_falloc(be, arg_decl->sym->size, align);
-                    arg_decl->sym->addr = save_arg.arg1;
+                    *sym_addr(arg_decl->sym) = save_arg.arg1;
                     be_take_address(be, &save_arg.arg1);
                     save_arg.arg2 = taca_reg(s_sysv_arg_reg[j], arg_decl->sym->size);
                     save_arg.assign_width = arg_decl->sym->size.width;
@@ -1764,6 +1765,7 @@ fail:
 int be_compile(struct BackEnd* be)
 {
     if (!be->parser->expr_seqs.data) return 0;
+    array_assign_zeroes(&be->sym_addrs, sizeof(TACAddress) * be->parser->sym_pool.sz);
     int rc = 0;
 
     // then compile all functions
@@ -1819,7 +1821,7 @@ fail:
 void be_destroy(struct BackEnd* be)
 {
     autoheap_destroy(&be->sym_renames);
-    scope_destroy(&be->scope);
     array_destroy(&be->code);
     array_destroy(&be->switch_cases);
+    array_destroy(&be->sym_addrs);
 }

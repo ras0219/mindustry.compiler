@@ -41,4 +41,4 @@
      (AST_DECL w ? /* AST_DECLSPEC */
       (AST_INIT
        0 1 (EXPR_FIELD -> buf 8 take_addr
-        (EXPR_REF p)))))))))
+        (EXPR_DEREF -> take_addr (EXPR_REF p))))))))))

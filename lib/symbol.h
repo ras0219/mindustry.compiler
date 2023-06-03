@@ -136,6 +136,7 @@ Decl* decl_for_param(const struct Parser* p, const Decl* decl, const struct Toke
 
 typedef struct Symbol
 {
+    size_t idx;
     const char* name;
     Decl* last_decl;
     Decl* def;
@@ -159,10 +160,4 @@ typedef struct Symbol
 
     size_t constinit_offset;
     int enum_value;
-
-    // backend information
-
-    /// For objects, this is the location on the stack frame where the object resides
-    /// For functions, this is the location of the saved %rdi pointer
-    TACAddress addr;
 } Symbol;

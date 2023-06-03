@@ -15,7 +15,10 @@ typedef struct BackEnd
 
     struct Array code;
     struct Array switch_cases;
-    struct Scope scope;
+
+    /// For objects, this is the location on the stack frame where the object resides
+    /// For functions, this is the location of the saved %rdi pointer
+    struct Array sym_addrs;
 
     struct Symbol* cur_sym;
     struct DeclFn* cur_fn;
@@ -35,6 +38,5 @@ typedef struct BackEnd
 } BackEnd;
 
 void be_init(struct BackEnd* be, struct Parser* p, struct Elaborator* e, struct CodeGen* cg);
-int be_compile_toplevel_decl(struct BackEnd* be, struct Decl* decl);
 int be_compile(struct BackEnd* be);
 void be_destroy(struct BackEnd* be);

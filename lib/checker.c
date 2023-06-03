@@ -1400,7 +1400,7 @@ static void check_ExprField(Checker* chk, const ExprField* e, ValueInfo* result)
 
     if (result->kind == value_info_sym)
     {
-        result->sym.field = e->sym;
+        result->sym.field = e->field;
         result->sym.sym_offset += e->field_offset;
         if (!e->take_address)
         {
@@ -1411,7 +1411,7 @@ static void check_ExprField(Checker* chk, const ExprField* e, ValueInfo* result)
     {
         if (e->take_address)
         {
-            result->addr.sym_type = e->sym->type.buf;
+            result->addr.sym_type = e->field->type.buf;
             tsb_add_pointer(&result->addr.sym_type);
         }
         else
@@ -1420,7 +1420,7 @@ static void check_ExprField(Checker* chk, const ExprField* e, ValueInfo* result)
             {
                 parser_tok_error(e->tok, "error: possible uninitialized read\n");
             }
-            check_any_from_decl(chk, result, e->sym->last_decl, token_rc(e->tok));
+            check_any_from_decl(chk, result, e->field->last_decl, token_rc(e->tok));
         }
     }
     else

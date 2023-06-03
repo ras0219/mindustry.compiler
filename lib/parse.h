@@ -29,6 +29,7 @@ typedef struct Parser
 
     // exprs
     struct Pool ast_pools[AST_KIND_END_POOLS + 1];
+    size_t next_ast;
     /// Pool<Symbol>
     struct Pool sym_pool;
     /// Pool<TypeSymbol>

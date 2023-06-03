@@ -1064,19 +1064,6 @@ fail:
     return rc;
 }
 
-// static void cg_extend_reg(struct CodeGen* cg, int src_reg, Sizing src, int dst_reg, Sizing dst)
-// {
-//     if (src.width < dst.width)
-//     {
-//         Instruction i = {
-//             src.is_signed ? MOVSX : MOVZX,
-//             IA_REG_W(src_reg, src.width),
-//             IA_REG_W(dst_reg, dst.width),
-//         };
-//         cg_push_inst(cg, i);
-//     }
-// }
-
 static char mov_inst(int width)
 {
     switch (width)

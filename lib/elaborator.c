@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "ast.h"
+#include "ast_elab_info.h"
 #include "autoheap.h"
 #include "errors.h"
 #include "lexstate.h"
@@ -23,6 +24,8 @@
 #else
 #define TRACE_ENTRY()
 #endif
+
+AstElabInfo* elab_info(Elaborator* e, Expr* a) { return (AstElabInfo*)e->ast_info.data + a->id; }
 
 typedef struct ConstValue
 {
@@ -90,6 +93,7 @@ static int elaborate_declspecs(struct Elaborator* elab, struct DeclSpecs* specs)
 static void elaborate_stmt(struct Elaborator* elab, struct Ast* ast);
 static void elaborate_expr(struct Elaborator* elab, struct Expr* top_expr, struct TypeStr* rty);
 static void elaborate_expr_decay(struct Elaborator* elab, struct Expr* top_expr, struct TypeStr* rty);
+static void elaborate_expr_address(struct Elaborator* elab, struct Expr* expr, struct TypeStr* rty);
 static void elaborate_expr_lvalue(struct Elaborator* elab, struct Expr* top_expr, struct TypeStr* rty);
 
 enum
@@ -787,8 +791,6 @@ static void elaborate_expr_ExprDeref(struct Elaborator* elab, struct ExprDeref* 
 static void elaborate_expr_lvalue_ExprDeref(Elaborator* elab, ExprDeref* e, TypeStr* rty)
 {
     elaborate_expr_decay(elab, e->lhs, rty);
-    e->take_address = 1;
-    constant_addressof(&e->c);
 }
 static void elaborate_expr_ExprAddress(struct Elaborator* elab, struct ExprAddress* e, struct TypeStr* rty)
 {
@@ -1376,34 +1378,16 @@ static void elaborate_expr_ExprCall(struct Elaborator* elab,
 
 static void elaborate_expr_impl(struct Elaborator* elab, struct Expr* top_expr, struct TypeStr* rty);
 
-static void elaborate_expr(struct Elaborator* elab, struct Expr* top_expr, struct TypeStr* rty)
-{
-    elaborate_expr_impl(elab, top_expr, rty);
-    if (rty->buf.buf[0])
-    {
-        top_expr->sizing = typestr_calc_sizing_zero_void(elab->types, rty, token_rc(top_expr->tok));
-    }
-    top_expr->c = rty->c;
-    constant_load_lvalue(&top_expr->c);
-    top_expr->elaborated = 1;
-}
-
-static void expr_addressof(Expr* e, TypeStr* ty)
-{
-    e->take_address = 1;
-    typestr_addressof(ty);
-    constant_addressof(&e->c);
-}
-
 static void elaborate_expr_lvalue_ExprRef(Elaborator* elab, ExprRef* e, TypeStr* rty)
 {
     *rty = e->sym->type;
-    expr_addressof(&e->expr_base, rty);
+    typestr_addressof(rty);
 }
 
-static void elaborate_expr_ExprField_lhs(struct Elaborator* elab, struct ExprField* e, struct TypeStr* rty)
+static void elaborate_expr_ExprField_lhs(Elaborator* elab, ExprField* f, TypeStr* rty)
 {
     if (typestr_is_unknown(rty)) return;
+    const RowCol* rc = token_rc(f->tok);
     const struct TypeStr orig_lhs = *rty;
     typestr_dereference(rty);
     unsigned int cvr_mask = typestr_strip_cvr(rty);
@@ -1413,12 +1397,17 @@ static void elaborate_expr_ExprField_lhs(struct Elaborator* elab, struct ExprFie
         if (sym->def)
         {
             // find field in decl
-            Symbol* field = find_field_by_name(sym, e->fieldname, &e->field_offset);
+            Symbol* field = find_field_by_name(sym, f->fieldname, &f->field_offset);
             if (field)
             {
-                e->sym = field;
-                *rty = e->sym->type;
-                rty->c = s_not_constant;
+                f->field = field;
+                rty->buf = field->type.buf;
+                if (rty->c.is_const && rty->c.is_lvalue)
+                {
+                    mpa_add(&rty->c.value, mp_from_u64(f->field_offset));
+                }
+                else
+                    rty->c = s_not_constant;
                 typestr_add_cvr(rty, cvr_mask);
             }
             else
@@ -1430,26 +1419,22 @@ static void elaborate_expr_ExprField_lhs(struct Elaborator* elab, struct ExprFie
                 struct Array buf = {0};
                 typestr_fmt(elab->types, rty, &buf);
                 array_push_byte(&buf, 0);
-                parser_tok_error(e->tok, "error: could not find member '%s' in type '%s'\n", e->fieldname, buf.data);
+                parser_ferror(rc, "error: could not find member '%s' in type '%s'\n", f->fieldname, buf.data);
                 array_destroy(&buf);
                 *rty = s_type_unknown;
             }
         }
         else
         {
-            typestr_error1(&e->tok->rc, elab->types, "error: first argument was of incomplete type %.*s\n", rty);
+            typestr_error1(rc, elab->types, "error: first argument was of incomplete type %.*s\n", rty);
             *rty = s_type_unknown;
         }
     }
     else
     {
         const char* err_fmt;
-        if (e->is_arrow)
-            err_fmt = "error: expected first argument to be pointer to struct or union type, but got "
-                      "'%.*s'\n";
-        else
-            err_fmt = "error: expected first argument to be of struct or union type, but got '%.*s'\n";
-        typestr_error1(&e->tok->rc, elab->types, err_fmt, &orig_lhs);
+        err_fmt = "error: expected first argument to be of struct or union type, but got '%.*s'\n";
+        typestr_error1(rc, elab->types, err_fmt, &orig_lhs);
         *rty = s_type_unknown;
     }
 }
@@ -1460,30 +1445,15 @@ static void elaborate_expr_ExprField(struct Elaborator* elab, struct ExprField* 
     fprintf(stderr, " EXPR_FIELD\n");
 #endif
 
-    if (e->is_arrow)
-    {
-        elaborate_expr_decay(elab, e->lhs, rty);
-    }
-    else
-    {
-        elaborate_expr(elab, e->lhs, rty);
-        expr_addressof(e->lhs, rty);
-    }
+    elaborate_expr_address(elab, e->lhs, rty);
     elaborate_expr_ExprField_lhs(elab, e, rty);
 }
 
 static void elaborate_expr_lvalue_ExprField(Elaborator* elab, ExprField* e, TypeStr* rty)
 {
-    if (e->is_arrow)
-    {
-        elaborate_expr_decay(elab, e->lhs, rty);
-    }
-    else
-    {
-        elaborate_expr_lvalue(elab, e->lhs, rty);
-    }
+    elaborate_expr_lvalue(elab, e->lhs, rty);
     elaborate_expr_ExprField_lhs(elab, e, rty);
-    expr_addressof(&e->expr_base, rty);
+    typestr_addressof(rty);
 }
 
 static void elaborate_expr_lvalue(struct Elaborator* elab, struct Expr* expr, struct TypeStr* rty)
@@ -1503,39 +1473,53 @@ static void elaborate_expr_lvalue(struct Elaborator* elab, struct Expr* expr, st
             *rty = s_type_unknown;
             break;
     }
+    expr->take_address = 1;
     expr->sizing = s_sizing_ptr;
-    expr->c = rty->c;
-    constant_load_lvalue(&expr->c);
+    AstElabInfo* info = elab_info(elab, expr);
+    info->c = rty->c;
+    constant_load_lvalue(&info->c);
+    expr->elaborated = 1;
+}
+
+static void elaborate_expr_address(struct Elaborator* elab, struct Expr* expr, struct TypeStr* rty)
+{
+    elaborate_expr_impl(elab, expr, rty);
+    if (!rty->buf.buf[0]) return;
+    expr->sizing = typestr_calc_sizing_zero_void(elab->types, rty, token_rc(expr->tok));
+    typestr_addressof(rty);
+    expr->take_address = 1;
+    AstElabInfo* info = elab_info(elab, expr);
+    info->c = rty->c;
     expr->elaborated = 1;
 }
 
 static void elaborate_expr_decay(struct Elaborator* elab, struct Expr* expr, struct TypeStr* rty)
 {
     elaborate_expr_impl(elab, expr, rty);
+    if (!rty->buf.buf[0]) return;
     if (typestr_decay(rty))
     {
         expr->take_address = 1;
     }
-    if (rty->buf.buf[0] == 1 && rty->buf.buf[1] == TYPE_BYTE_VOID)
-    {
-    }
-    else
-    {
-        expr->sizing = typestr_calc_sizing(elab->types, rty, token_rc(expr->tok));
-    }
-    expr->c = rty->c;
-    constant_load_lvalue(&expr->c);
+    expr->sizing = typestr_calc_sizing_zero_void(elab->types, rty, token_rc(expr->tok));
+    AstElabInfo* info = elab_info(elab, expr);
+    info->c = rty->c;
+    constant_load_lvalue(&info->c);
     expr->elaborated = 1;
 }
 
-static void elaborate_expr_ExprRef(Elaborator* elab, ExprRef* e, TypeStr* rty)
+static void elaborate_expr(struct Elaborator* elab, struct Expr* expr, struct TypeStr* rty)
 {
-    *rty = e->sym->type;
-    // if (e->sym->size.width == 0)
-    // {
-    //     e->sym->size = typestr_calc_sizing(elab->types, rty, token_rc(e->tok));
-    // }
+    elaborate_expr_impl(elab, expr, rty);
+    if (!rty->buf.buf[0]) return;
+    expr->sizing = typestr_calc_sizing_zero_void(elab->types, rty, token_rc(expr->tok));
+    AstElabInfo* info = elab_info(elab, expr);
+    info->c = rty->c;
+    constant_load_lvalue(&info->c);
+    expr->elaborated = 1;
 }
+
+static void elaborate_expr_ExprRef(Elaborator* elab, ExprRef* e, TypeStr* rty) { *rty = e->sym->type; }
 static void elaborate_expr_ExprCast(Elaborator* elab, ExprCast* e, TypeStr* rty)
 {
     TypeStr orig;
@@ -1970,6 +1954,7 @@ static int elaborate_declspecs(struct Elaborator* elab, struct DeclSpecs* specs)
             StmtDecls** const seqs = (StmtDecls**)expr_seqs + block->seq.off;
             for (size_t i = 0; i < block->seq.ext; ++i)
             {
+                if (seqs[i]->kind == STMT_NONE) continue;
                 if (seqs[i]->kind != STMT_DECLS) abort();
                 struct StmtDecls* decls = seqs[i];
                 UNWRAP(elaborate_declspecs(elab, decls->specs));
@@ -2032,6 +2017,7 @@ int elaborate(struct Elaborator* elab)
 {
     struct Parser* const p = elab->p;
     if (!p->top) abort();
+    array_assign_zeroes(&elab->ast_info, p->next_ast * sizeof(AstElabInfo));
     elaborate_stmt(elab, &p->top->ast);
     return parser_has_errors();
 }
@@ -2041,4 +2027,5 @@ void elaborator_destroy(struct Elaborator* elab)
     tt_free(elab->types);
     array_destroy(&elab->constinit);
     array_destroy(&elab->constinit_bases);
+    array_destroy(&elab->ast_info);
 }

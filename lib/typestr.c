@@ -597,7 +597,7 @@ Sizing tsb_calc_sizing_zero_void(const TypeTable* types, const TypeStrBuf* ts, c
 {
     int i = ts->buf[0];
     tsb_skip_cvr_i(ts, &i);
-    if ((i == 1 && ts->buf[1] == TYPE_BYTE_VOID) || ts->buf[i] == TYPE_BYTE_UNK_ARRAY)
+    if (i == 1 && ts->buf[1] == TYPE_BYTE_VOID)
     {
         return s_sizing_zero;
     }

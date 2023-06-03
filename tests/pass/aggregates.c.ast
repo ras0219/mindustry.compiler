@@ -29,14 +29,16 @@
     (EXPR_FIELD . l 4
      (EXPR_REF a take_addr))
     (EXPR_FIELD -> l 4
-     (EXPR_ADDRESS &
-      (EXPR_REF a take_addr)))
+     (EXPR_DEREF -> take_addr
+      (EXPR_ADDRESS &
+       (EXPR_REF a take_addr))))
     (EXPR_ASSIGN =
      (EXPR_FIELD . l 4 take_addr
       (EXPR_REF a take_addr))
      (EXPR_LIT 5 D))
     (EXPR_ASSIGN =
      (EXPR_FIELD -> l 4 take_addr
-      (EXPR_ADDRESS &
-       (EXPR_REF a take_addr)))
+      (EXPR_DEREF -> take_addr
+       (EXPR_ADDRESS &
+        (EXPR_REF a take_addr))))
      (EXPR_LIT 8 D))))))

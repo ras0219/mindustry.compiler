@@ -57,7 +57,8 @@
      (EXPR_ADDRESS & (EXPR_REF w take_addr)))
     (EXPR_ASSIGN =
      (EXPR_FIELD -> a 0 take_addr
-      (EXPR_REF pw))
+      (EXPR_DEREF -> take_addr
+       (EXPR_REF pw)))
      (EXPR_REF a1)))))
  (STMT_DECLS
   (AST_DECLSPEC N N $ su (STMT_BLOCK

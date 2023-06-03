@@ -1,12 +1,15 @@
 #pragma once
 
 struct Array;
+struct Ast;
+struct AstElabInfo;
 struct AstType;
 struct BStringMap;
 struct Constant;
 struct Decl;
 struct DeclSpecs;
 struct Elaborator;
+struct Expr;
 struct Parser;
 struct RowCol;
 struct StrListV;
