@@ -503,7 +503,7 @@ static void trimmed_lines(const char* buf, size_t buf_sz, Array* out)
     }
 }
 
-static int require_lines_eq(
+int require_lines_eq(
     struct TestState* state, const char* ebuf1, size_t ebuf1sz, const char* ebuf2, size_t ebuf2sz, const char* filename)
 {
     int rc = 1;
@@ -791,7 +791,6 @@ static void foreach_c_file(struct TestState* state,
     Array arr = {0};
     assign_path_join(&arr, g_datadir, g_datadir_sz, subdir, strlen(subdir));
     DIR* dir = opendir(arr.data);
-    FILE* f = NULL;
     if (!dir)
     {
         fprintf(stderr, "error: opendir(): ");
@@ -821,7 +820,6 @@ static void foreach_c_file(struct TestState* state,
     }
 
     closedir(dir);
-    if (f) fclose(f);
     array_destroy(&arr);
     array_destroy(&filebuf);
 }
@@ -1499,6 +1497,7 @@ fail:
 }
 
 void run_interval_tests(struct TestState* state);
+void run_json_tests(struct TestState* state);
 
 int main(int argc, char** argv)
 {
@@ -1532,6 +1531,7 @@ int main(int argc, char** argv)
     foreach_c_file(state, "tests/fail", test_file_fail);
 
     run_interval_tests(state);
+    run_json_tests(state);
 
     typedef int (*stdtest_t)(struct TestState*, struct StandardTest*);
 
