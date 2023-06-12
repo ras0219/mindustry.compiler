@@ -30,56 +30,6 @@ fail:
     return errno;
 }
 
-typedef struct JSC
-{
-    Array buf;
-    JsonParse p;
-} JSC;
-
-static int jsc_cb1(void* userp, const char* encoded, size_t n, int is_end, const char* kind)
-{
-    JSC* jsc = userp;
-    array_appendf(&jsc->buf, "%d %d %s %d %.*s\n", jsc->p.row, jsc->p.col, kind, is_end, (int)n, encoded);
-    return 0;
-}
-static int jsc_number(void* userp, const char* encoded, size_t n, int is_end)
-{
-    return jsc_cb1(userp, encoded, n, is_end, "number");
-}
-static int jsc_string(void* userp, const char* encoded, size_t n, int is_end)
-{
-    return jsc_cb1(userp, encoded, n, is_end, "string");
-}
-static int jsc_key(void* userp, const char* encoded, size_t n, int is_end)
-{
-    return jsc_cb1(userp, encoded, n, is_end, "key");
-}
-static int jsc_cb0(void* userp, const char* kind)
-{
-    JSC* jsc = userp;
-    array_appendf(&jsc->buf, "%d %d %s\n", jsc->p.row, jsc->p.col, kind);
-    return 0;
-}
-
-static int jsc_object_begin(void* userp) { return jsc_cb0(userp, "object_begin"); }
-static int jsc_object_end(void* userp) { return jsc_cb0(userp, "object_end"); }
-static int jsc_array_begin(void* userp) { return jsc_cb0(userp, "array_begin"); }
-static int jsc_array_end(void* userp) { return jsc_cb0(userp, "array_end"); }
-static int jsc_kw_true(void* userp) { return jsc_cb0(userp, "kw_true"); }
-static int jsc_kw_false(void* userp) { return jsc_cb0(userp, "kw_false"); }
-static int jsc_kw_null(void* userp) { return jsc_cb0(userp, "kw_null"); }
-static int jsc_error(void* userp, const char* errmsg)
-{
-    JSC* jsc = userp;
-    array_appendf(&jsc->buf, "%d %d error %s\n", jsc->p.row, jsc->p.col, errmsg);
-    return 0;
-}
-static const JsonSAXVTable s_json_record_cbs = {
-#define Y(x) .x = &jsc_##x,
-    FOREACH_JSON_CB(Y)
-#undef Y
-};
-
 static void foreach_json_pass_file(struct TestState* state,
                                    const char* subdir,
                                    int (*cb)(struct TestState* state, const char* path))
@@ -127,20 +77,45 @@ static int foreach_jpf_cb(struct TestState* state, const char* p)
     Array doc_path = {0};
     array_assign(&doc_path, p, strlen(p) - 5);
     array_push_byte(&doc_path, 0);
-    Array doc = {0}, cbs = {0};
+    Array doc = {0}, cbs = {0}, buf = {0};
     if (read_contents(&cbs, p) == ENOENT) abort();
     if (read_contents(&doc, doc_path.data) == ENOENT) abort();
 
-    JSC jsc = {0};
-    int parse_failed = json_parse_end(&jsc.p, &s_json_record_cbs, &jsc, doc.data, doc.sz);
+    JsonParse parse = {0};
+    const size_t n_records = 30;
+    JsonRecord records[30];
 
-    if (require_lines_eq(state, cbs.data, cbs.sz, jsc.buf.data, jsc.buf.sz, p)) goto fail;
+    size_t read, used_records;
+    int parse_failed = json_parse_end(&parse, doc.data, doc.sz, &read, records, n_records, &used_records);
+
+    for (size_t i = 0; i < used_records; ++i)
+    {
+        const char* str = jsonr_to_string[records[i].kind];
+        if (records[i].kind == jsonr_key || records[i].kind == jsonr_string)
+        {
+            array_appendf(&buf,
+                          "%d %d %s %d %.*s\n",
+                          records[i].row,
+                          records[i].col,
+                          str,
+                          records[i].is_end,
+                          (int)records[i].n,
+                          doc.data + records[i].offset);
+        }
+        else
+        {
+            array_appendf(&buf, "%d %d %s\n", records[i].row, records[i].col, str);
+        }
+    }
+
+    if (require_lines_eq(state, cbs.data, cbs.sz, buf.data, buf.sz, p)) goto fail;
     REQUIRE(!parse_failed);
     rc = 0;
 fail:
     array_destroy(&doc_path);
     array_destroy(&doc);
     array_destroy(&cbs);
+    array_destroy(&buf);
     return rc;
 }
 

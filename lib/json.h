@@ -3,12 +3,21 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-typedef struct JsonParse
+typedef struct JsonRecord
 {
+    unsigned char kind;
+    unsigned char is_end;
+    size_t offset;
+    size_t n;
     int row;
     int col;
+} JsonRecord;
 
+typedef struct JsonParse
+{
     // internal state
+    int row;
+    int col;
     uint64_t stk;
     unsigned char state;
 } JsonParse;
@@ -23,25 +32,40 @@ typedef struct JsonParse
     X(array_end)                                                                                                       \
     X(kw_true)                                                                                                         \
     X(kw_false)                                                                                                        \
-    X(kw_null)                                                                                                         \
-    X(error)
+    X(kw_null)
 
-typedef int (*json_sax_text_cb)(void* userp, const char* encoded, size_t n, int is_end);
-
-typedef struct JsonSAXVTable
+enum
 {
-    const json_sax_text_cb number;
-    const json_sax_text_cb string;
-    const json_sax_text_cb key;
-    int (*const object_begin)(void* userp);
-    int (*const object_end)(void* userp);
-    int (*const array_begin)(void* userp);
-    int (*const array_end)(void* userp);
-    int (*const kw_true)(void* userp);
-    int (*const kw_false)(void* userp);
-    int (*const kw_null)(void* userp);
-    int (*const error)(void* userp, const char* errmsg);
-} JsonSAXVTable;
+#define Y(x) jsonr_##x,
+    FOREACH_JSON_CB(Y)
+#undef Y
+};
+
+extern const char* const jsonr_to_string[];
+
+enum JsonParseResult
+{
+    json_err_success,
+    json_err_state,
+    json_err_expected_true,
+    json_err_expected_false,
+    json_err_expected_null,
+    json_err_expected_eof,
+    json_err_unexpected_eof,
+    json_err_unexpected_newline,
+    json_err_max_depth,
+    json_err_expected_endobj,
+    json_err_expected_endarr,
+    json_err_expected_colon,
+    json_err_expected_key,
+    json_err_expected_element,
+};
 
 // int json_parse(JsonParse* j, const JsonSAXVTable* t, void* userp, const char* data, size_t n);
-int json_parse_end(JsonParse* j, const JsonSAXVTable* t, void* userp, const char* data, size_t n);
+enum JsonParseResult json_parse_end(JsonParse* j,
+                                    const char* data,
+                                    size_t n_data,
+                                    size_t* data_used,
+                                    JsonRecord* records,
+                                    size_t n_records,
+                                    size_t* records_used);
