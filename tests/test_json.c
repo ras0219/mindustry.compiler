@@ -91,7 +91,7 @@ static int foreach_jpf_cb(struct TestState* state, const char* p)
     for (size_t i = 0; i < used_records; ++i)
     {
         const char* str = jsonr_to_string[records[i].kind];
-        if (records[i].kind == jsonr_key || records[i].kind == jsonr_string)
+        if (records[i].kind == jsonr_key || records[i].kind == jsonr_string || records[i].kind == jsonr_number)
         {
             array_appendf(&buf,
                           "%d %d %s %d %.*s\n",
@@ -109,7 +109,11 @@ static int foreach_jpf_cb(struct TestState* state, const char* p)
     }
 
     if (require_lines_eq(state, cbs.data, cbs.sz, buf.data, buf.sz, p)) goto fail;
-    REQUIRE(!parse_failed);
+    if (parse_failed)
+    {
+        PRINTF_ERR("%s:%d:%d: error: parse failed", (char*)doc_path.data, parse.row, parse.col);
+        REQUIRE_FAIL("failed to parse");
+    }
     rc = 0;
 fail:
     array_destroy(&doc_path);

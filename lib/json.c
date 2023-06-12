@@ -254,11 +254,7 @@ enum JsonParseResult json_parse_end(JsonParse* j,
 
             if (j->state <= stateclass_ignore_ws)
             {
-                if (class & char_class_ws)
-                {
-                    json_adv_rc(j, ch);
-                    continue;
-                }
+                if (class & char_class_ws) goto consume;
 
                 switch (j->state)
                 {
@@ -411,8 +407,6 @@ enum JsonParseResult json_parse_end(JsonParse* j,
                 {
                     if (k.complete) goto consume_reduce;
                     ++j->state;
-                    json_adv_rc(j, ch);
-                    continue;
                 }
                 else
                 {
@@ -455,21 +449,91 @@ enum JsonParseResult json_parse_end(JsonParse* j,
                 switch (j->state)
                 {
                     case state_num_minus:
-                        if (ch == '0') j->state = state_num_zero;
-                        break;
+                        if (ch == '0')
+                        {
+                            j->state = state_num_zero;
+                            break;
+                        }
+                        if (class & char_class_digit)
+                        {
+                            j->state = state_num_1;
+                            break;
+                        }
+                        rc = json_err_expected_digit;
+                        goto error;
                     case state_num_zero:
+                        if (ch == '.')
+                        {
+                            j->state = state_num_frac;
+                            break;
+                        }
+                        if (ch == 'e' || ch == 'E')
+                        {
+                            j->state = state_num_exp;
+                            break;
+                        }
                         jsonr_write_1_at(
                             j, records + r++, jsonr_number, number_start, i - number_start, 1, number_row, number_col);
                         goto reduce;
                     case state_num_1:
                         if (class & char_class_digit) break;
-                        break;
+                        if (ch == 'e' || ch == 'E')
+                        {
+                            j->state = state_num_exp;
+                            break;
+                        }
+                        if (ch == '.')
+                        {
+                            j->state = state_num_frac;
+                            break;
+                        }
+                        jsonr_write_1_at(
+                            j, records + r++, jsonr_number, number_start, i - number_start, 1, number_row, number_col);
+                        goto reduce;
+                    case state_num_frac:
+                        if (class & char_class_digit)
+                        {
+                            j->state = state_num_frac2;
+                            break;
+                        }
+                        rc = json_err_expected_digit;
+                        goto error;
+                    case state_num_frac2:
+                        if (class & char_class_digit) break;
+                        if (ch == 'e' || ch == 'E')
+                        {
+                            j->state = state_num_exp;
+                            break;
+                        }
+                        jsonr_write_1_at(
+                            j, records + r++, jsonr_number, number_start, i - number_start, 1, number_row, number_col);
+                        goto reduce;
+                    case state_num_exp:
+                        if (ch == '-' || ch == '+')
+                        {
+                            j->state = state_num_exp_sign;
+                            break;
+                        }
+                        // fallthrough
+                    case state_num_exp_sign:
+                        if (class & char_class_digit)
+                        {
+                            j->state = state_num_exp_dig;
+                            break;
+                        }
+                        rc = json_err_expected_digit;
+                        goto error;
+                    case state_num_exp_dig:
+                        if (class & char_class_digit) break;
+                        jsonr_write_1_at(
+                            j, records + r++, jsonr_number, number_start, i - number_start, 1, number_row, number_col);
+                        goto reduce;
                     default: abort();
                 }
             }
             else
             {
-                goto error;
+                abort();
             }
 
         consume:
@@ -497,10 +561,19 @@ enum JsonParseResult json_parse_end(JsonParse* j,
         }
     }
 
-    if (j->state != state_end)
+    if (i == n)
     {
-        rc = json_err_unexpected_eof;
-        goto error;
+        if (j->state == state_num_zero || j->state == state_num_1 || j->state == state_num_frac2 ||
+            j->state == state_num_exp_dig)
+        {
+            if (r == n_records) abort();
+            jsonr_write_1_at(j, records + r++, jsonr_number, number_start, i - number_start, 1, number_row, number_col);
+        }
+        else if (j->state != state_end)
+        {
+            rc = json_err_unexpected_eof;
+            goto error;
+        }
     }
 cleanup:
     *data_used = i;
