@@ -26,13 +26,13 @@ typedef struct JsonParse
     X(kw_null)                                                                                                         \
     X(error)
 
-typedef int (*json_sax_number_cb)(void* userp, const char* encoded, size_t n, int is_end);
+typedef int (*json_sax_text_cb)(void* userp, const char* encoded, size_t n, int is_end);
 
 typedef struct JsonSAXVTable
 {
-    const json_sax_number_cb number;
-    int (*const string)(void* userp, const char* encoded, size_t n, int is_end);
-    int (*const key)(void* userp, const char* encoded, size_t n, int is_end);
+    const json_sax_text_cb number;
+    const json_sax_text_cb string;
+    const json_sax_text_cb key;
     int (*const object_begin)(void* userp);
     int (*const object_end)(void* userp);
     int (*const array_begin)(void* userp);
