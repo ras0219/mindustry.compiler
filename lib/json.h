@@ -58,6 +58,7 @@ enum JsonParseResult
     json_err_expected_endarr,
     json_err_expected_colon,
     json_err_expected_digit,
+    json_err_unexpected_digit,
     json_err_expected_key,
     json_err_expected_element,
 };
