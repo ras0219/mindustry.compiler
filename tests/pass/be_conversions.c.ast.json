@@ -1,0 +1,249 @@
+{
+  "id": "STMT_BLOCK",
+  "seq": [
+    {
+      "id": "STMT_DECLS",
+      "specs": {
+        "id": "AST_DECLSPEC",
+        "tok": "void"
+      },
+      "seq": [
+        {
+          "id": "AST_DECL",
+          "tok": "cg_declare_extern",
+          "type": {
+            "id": "AST_DECLFN",
+            "args": [],
+            "type": false
+          },
+          "decls": [],
+          "init": {
+            "id": "STMT_BLOCK",
+            "seq": [
+              {
+                "id": "STMT_DECLS",
+                "specs": {
+                  "id": "AST_DECLSPEC",
+                  "tok": "char"
+                },
+                "seq": [
+                  {
+                    "id": "AST_DECL",
+                    "tok": "x",
+                    "type": false,
+                    "decls": [],
+                    "init": {
+                      "id": "EXPR_LIT",
+                      "value": 10,
+                      "suffix": "D"
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "EXPR_ASSIGN",
+                "tok": "=",
+                "lhs": {
+                  "id": "EXPR_REF",
+                  "tok": "x",
+                  "take_addr": true,
+                  "sizing": 8
+                },
+                "rhs": {
+                  "id": "EXPR_LIT",
+                  "value": 11,
+                  "suffix": "D"
+                }
+              },
+              {
+                "id": "STMT_DECLS",
+                "specs": {
+                  "id": "AST_DECLSPEC",
+                  "tok": "int"
+                },
+                "seq": [
+                  {
+                    "id": "AST_DECL",
+                    "tok": "y",
+                    "type": false,
+                    "decls": [],
+                    "init": {
+                      "id": "EXPR_REF",
+                      "tok": "x",
+                      "sizing": -1
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "EXPR_ASSIGN",
+                "tok": "=",
+                "lhs": {
+                  "id": "EXPR_REF",
+                  "tok": "y",
+                  "take_addr": true,
+                  "sizing": 8
+                },
+                "rhs": {
+                  "id": "EXPR_REF",
+                  "tok": "x",
+                  "sizing": -1
+                }
+              },
+              {
+                "id": "STMT_DECLS",
+                "specs": {
+                  "id": "AST_DECLSPEC",
+                  "tok": "char",
+                  "const": true
+                },
+                "seq": [
+                  {
+                    "id": "AST_DECL",
+                    "tok": "px",
+                    "type": {
+                      "id": "AST_DECLPTR",
+                      "type": false
+                    },
+                    "decls": [],
+                    "init": {
+                      "id": "EXPR_ADDRESS",
+                      "tok": "&",
+                      "lhs": {
+                        "id": "EXPR_REF",
+                        "tok": "x",
+                        "take_addr": true,
+                        "sizing": 8
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "EXPR_INCR",
+                "tok": "++",
+                "postfix": true,
+                "sizeof": 1,
+                "lhs": {
+                  "id": "EXPR_REF",
+                  "tok": "x",
+                  "take_addr": true,
+                  "sizing": 8
+                }
+              },
+              {
+                "id": "STMT_DECLS",
+                "specs": {
+                  "id": "AST_DECLSPEC",
+                  "tok": "char"
+                },
+                "seq": [
+                  {
+                    "id": "AST_DECL",
+                    "tok": "h",
+                    "type": {
+                      "id": "AST_DECLARR",
+                      "type": false
+                    },
+                    "decls": [],
+                    "init": {
+                      "id": "EXPR_STRLIT"
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "STMT_DECLS",
+                "specs": {
+                  "id": "AST_DECLSPEC",
+                  "tok": "char"
+                },
+                "seq": [
+                  {
+                    "id": "AST_DECL",
+                    "tok": "p",
+                    "type": {
+                      "id": "AST_DECLPTR",
+                      "type": false
+                    },
+                    "decls": [],
+                    "init": {
+                      "id": "EXPR_REF",
+                      "tok": "h",
+                      "take_addr": true,
+                      "sizing": 8
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "STMT_DECLS",
+                "specs": {
+                  "id": "AST_DECLSPEC",
+                  "tok": "unsigned",
+                  "unsigned": true,
+                  "llong": true,
+                  "long": true
+                },
+                "seq": [
+                  {
+                    "id": "AST_DECL",
+                    "tok": "z",
+                    "type": false,
+                    "decls": [],
+                    "init": {
+                      "id": "EXPR_BINOP",
+                      "tok": "*",
+                      "lhs": {
+                        "id": "EXPR_REF",
+                        "tok": "x",
+                        "sizing": -1
+                      },
+                      "rhs": {
+                        "id": "EXPR_LIT",
+                        "value": 2,
+                        "suffix": "D"
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "STMT_DECLS",
+                "specs": {
+                  "id": "AST_DECLSPEC",
+                  "tok": "unsigned",
+                  "unsigned": true,
+                  "llong": true,
+                  "long": true
+                },
+                "seq": [
+                  {
+                    "id": "AST_DECL",
+                    "tok": "w",
+                    "type": false,
+                    "decls": [],
+                    "init": {
+                      "id": "EXPR_BINOP",
+                      "tok": "*",
+                      "lhs": {
+                        "id": "EXPR_REF",
+                        "tok": "z",
+                        "sizing": 8
+                      },
+                      "rhs": {
+                        "id": "EXPR_LIT",
+                        "value": 2,
+                        "suffix": "D"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

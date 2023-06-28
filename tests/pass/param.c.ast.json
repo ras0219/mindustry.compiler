@@ -1,0 +1,415 @@
+{
+  "id": "STMT_BLOCK",
+  "seq": [
+    {
+      "id": "STMT_DECLS",
+      "specs": {
+        "id": "AST_DECLSPEC",
+        "tok": "int"
+      },
+      "seq": [
+        {
+          "id": "AST_DECL",
+          "tok": "arr",
+          "type": {
+            "id": "AST_DECLFN",
+            "args": [
+              {
+                "id": "STMT_DECLS",
+                "specs": {
+                  "id": "AST_DECLSPEC",
+                  "tok": "int"
+                },
+                "seq": [
+                  {
+                    "id": "AST_DECL",
+                    "tok": "i",
+                    "type": {
+                      "id": "AST_DECLARR",
+                      "arity": {
+                        "id": "EXPR_LIT",
+                        "value": 1,
+                        "suffix": "D"
+                      },
+                      "type": false
+                    },
+                    "decls": []
+                  }
+                ]
+              }
+            ],
+            "type": false
+          },
+          "decls": []
+        }
+      ]
+    },
+    {
+      "id": "STMT_DECLS",
+      "specs": {
+        "id": "AST_DECLSPEC",
+        "tok": "int"
+      },
+      "seq": [
+        {
+          "id": "AST_DECL",
+          "tok": "arru",
+          "type": {
+            "id": "AST_DECLFN",
+            "args": [
+              {
+                "id": "STMT_DECLS",
+                "specs": {
+                  "id": "AST_DECLSPEC",
+                  "tok": "int"
+                },
+                "seq": [
+                  {
+                    "id": "AST_DECL",
+                    "tok": "i",
+                    "type": {
+                      "id": "AST_DECLARR",
+                      "type": false
+                    },
+                    "decls": []
+                  }
+                ]
+              }
+            ],
+            "type": false
+          },
+          "decls": []
+        }
+      ]
+    },
+    {
+      "id": "STMT_DECLS",
+      "specs": {
+        "id": "AST_DECLSPEC",
+        "tok": "int"
+      },
+      "seq": [
+        {
+          "id": "AST_DECL",
+          "tok": "valist",
+          "type": {
+            "id": "AST_DECLFN",
+            "args": [
+              {
+                "id": "STMT_DECLS",
+                "specs": {
+                  "id": "AST_DECLSPEC",
+                  "tok": "__builtin_va_list"
+                },
+                "seq": [
+                  {
+                    "id": "AST_DECL",
+                    "tok": "v",
+                    "type": false,
+                    "decls": []
+                  }
+                ]
+              }
+            ],
+            "type": false
+          },
+          "decls": []
+        }
+      ]
+    },
+    {
+      "id": "STMT_DECLS",
+      "specs": {
+        "id": "AST_DECLSPEC",
+        "tok": "int"
+      },
+      "seq": [
+        {
+          "id": "AST_DECL",
+          "tok": "ptr",
+          "type": {
+            "id": "AST_DECLFN",
+            "args": [
+              {
+                "id": "STMT_DECLS",
+                "specs": {
+                  "id": "AST_DECLSPEC",
+                  "tok": "int"
+                },
+                "seq": [
+                  {
+                    "id": "AST_DECL",
+                    "tok": "i",
+                    "type": {
+                      "id": "AST_DECLPTR",
+                      "type": false
+                    },
+                    "decls": []
+                  }
+                ]
+              }
+            ],
+            "type": false
+          },
+          "decls": []
+        }
+      ]
+    },
+    {
+      "id": "STMT_DECLS",
+      "specs": {
+        "id": "AST_DECLSPEC",
+        "tok": "int"
+      },
+      "seq": [
+        {
+          "id": "AST_DECL",
+          "tok": "m",
+          "type": {
+            "id": "AST_DECLFN",
+            "args": [
+              {
+                "id": "STMT_DECLS",
+                "specs": {
+                  "id": "AST_DECLSPEC",
+                  "tok": "int"
+                },
+                "seq": [
+                  {
+                    "id": "AST_DECL",
+                    "tok": "i",
+                    "type": {
+                      "id": "AST_DECLARR",
+                      "arity": {
+                        "id": "EXPR_LIT",
+                        "value": 1,
+                        "suffix": "D"
+                      },
+                      "type": false
+                    },
+                    "decls": []
+                  }
+                ]
+              }
+            ],
+            "type": false
+          },
+          "decls": [],
+          "init": {
+            "id": "STMT_BLOCK",
+            "seq": [
+              {
+                "id": "STMT_DECLS",
+                "specs": {
+                  "id": "AST_DECLSPEC",
+                  "tok": "int"
+                },
+                "seq": [
+                  {
+                    "id": "AST_DECL",
+                    "tok": "x",
+                    "type": {
+                      "id": "AST_DECLARR",
+                      "type": false
+                    },
+                    "decls": [],
+                    "init": {
+                      "id": "AST_INIT",
+                      "elems": [
+                        0,
+                        0,
+                        {
+                          "id": "EXPR_LIT",
+                          "value": 1,
+                          "suffix": "D"
+                        },
+                        0,
+                        0,
+                        {
+                          "id": "EXPR_LIT",
+                          "value": 2,
+                          "suffix": "D"
+                        }
+                      ]
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "STMT_DECLS",
+                "specs": {
+                  "id": "AST_DECLSPEC",
+                  "tok": "int"
+                },
+                "seq": [
+                  {
+                    "id": "AST_DECL",
+                    "tok": "p",
+                    "type": {
+                      "id": "AST_DECLPTR",
+                      "type": false
+                    },
+                    "decls": [],
+                    "init": {
+                      "id": "EXPR_REF",
+                      "tok": "x",
+                      "take_addr": true,
+                      "sizing": 8
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "EXPR_CALL",
+                "fn": {
+                  "id": "EXPR_REF",
+                  "tok": "ptr",
+                  "take_addr": true,
+                  "sizing": 8
+                },
+                "args": [
+                  {
+                    "id": "EXPR_REF",
+                    "tok": "x",
+                    "take_addr": true,
+                    "sizing": 8
+                  }
+                ]
+              },
+              {
+                "id": "EXPR_CALL",
+                "fn": {
+                  "id": "EXPR_REF",
+                  "tok": "arru",
+                  "take_addr": true,
+                  "sizing": 8
+                },
+                "args": [
+                  {
+                    "id": "EXPR_REF",
+                    "tok": "x",
+                    "take_addr": true,
+                    "sizing": 8
+                  }
+                ]
+              },
+              {
+                "id": "EXPR_CALL",
+                "fn": {
+                  "id": "EXPR_REF",
+                  "tok": "arr",
+                  "take_addr": true,
+                  "sizing": 8
+                },
+                "args": [
+                  {
+                    "id": "EXPR_REF",
+                    "tok": "x",
+                    "take_addr": true,
+                    "sizing": 8
+                  }
+                ]
+              },
+              {
+                "id": "EXPR_CALL",
+                "fn": {
+                  "id": "EXPR_REF",
+                  "tok": "ptr",
+                  "take_addr": true,
+                  "sizing": 8
+                },
+                "args": [
+                  {
+                    "id": "EXPR_REF",
+                    "tok": "p",
+                    "sizing": 8
+                  }
+                ]
+              },
+              {
+                "id": "EXPR_CALL",
+                "fn": {
+                  "id": "EXPR_REF",
+                  "tok": "arru",
+                  "take_addr": true,
+                  "sizing": 8
+                },
+                "args": [
+                  {
+                    "id": "EXPR_REF",
+                    "tok": "p",
+                    "sizing": 8
+                  }
+                ]
+              },
+              {
+                "id": "EXPR_CALL",
+                "fn": {
+                  "id": "EXPR_REF",
+                  "tok": "arr",
+                  "take_addr": true,
+                  "sizing": 8
+                },
+                "args": [
+                  {
+                    "id": "EXPR_REF",
+                    "tok": "p",
+                    "sizing": 8
+                  }
+                ]
+              },
+              {
+                "id": "EXPR_CALL",
+                "fn": {
+                  "id": "EXPR_REF",
+                  "tok": "ptr",
+                  "take_addr": true,
+                  "sizing": 8
+                },
+                "args": [
+                  {
+                    "id": "EXPR_REF",
+                    "tok": "i",
+                    "sizing": 8
+                  }
+                ]
+              },
+              {
+                "id": "EXPR_CALL",
+                "fn": {
+                  "id": "EXPR_REF",
+                  "tok": "arru",
+                  "take_addr": true,
+                  "sizing": 8
+                },
+                "args": [
+                  {
+                    "id": "EXPR_REF",
+                    "tok": "i",
+                    "sizing": 8
+                  }
+                ]
+              },
+              {
+                "id": "EXPR_CALL",
+                "fn": {
+                  "id": "EXPR_REF",
+                  "tok": "arr",
+                  "take_addr": true,
+                  "sizing": 8
+                },
+                "args": [
+                  {
+                    "id": "EXPR_REF",
+                    "tok": "i",
+                    "sizing": 8
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

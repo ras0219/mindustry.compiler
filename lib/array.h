@@ -30,6 +30,7 @@ __forceinline void array_clear(struct Array* arr) { arr->sz = 0; }
 __forceinline void array_shrink(struct Array* arr, size_t n, size_t sz) { arr->sz = n * sz; }
 /// postcondition: arr->cap >= cap
 void array_reserve(struct Array* arr, size_t cap);
+__forceinline void array_commit(struct Array* arr, size_t bytes) { arr->sz += bytes; }
 /// postcondition: arr->sz == size
 void array_resize(struct Array* arr, size_t size);
 /// postcondition: arr->sz == size

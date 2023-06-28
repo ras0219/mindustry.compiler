@@ -9,6 +9,7 @@
 #include "elaborator.h"
 #include "errors.h"
 #include "fe.h"
+#include "json_dom.h"
 #include "lexstate.h"
 #include "parse.h"
 #include "preproc.h"
@@ -540,7 +541,10 @@ int main(int argc, const char* const* argv)
 
             if (args.fElaborateOnly)
             {
-                parser_dump(fe.parser, stdout);
+                JsonDOM dom = {0};
+                ast_to_json(fe.parser, &dom);
+                fwrite(dom.text.data, 1, dom.text.sz, stdout);
+                jsondom_destroy(&dom);
                 goto fail;
             }
 

@@ -1,0 +1,295 @@
+{
+  "id": "STMT_BLOCK",
+  "seq": [
+    {
+      "id": "STMT_DECLS",
+      "specs": {
+        "id": "AST_DECLSPEC",
+        "tok": "void"
+      },
+      "seq": [
+        {
+          "id": "AST_DECL",
+          "tok": "f",
+          "type": {
+            "id": "AST_DECLFN",
+            "args": [],
+            "type": false
+          },
+          "decls": [],
+          "init": {
+            "id": "STMT_BLOCK",
+            "seq": [
+              {
+                "id": "STMT_DECLS",
+                "specs": {
+                  "id": "AST_DECLSPEC",
+                  "tok": "int"
+                },
+                "seq": [
+                  {
+                    "id": "AST_DECL",
+                    "tok": "x",
+                    "type": false,
+                    "decls": []
+                  }
+                ]
+              },
+              {
+                "id": "STMT_DECLS",
+                "specs": {
+                  "id": "AST_DECLSPEC",
+                  "tok": "struct",
+                  "su": {
+                    "id": "STMT_BLOCK",
+                    "seq": [
+                      {
+                        "id": "STMT_DECLS",
+                        "specs": {
+                          "id": "AST_DECLSPEC",
+                          "tok": "int"
+                        },
+                        "seq": [
+                          {
+                            "id": "AST_DECL",
+                            "tok": "x",
+                            "type": false,
+                            "decls": []
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                },
+                "seq": [
+                  {
+                    "id": "AST_DECL",
+                    "tok": "y",
+                    "type": false,
+                    "decls": []
+                  },
+                  {
+                    "id": "AST_DECL",
+                    "tok": "py",
+                    "type": {
+                      "id": "AST_DECLPTR",
+                      "type": false
+                    },
+                    "decls": []
+                  }
+                ]
+              },
+              {
+                "id": "STMT_DECLS",
+                "specs": {
+                  "id": "AST_DECLSPEC",
+                  "tok": "int"
+                },
+                "seq": [
+                  {
+                    "id": "AST_DECL",
+                    "tok": "z",
+                    "type": {
+                      "id": "AST_DECLARR",
+                      "arity": {
+                        "id": "EXPR_LIT",
+                        "value": 2,
+                        "suffix": "D"
+                      },
+                      "type": false
+                    },
+                    "decls": []
+                  }
+                ]
+              },
+              {
+                "id": "STMT_DECLS",
+                "specs": {
+                  "id": "AST_DECLSPEC",
+                  "tok": "int"
+                },
+                "seq": [
+                  {
+                    "id": "AST_DECL",
+                    "tok": "p",
+                    "type": {
+                      "id": "AST_DECLPTR",
+                      "type": false
+                    },
+                    "decls": []
+                  }
+                ]
+              },
+              {
+                "id": "EXPR_ASSIGN",
+                "tok": "=",
+                "lhs": {
+                  "id": "EXPR_REF",
+                  "tok": "x",
+                  "take_addr": true,
+                  "sizing": 8
+                },
+                "rhs": {
+                  "id": "EXPR_LIT",
+                  "value": 1,
+                  "suffix": "D"
+                }
+              },
+              {
+                "id": "EXPR_ASSIGN",
+                "tok": "=",
+                "lhs": {
+                  "id": "EXPR_FIELD",
+                  "tok": ".",
+                  "take_addr": true,
+                  "name": "x",
+                  "lhs": {
+                    "id": "EXPR_REF",
+                    "tok": "y",
+                    "take_addr": true,
+                    "sizing": 8
+                  }
+                },
+                "rhs": {
+                  "id": "EXPR_LIT",
+                  "value": 2,
+                  "suffix": "D"
+                }
+              },
+              {
+                "id": "EXPR_ASSIGN",
+                "tok": "=",
+                "lhs": {
+                  "id": "EXPR_FIELD",
+                  "tok": "->",
+                  "take_addr": true,
+                  "name": "x",
+                  "lhs": {
+                    "id": "EXPR_DEREF",
+                    "tok": "->",
+                    "take_addr": true,
+                    "lhs": {
+                      "id": "EXPR_REF",
+                      "tok": "py",
+                      "sizing": 8
+                    }
+                  }
+                },
+                "rhs": {
+                  "id": "EXPR_LIT",
+                  "value": 3,
+                  "suffix": "D"
+                }
+              },
+              {
+                "id": "EXPR_ASSIGN",
+                "tok": "=",
+                "lhs": {
+                  "id": "EXPR_DEREF",
+                  "tok": "]",
+                  "take_addr": true,
+                  "lhs": {
+                    "id": "EXPR_ADD",
+                    "tok": "[",
+                    "lhs": {
+                      "id": "EXPR_REF",
+                      "tok": "z",
+                      "take_addr": true,
+                      "sizing": 8
+                    },
+                    "rhs": {
+                      "id": "EXPR_LIT",
+                      "value": 0
+                    },
+                    "mult": 4,
+                    "sizing": 8
+                  }
+                },
+                "rhs": {
+                  "id": "EXPR_LIT",
+                  "value": 4,
+                  "suffix": "D"
+                }
+              },
+              {
+                "id": "EXPR_ASSIGN",
+                "tok": "=",
+                "lhs": {
+                  "id": "EXPR_DEREF",
+                  "tok": "]",
+                  "take_addr": true,
+                  "lhs": {
+                    "id": "EXPR_ADD",
+                    "tok": "[",
+                    "lhs": {
+                      "id": "EXPR_REF",
+                      "tok": "z",
+                      "take_addr": true,
+                      "sizing": 8
+                    },
+                    "rhs": {
+                      "id": "EXPR_LIT",
+                      "value": 1,
+                      "suffix": "D"
+                    },
+                    "mult": 4,
+                    "sizing": 8
+                  }
+                },
+                "rhs": {
+                  "id": "EXPR_LIT",
+                  "value": 5,
+                  "suffix": "D"
+                }
+              },
+              {
+                "id": "EXPR_ASSIGN",
+                "tok": "=",
+                "lhs": {
+                  "id": "EXPR_DEREF",
+                  "tok": "*",
+                  "take_addr": true,
+                  "lhs": {
+                    "id": "EXPR_REF",
+                    "tok": "p",
+                    "sizing": 8
+                  }
+                },
+                "rhs": {
+                  "id": "EXPR_LIT",
+                  "value": 6,
+                  "suffix": "D"
+                }
+              },
+              {
+                "id": "EXPR_ASSIGN",
+                "tok": "=",
+                "lhs": {
+                  "id": "EXPR_REF",
+                  "tok": "x",
+                  "take_addr": true,
+                  "sizing": 8
+                },
+                "rhs": {
+                  "id": "EXPR_LIT",
+                  "value": 7,
+                  "suffix": "D"
+                }
+              },
+              {
+                "id": "EXPR_ADDRESS",
+                "tok": "&",
+                "lhs": {
+                  "id": "EXPR_REF",
+                  "tok": "z",
+                  "take_addr": true,
+                  "sizing": 8
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

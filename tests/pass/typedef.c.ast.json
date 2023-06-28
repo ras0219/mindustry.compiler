@@ -1,0 +1,41 @@
+{
+  "id": "STMT_BLOCK",
+  "seq": [
+    {
+      "id": "STMT_DECLS",
+      "specs": {
+        "id": "AST_DECLSPEC",
+        "typedef": true,
+        "tok": "unsigned",
+        "unsigned": true,
+        "long": true
+      },
+      "seq": [
+        {
+          "id": "AST_DECL",
+          "tok": "size_t",
+          "type": false,
+          "decls": []
+        }
+      ]
+    },
+    {
+      "id": "STMT_DECLS",
+      "specs": {
+        "id": "AST_DECLSPEC",
+        "typedef": true,
+        "tok": "unsigned",
+        "unsigned": true,
+        "long": true
+      },
+      "seq": [
+        {
+          "id": "AST_DECL",
+          "tok": "size_t",
+          "type": false,
+          "decls": []
+        }
+      ]
+    }
+  ]
+}

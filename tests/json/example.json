@@ -1,0 +1,46 @@
+{
+  "id": "STMT_BLOCK",
+  "seq": [
+    {
+      "id": "STMT_DECLS",
+      "specs": {
+        "id": "AST_DECLSPEC",
+        "tok": "char",
+        "const": true
+      },
+      "seq": [
+        {
+          "id": "AST_DECL",
+          "tok": "mode",
+          "type": {
+            "id": "AST_DECLARR",
+            "type": {
+              "id": "AST_DECLARR",
+              "arity": {
+                "id": "EXPR_LIT",
+                "value": 5,
+                "suffix": "D"
+              },
+              "type": false
+            }
+          },
+          "decls": [],
+          "init": {
+            "id": "AST_INIT",
+            "elems": [
+              0,
+              0,
+              {
+                "id": "EXPR_STRLIT",
+                "take_addr": true
+              },
+              0,
+              0,
+              {}
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

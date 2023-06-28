@@ -1,0 +1,83 @@
+{
+  "id": "STMT_BLOCK",
+  "seq": [
+    {
+      "id": "STMT_DECLS",
+      "specs": {
+        "id": "AST_DECLSPEC",
+        "typedef": true,
+        "tok": "int"
+      },
+      "seq": [
+        {
+          "id": "AST_DECL",
+          "tok": "X",
+          "type": false,
+          "decls": []
+        }
+      ]
+    },
+    {
+      "id": "STMT_DECLS",
+      "specs": {
+        "id": "AST_DECLSPEC",
+        "typedef": true,
+        "tok": "X",
+        "name": "X"
+      },
+      "seq": [
+        {
+          "id": "AST_DECL",
+          "tok": "Y",
+          "type": false,
+          "decls": []
+        }
+      ]
+    },
+    {
+      "id": "STMT_DECLS",
+      "specs": {
+        "id": "AST_DECLSPEC",
+        "tok": "int"
+      },
+      "seq": [
+        {
+          "id": "AST_DECL",
+          "tok": "main",
+          "type": {
+            "id": "AST_DECLFN",
+            "args": [],
+            "type": false
+          },
+          "decls": [],
+          "init": {
+            "id": "STMT_BLOCK",
+            "seq": [
+              {
+                "id": "STMT_DECLS",
+                "specs": {
+                  "id": "AST_DECLSPEC",
+                  "tok": "Y",
+                  "name": "Y"
+                },
+                "seq": [
+                  {
+                    "id": "AST_DECL",
+                    "tok": "y",
+                    "type": false,
+                    "decls": [],
+                    "init": {
+                      "id": "EXPR_LIT",
+                      "value": 10,
+                      "suffix": "D"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

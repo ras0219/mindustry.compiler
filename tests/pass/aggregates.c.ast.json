@@ -1,0 +1,237 @@
+{
+  "id": "STMT_BLOCK",
+  "seq": [
+    {
+      "id": "STMT_DECLS",
+      "specs": {
+        "id": "AST_DECLSPEC",
+        "tok": "A",
+        "name": "A",
+        "su": {
+          "id": "STMT_BLOCK",
+          "seq": [
+            {
+              "id": "STMT_DECLS",
+              "specs": {
+                "id": "AST_DECLSPEC",
+                "tok": "int"
+              },
+              "seq": [
+                {
+                  "id": "AST_DECL",
+                  "tok": "y",
+                  "type": false,
+                  "decls": []
+                }
+              ]
+            },
+            {
+              "id": "STMT_DECLS",
+              "specs": {
+                "id": "AST_DECLSPEC",
+                "tok": "struct",
+                "su": {
+                  "id": "STMT_BLOCK",
+                  "seq": [
+                    {
+                      "id": "STMT_DECLS",
+                      "specs": {
+                        "id": "AST_DECLSPEC",
+                        "tok": "int"
+                      },
+                      "seq": [
+                        {
+                          "id": "AST_DECL",
+                          "tok": "l",
+                          "type": false,
+                          "decls": []
+                        }
+                      ]
+                    },
+                    {
+                      "id": "STMT_DECLS",
+                      "specs": {
+                        "id": "AST_DECLSPEC",
+                        "tok": "char"
+                      },
+                      "seq": [
+                        {
+                          "id": "AST_DECL",
+                          "tok": "c",
+                          "type": false,
+                          "decls": []
+                        }
+                      ]
+                    }
+                  ]
+                }
+              },
+              "seq": [
+                {
+                  "id": "AST_DECL",
+                  "type": false,
+                  "decls": []
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "seq": []
+    },
+    {
+      "id": "STMT_DECLS",
+      "specs": {
+        "id": "AST_DECLSPEC",
+        "tok": "int"
+      },
+      "seq": [
+        {
+          "id": "AST_DECL",
+          "tok": "foo",
+          "type": {
+            "id": "AST_DECLFN",
+            "args": [],
+            "type": false
+          },
+          "decls": [],
+          "init": {
+            "id": "STMT_BLOCK",
+            "seq": [
+              {
+                "id": "STMT_DECLS",
+                "specs": {
+                  "id": "AST_DECLSPEC",
+                  "tok": "A",
+                  "name": "A"
+                },
+                "seq": [
+                  {
+                    "id": "AST_DECL",
+                    "tok": "a",
+                    "type": false,
+                    "decls": [],
+                    "init": {
+                      "id": "AST_INIT",
+                      "elems": [
+                        0,
+                        1,
+                        {
+                          "id": "EXPR_LIT",
+                          "value": 1,
+                          "suffix": "D"
+                        },
+                        1,
+                        1,
+                        {
+                          "id": "EXPR_LIT",
+                          "value": 0
+                        },
+                        2,
+                        0,
+                        {
+                          "id": "AST_INIT",
+                          "elems": [
+                            2,
+                            0,
+                            {
+                              "id": "EXPR_LIT",
+                              "value": 2,
+                              "suffix": "D"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "EXPR_FIELD",
+                "tok": ".",
+                "name": "l",
+                "lhs": {
+                  "id": "EXPR_REF",
+                  "tok": "a",
+                  "take_addr": true,
+                  "sizing": 12
+                }
+              },
+              {
+                "id": "EXPR_FIELD",
+                "tok": "->",
+                "name": "l",
+                "lhs": {
+                  "id": "EXPR_DEREF",
+                  "tok": "->",
+                  "take_addr": true,
+                  "lhs": {
+                    "id": "EXPR_ADDRESS",
+                    "tok": "&",
+                    "lhs": {
+                      "id": "EXPR_REF",
+                      "tok": "a",
+                      "take_addr": true,
+                      "sizing": 8
+                    }
+                  }
+                }
+              },
+              {
+                "id": "EXPR_ASSIGN",
+                "tok": "=",
+                "lhs": {
+                  "id": "EXPR_FIELD",
+                  "tok": ".",
+                  "take_addr": true,
+                  "name": "l",
+                  "lhs": {
+                    "id": "EXPR_REF",
+                    "tok": "a",
+                    "take_addr": true,
+                    "sizing": 8
+                  }
+                },
+                "rhs": {
+                  "id": "EXPR_LIT",
+                  "value": 5,
+                  "suffix": "D"
+                }
+              },
+              {
+                "id": "EXPR_ASSIGN",
+                "tok": "=",
+                "lhs": {
+                  "id": "EXPR_FIELD",
+                  "tok": "->",
+                  "take_addr": true,
+                  "name": "l",
+                  "lhs": {
+                    "id": "EXPR_DEREF",
+                    "tok": "->",
+                    "take_addr": true,
+                    "lhs": {
+                      "id": "EXPR_ADDRESS",
+                      "tok": "&",
+                      "lhs": {
+                        "id": "EXPR_REF",
+                        "tok": "a",
+                        "take_addr": true,
+                        "sizing": 8
+                      }
+                    }
+                  }
+                },
+                "rhs": {
+                  "id": "EXPR_LIT",
+                  "value": 8,
+                  "suffix": "D"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

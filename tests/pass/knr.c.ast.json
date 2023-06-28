@@ -1,0 +1,258 @@
+{
+  "id": "STMT_BLOCK",
+  "seq": [
+    {
+      "id": "STMT_DECLS",
+      "specs": {
+        "id": "AST_DECLSPEC",
+        "tok": "int"
+      },
+      "seq": [
+        {
+          "id": "AST_DECL",
+          "tok": "compress2",
+          "type": {
+            "id": "AST_DECLFN",
+            "plist": true,
+            "type": false
+          },
+          "decls": [
+            {
+              "id": "STMT_DECLS",
+              "specs": {
+                "id": "AST_DECLSPEC",
+                "tok": "char"
+              },
+              "seq": [
+                {
+                  "id": "AST_DECL",
+                  "tok": "dest",
+                  "type": {
+                    "id": "AST_DECLPTR",
+                    "type": false
+                  },
+                  "decls": []
+                }
+              ]
+            },
+            {
+              "id": "STMT_DECLS",
+              "specs": {
+                "id": "AST_DECLSPEC",
+                "tok": "long",
+                "long": true
+              },
+              "seq": [
+                {
+                  "id": "AST_DECL",
+                  "tok": "destLen",
+                  "type": {
+                    "id": "AST_DECLPTR",
+                    "type": false
+                  },
+                  "decls": []
+                }
+              ]
+            },
+            {
+              "id": "STMT_DECLS",
+              "specs": {
+                "id": "AST_DECLSPEC",
+                "tok": "char",
+                "const": true
+              },
+              "seq": [
+                {
+                  "id": "AST_DECL",
+                  "tok": "source",
+                  "type": {
+                    "id": "AST_DECLPTR",
+                    "type": false
+                  },
+                  "decls": []
+                }
+              ]
+            },
+            {
+              "id": "STMT_DECLS",
+              "specs": {
+                "id": "AST_DECLSPEC",
+                "tok": "long",
+                "long": true
+              },
+              "seq": [
+                {
+                  "id": "AST_DECL",
+                  "tok": "sourceLen",
+                  "type": false,
+                  "decls": []
+                }
+              ]
+            },
+            {
+              "id": "STMT_DECLS",
+              "specs": {
+                "id": "AST_DECLSPEC",
+                "tok": "int"
+              },
+              "seq": [
+                {
+                  "id": "AST_DECL",
+                  "tok": "level",
+                  "type": false,
+                  "decls": []
+                }
+              ]
+            }
+          ],
+          "init": {
+            "id": "STMT_BLOCK",
+            "seq": [
+              {
+                "id": "STMT_RETURN",
+                "expr": {
+                  "id": "EXPR_REF",
+                  "tok": "level",
+                  "sizing": -4
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "STMT_DECLS",
+      "specs": {
+        "id": "AST_DECLSPEC",
+        "tok": "long",
+        "long": true
+      },
+      "seq": [
+        {
+          "id": "AST_DECL",
+          "tok": "compress3",
+          "type": {
+            "id": "AST_DECLFN",
+            "plist": true,
+            "type": false
+          },
+          "decls": [
+            {
+              "id": "STMT_DECLS",
+              "specs": {
+                "id": "AST_DECLSPEC",
+                "tok": "char"
+              },
+              "seq": [
+                {
+                  "id": "AST_DECL",
+                  "tok": "b",
+                  "type": {
+                    "id": "AST_DECLPTR",
+                    "type": false
+                  },
+                  "decls": []
+                }
+              ]
+            },
+            {
+              "id": "STMT_DECLS",
+              "specs": {
+                "id": "AST_DECLSPEC",
+                "tok": "long",
+                "long": true
+              },
+              "seq": [
+                {
+                  "id": "AST_DECL",
+                  "tok": "a",
+                  "type": false,
+                  "decls": []
+                }
+              ]
+            }
+          ],
+          "init": {
+            "id": "STMT_BLOCK",
+            "seq": [
+              {
+                "id": "STMT_RETURN",
+                "expr": {
+                  "id": "EXPR_REF",
+                  "tok": "a",
+                  "sizing": -8
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "STMT_DECLS",
+      "specs": {
+        "id": "AST_DECLSPEC",
+        "tok": "long",
+        "long": true
+      },
+      "seq": [
+        {
+          "id": "AST_DECL",
+          "tok": "compress4",
+          "type": {
+            "id": "AST_DECLFN",
+            "plist": true,
+            "type": false
+          },
+          "decls": [
+            {
+              "id": "STMT_DECLS",
+              "specs": {
+                "id": "AST_DECLSPEC",
+                "tok": "int"
+              },
+              "seq": [
+                {
+                  "id": "AST_DECL",
+                  "tok": "a",
+                  "type": false,
+                  "decls": []
+                },
+                {
+                  "id": "AST_DECL",
+                  "tok": "b",
+                  "type": false,
+                  "decls": []
+                }
+              ]
+            }
+          ],
+          "init": {
+            "id": "STMT_BLOCK",
+            "seq": [
+              {
+                "id": "STMT_RETURN",
+                "expr": {
+                  "id": "EXPR_ADD",
+                  "tok": "+",
+                  "lhs": {
+                    "id": "EXPR_REF",
+                    "tok": "b",
+                    "sizing": -4
+                  },
+                  "rhs": {
+                    "id": "EXPR_REF",
+                    "tok": "a",
+                    "sizing": -4
+                  },
+                  "sizing": -4
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

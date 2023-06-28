@@ -1,0 +1,200 @@
+{
+  "id": "STMT_BLOCK",
+  "seq": [
+    {
+      "id": "STMT_DECLS",
+      "specs": {
+        "id": "AST_DECLSPEC",
+        "tok": "enum",
+        "enum": {
+          "id": "STMT_DECLS",
+          "seq": [
+            {
+              "id": "AST_DECL",
+              "tok": "v1",
+              "type": false,
+              "decls": [],
+              "init": {
+                "id": "EXPR_LIT",
+                "value": 2,
+                "suffix": "D"
+              }
+            }
+          ]
+        }
+      },
+      "seq": []
+    },
+    {
+      "id": "STMT_DECLS",
+      "specs": {
+        "id": "AST_DECLSPEC",
+        "tok": "int"
+      },
+      "seq": [
+        {
+          "id": "AST_DECL",
+          "tok": "data",
+          "type": {
+            "id": "AST_DECLARR",
+            "type": false
+          },
+          "decls": [],
+          "init": {
+            "id": "AST_INIT",
+            "elems": [
+              0,
+              0,
+              {
+                "id": "EXPR_LIT",
+                "value": 1,
+                "suffix": "D"
+              },
+              0,
+              0,
+              {
+                "id": "EXPR_REF",
+                "tok": "v1",
+                "sizing": -4
+              },
+              0,
+              0,
+              {
+                "id": "EXPR_LIT",
+                "value": 3,
+                "suffix": "D"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "STMT_DECLS",
+      "specs": {
+        "id": "AST_DECLSPEC",
+        "tok": "char",
+        "const": true
+      },
+      "seq": [
+        {
+          "id": "AST_DECL",
+          "tok": "s_reg_names",
+          "type": {
+            "id": "AST_DECLARR",
+            "type": {
+              "id": "AST_DECLPTR",
+              "type": false
+            }
+          },
+          "decls": [],
+          "init": {
+            "id": "AST_INIT",
+            "elems": [
+              0,
+              0,
+              {
+                "id": "EXPR_STRLIT",
+                "take_addr": true
+              },
+              0,
+              0,
+              {
+                "id": "EXPR_STRLIT",
+                "take_addr": true
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "STMT_DECLS",
+      "specs": {
+        "id": "AST_DECLSPEC",
+        "tok": "void"
+      },
+      "seq": [
+        {
+          "id": "AST_DECL",
+          "tok": "bar",
+          "type": {
+            "id": "AST_DECLFN",
+            "args": [],
+            "type": false
+          },
+          "decls": [],
+          "init": {
+            "id": "STMT_BLOCK",
+            "seq": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "STMT_DECLS",
+      "specs": {
+        "id": "AST_DECLSPEC",
+        "tok": "void"
+      },
+      "seq": [
+        {
+          "id": "AST_DECL",
+          "tok": "foo",
+          "type": {
+            "id": "AST_DECLFN",
+            "args": [],
+            "type": false
+          },
+          "decls": [],
+          "init": {
+            "id": "STMT_BLOCK",
+            "seq": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "STMT_DECLS",
+      "specs": {
+        "id": "AST_DECLSPEC",
+        "tok": "void"
+      },
+      "seq": [
+        {
+          "id": "AST_DECL",
+          "tok": "ptrs",
+          "type": {
+            "id": "AST_DECLARR",
+            "type": {
+              "id": "AST_DECLPTR",
+              "type": false
+            }
+          },
+          "decls": [],
+          "init": {
+            "id": "AST_INIT",
+            "elems": [
+              0,
+              0,
+              {
+                "id": "EXPR_REF",
+                "tok": "foo",
+                "take_addr": true,
+                "sizing": 8
+              },
+              0,
+              0,
+              {
+                "id": "EXPR_REF",
+                "tok": "bar",
+                "take_addr": true,
+                "sizing": 8
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

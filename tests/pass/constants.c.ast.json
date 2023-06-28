@@ -1,0 +1,112 @@
+{
+  "id": "STMT_BLOCK",
+  "seq": [
+    {
+      "id": "STMT_DECLS",
+      "specs": {
+        "id": "AST_DECLSPEC",
+        "tok": "char"
+      },
+      "seq": [
+        {
+          "id": "AST_DECL",
+          "tok": "d1",
+          "type": {
+            "id": "AST_DECLARR",
+            "arity": {
+              "id": "EXPR_LIT",
+              "value": 92
+            },
+            "type": false
+          },
+          "decls": []
+        }
+      ]
+    },
+    {
+      "id": "STMT_DECLS",
+      "specs": {
+        "id": "AST_DECLSPEC",
+        "tok": "void"
+      },
+      "seq": [
+        {
+          "id": "AST_DECL",
+          "tok": "f",
+          "type": {
+            "id": "AST_DECLFN",
+            "args": [],
+            "type": false
+          },
+          "decls": [],
+          "init": {
+            "id": "STMT_BLOCK",
+            "seq": [
+              {
+                "id": "EXPR_LIT",
+                "value": 1,
+                "suffix": "D"
+              },
+              {
+                "id": "EXPR_LIT",
+                "value": 2147483647
+              },
+              {
+                "id": "EXPR_LIT",
+                "value": 2147483648
+              },
+              {
+                "id": "EXPR_LIT",
+                "value": 2147483647,
+                "suffix": "LL"
+              },
+              {
+                "id": "EXPR_LIT",
+                "value": 2147483647,
+                "suffix": "LLU"
+              },
+              {
+                "id": "EXPR_LIT",
+                "value": 10
+              },
+              {
+                "id": "EXPR_LIT",
+                "value": 9
+              },
+              {
+                "id": "EXPR_LIT",
+                "value": 8
+              },
+              {
+                "id": "EXPR_LIT",
+                "value": 13
+              },
+              {
+                "id": "EXPR_LIT",
+                "value": 0
+              },
+              {
+                "id": "EXPR_LIT",
+                "value": 32
+              },
+              {
+                "id": "EXPR_LIT",
+                "value": 0,
+                "suffix": "L"
+              },
+              {
+                "id": "EXPR_LIT",
+                "value": 8
+              },
+              {
+                "id": "EXPR_LIT",
+                "value": 12345678,
+                "suffix": "D"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

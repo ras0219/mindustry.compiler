@@ -6,9 +6,11 @@
 #include "be.h"
 #include "cg.h"
 #include "checker.h"
+#include "diff.h"
 #include "dirent.h"
 #include "elaborator.h"
 #include "errors.h"
+#include "json_dom.h"
 #include "lexstate.h"
 #include "parse.h"
 #include "parse_macros.h"
@@ -470,7 +472,7 @@ static void format_all_tac(Array* out, const BackEnd* be)
 static int read_contents(Array* out, const char* path)
 {
     errno = 0;
-    FILE* f = fopen(path, "r");
+    FILE* f = fopen(path, "rb");
     if (!f) return errno;
     (void)fseek(f, 0L, SEEK_END);
     off_t len = ftello(f);
@@ -485,6 +487,7 @@ fail:
 
 static int is_trimchar(char ch) { return ch == '\n' || ch == '\r'; }
 
+// `out` : Array<size_t>
 static void trimmed_lines(const char* buf, size_t buf_sz, Array* out)
 {
     size_t s = 0;
@@ -507,43 +510,95 @@ int require_lines_eq(
     struct TestState* state, const char* ebuf1, size_t ebuf1sz, const char* ebuf2, size_t ebuf2sz, const char* filename)
 {
     int rc = 1;
+    unsigned char* cmp = NULL;
+    // Array<size_t>
     Array lines1 = {0}, lines2 = {0};
 
     trimmed_lines(ebuf1, ebuf1sz, &lines1);
     trimmed_lines(ebuf2, ebuf2sz, &lines2);
 
-    size_t n1 = arrsz_size(&lines1), n2 = arrsz_size(&lines2);
-    const size_t n = n1 < n2 ? n1 : n2;
+    size_t n1 = arrsz_size(&lines1) / 2, n2 = arrsz_size(&lines2) / 2;
 
     const size_t* l1 = lines1.data;
     const size_t* l2 = lines2.data;
 
-    size_t i;
-    for (i = 0; i < n; i += 2)
+    cmp = malloc(n1 * n2 + n1 + n2);
+    unsigned char* diff_seq = cmp + n1 * n2;
+    for (size_t i = 0; i < n1; ++i)
     {
-        REQUIRE_MEM_EQ_IMPL(filename,
-                            i / 2 + 1,
-                            "expected",
-                            ebuf1 + l1[i],
-                            l1[i + 1] - l1[i],
-                            "actual",
-                            ebuf2 + l2[i],
-                            l2[i + 1] - l2[i]);
+        size_t o = i * n2;
+        for (size_t j = 0; j < n2; ++j)
+        {
+            size_t len_i = l1[i * 2 + 1] - l1[i * 2], len_j = l2[j * 2 + 1] - l2[j * 2];
+            cmp[o + j] = (len_i == len_j && 0 == memcmp(ebuf1 + l1[i * 2], ebuf2 + l2[j * 2], len_i));
+        }
     }
-    for (; i < n1; i += 2)
+
+    diff(cmp, diff_seq, n1, n2);
+
+    size_t hunks = 0;
+
+    size_t i = 0, j = 0;
+    for (; i + j < n1 + n2;)
     {
-        REQUIRE_MEM_EQ_IMPL(filename, i / 2 + 1, "expected", ebuf1 + l1[i], l1[i + 1] - l1[i], "actual", "", 0);
+        const size_t s = i + j;
+        if (diff_seq[s] == diff_both)
+        {
+            ++i;
+            ++j;
+            continue;
+        }
+        const size_t context = i > 3 ? 3 : i;
+        size_t seen_both = 0;
+        size_t hunk_end = s + 1;
+        for (; seen_both < 7 && hunk_end < n1 + n2; ++hunk_end)
+        {
+            if (diff_seq[hunk_end] == diff_both)
+            {
+                ++hunk_end;
+                ++seen_both;
+            }
+            else
+            {
+                seen_both = 0;
+            }
+        }
+        if (seen_both > 3)
+        {
+            hunk_end -= (seen_both - 3) * 2;
+        }
+        REQUIRE_FAIL_MSG_IMPL(filename, (int)(i + 1), "incorrect output");
+        ++state->assertionfails;
+        ++hunks;
+        fprintf(stderr, "@@ %zu %zu @@\n", i + 1 - context, j + 1 - context);
+        for (size_t t = 0; t < context; ++t)
+        {
+            size_t l = i + t - context;
+            fprintf(stderr, " %.*s\n", (int)(l1[l * 2 + 1] - l1[l * 2]), ebuf1 + l1[l * 2]);
+        }
+        for (; i + j < hunk_end;)
+        {
+            const int c = diff_seq[i + j];
+            if (c == diff_both)
+            {
+                fprintf(stderr, " %.*s\n", (int)(l1[i * 2 + 1] - l1[i * 2]), ebuf1 + l1[i * 2]);
+                ++i;
+                ++j;
+            }
+            else if (c == diff_left)
+            {
+                fprintf(stderr, "-%.*s\n", (int)(l1[i * 2 + 1] - l1[i * 2]), ebuf1 + l1[i * 2]);
+                ++i;
+            }
+            else
+            {
+                fprintf(stderr, "+%.*s\n", (int)(l2[j * 2 + 1] - l2[j * 2]), ebuf2 + l2[j * 2]);
+                ++j;
+            }
+        }
     }
-    for (; i < n2; i += 2)
-    {
-        REQUIRE_MEM_EQ_IMPL(filename, i / 2 + 1, "expected", "", 0, "actual", ebuf2 + l2[i], l2[i + 1] - l2[i]);
-    }
-    rc = 0;
-fail:
-    if (rc)
-    {
-        fprintf(stderr, "%.*s", (int)ebuf2sz, (char*)ebuf2);
-    }
+    rc = hunks > 0;
+    free(cmp);
     array_destroy(&lines1);
     array_destroy(&lines2);
     return rc;
@@ -621,9 +676,20 @@ fail:
     return rc;
 }
 
+static void array_append_jsonr(Array* out, const JsonRecord* r, const char* text)
+{
+    if (r->kind == jsonr_key || r->kind == jsonr_string) array_push_byte(out, '"');
+    array_push(out, text + r->offset, r->n);
+    if (r->kind == jsonr_string)
+        array_push_byte(out, '"');
+    else if (r->kind == jsonr_key)
+        array_push(out, "\":", 2);
+}
+
 static int test_file(struct TestState* state, const char* path)
 {
     int rc = 1;
+    JsonDOM dom = {0};
     Array astfile = {0}, buf = {0};
     Preprocessor *pp = NULL, *ast_pp = NULL;
     Checker* chk = NULL;
@@ -678,9 +744,101 @@ static int test_file(struct TestState* state, const char* path)
             REQUIRE_FAIL_IMPL((char*)astfile.data, 1, "%s", "failed to preprocess");
         }
         if (test_ast(state, ast_pp, &parser, &elab, astfile.data)) goto fail;
+        fclose(f2);
+        f2 = NULL;
     }
-
     array_pop(&astfile, 5);
+
+    array_push(&astfile, ".ast.json", 10);
+    if (!read_contents(&dom.text, astfile.data))
+    {
+        JsonParse jp = {0};
+        JsonDOM actual = {0};
+        ast_to_json(&parser, &actual);
+        enum JsonParseResult pr = jsondom_fill_records(&dom, &jp);
+        if (pr != json_err_success)
+        {
+            PRINTF_ERR(
+                "%s:%d:%d: json parse error %d: %s", (char*)astfile.data, jp.row, jp.col, pr, json_err_to_string[pr]);
+            goto fail;
+        }
+        size_t difflen = (dom.records.sz + actual.records.sz) / sizeof(JsonRecord);
+        uint8_t* diff_result = malloc(difflen);
+        jsondom_diff(&actual, &dom, diff_result);
+        const JsonRecord* dom_records = dom.records.data;
+        const JsonRecord* actual_records = actual.records.data;
+        int printing = 0;
+        size_t it_a = 0, it_d = 0;
+        Array line = {0};
+        for (size_t i = 0; i < difflen; ++i)
+        {
+            if (diff_result[i] == jsond_both)
+            {
+                if (printing)
+                {
+                    array_push(&line, "     ", 5);
+                    array_append_jsonr(&line, actual_records + it_a, actual.text.data);
+                    array_push_byte(&line, '\n');
+                    --printing;
+                }
+                ++i;
+                ++it_a;
+                ++it_d;
+            }
+            else
+            {
+                if (!printing)
+                {
+                    // print previous context
+                    for (size_t x = it_a > 3 ? it_a - 3 : 0; x < it_a; ++x)
+                    {
+                        array_push(&line, "     ", 5);
+                        array_append_jsonr(&line, actual_records + x, actual.text.data);
+                        array_push_byte(&line, '\n');
+                    }
+                }
+                printing = 3;
+                if (diff_result[i] == jsond_left)
+                {
+                    array_push(&line, "-    ", 5);
+                    array_append_jsonr(&line, actual_records + it_a, actual.text.data);
+                    array_push_byte(&line, '\n');
+                    PRINTF_ERR("%s:%d:%d: error: unexpected json elem '%.*s'",
+                               (char*)astfile.data,
+                               dom_records[it_d].row,
+                               dom_records[it_d].col,
+                               (int)actual_records[it_a].n,
+                               (char*)actual.text.data + (int)actual_records[it_a].offset);
+                    ++it_a;
+                }
+                else if (diff_result[i] == jsond_right)
+                {
+                    array_push(&line, "+    ", 5);
+                    array_append_jsonr(&line, dom_records + it_d, dom.text.data);
+                    array_push_byte(&line, '\n');
+                    PRINTF_ERR("%s:%d:%d: error: expected json elem '%.*s'",
+                               (char*)astfile.data,
+                               dom_records[it_d].row,
+                               dom_records[it_d].col,
+                               (int)dom_records[it_d].n,
+                               (char*)dom.text.data + dom_records[it_d].offset);
+                    ++it_d;
+                }
+                else
+                {
+                    abort();
+                }
+            }
+        }
+        fwrite(line.data, line.sz, 1, stderr);
+        array_destroy(&line);
+        jsondom_destroy(&actual);
+        free(diff_result);
+        fclose(f2);
+        f2 = NULL;
+    }
+    array_pop(&astfile, 10);
+
     array_push(&astfile, ".checks", 8);
     if (f3 = fopen(astfile.data, "rb"))
     {
@@ -716,6 +874,7 @@ fail:
     if (f) fclose(f);
     array_destroy(&buf);
     array_destroy(&astfile);
+    jsondom_destroy(&dom);
     return rc;
 }
 

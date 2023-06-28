@@ -22,5 +22,6 @@ struct TypeStr;
 struct TypeStrBuf;
 struct TypeTable;
 struct PtrMap;
+struct JsonDOM;
 
 typedef struct Array StrList;

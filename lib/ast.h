@@ -74,6 +74,8 @@ enum
 int ast_kind_is_expr(enum AstKind k);
 const char* ast_kind_to_string(enum AstKind k);
 
+void ast_to_json(struct Parser* p, struct JsonDOM* f);
+
 #define AST_FIELDS                                                                                                     \
     const struct Token* tok;                                                                                           \
     size_t id;                                                                                                         \

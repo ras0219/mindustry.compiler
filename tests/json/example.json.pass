@@ -1,0 +1,74 @@
+1 1 object_begin
+2 3 key 1 "id"
+2 9 string 1 "STMT_BLOCK"
+3 3 key 1 "seq"
+3 10 array_begin
+4 5 object_begin
+5 7 key 1 "id"
+5 13 string 1 "STMT_DECLS"
+6 7 key 1 "specs"
+6 16 object_begin
+7 9 key 1 "id"
+7 15 string 1 "AST_DECLSPEC"
+8 9 key 1 "tok"
+8 16 string 1 "char"
+9 9 key 1 "const"
+9 18 kw_true
+10 7 object_end
+11 7 key 1 "seq"
+11 14 array_begin
+12 9 object_begin
+13 11 key 1 "id"
+13 17 string 1 "AST_DECL"
+14 11 key 1 "tok"
+14 18 string 1 "mode"
+15 11 key 1 "type"
+15 19 object_begin
+16 13 key 1 "id"
+16 19 string 1 "AST_DECLARR"
+17 13 key 1 "type"
+17 21 object_begin
+18 15 key 1 "id"
+18 21 string 1 "AST_DECLARR"
+19 15 key 1 "arity"
+19 24 object_begin
+20 17 key 1 "id"
+20 23 string 1 "EXPR_LIT"
+21 17 key 1 "value"
+21 26 number 1 5
+22 17 key 1 "suffix"
+22 27 string 1 "D"
+23 15 object_end
+24 15 key 1 "type"
+24 23 kw_false
+25 13 object_end
+26 11 object_end
+27 11 key 1 "decls"
+27 20 array_begin
+27 21 array_end
+28 11 key 0 "init
+28 16 key 1 "
+28 19 object_begin
+29 13 key 1 "id"
+29 19 string 1 "AST_INIT"
+30 13 key 1 "elems"
+30 22 array_begin
+31 15 number 1 0
+32 15 number 1 0
+33 15 object_begin
+34 17 key 1 "id"
+34 23 string 1 "EXPR_STRLIT"
+35 17 key 1 "take_addr"
+35 30 kw_true
+36 15 object_end
+37 15 number 1 0
+38 15 number 1 0
+39 15 object_begin
+39 16 object_end
+40 13 array_end
+41 11 object_end
+42 9 object_end
+43 7 array_end
+44 5 object_end
+45 3 array_end
+46 1 object_end

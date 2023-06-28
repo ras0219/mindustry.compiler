@@ -1,0 +1,321 @@
+{
+  "id": "STMT_BLOCK",
+  "seq": [
+    {
+      "id": "STMT_DECLS",
+      "specs": {
+        "id": "AST_DECLSPEC",
+        "typedef": true,
+        "tok": "__builtin_va_list"
+      },
+      "seq": [
+        {
+          "id": "AST_DECL",
+          "tok": "__gnu_va_list",
+          "type": false,
+          "decls": []
+        }
+      ]
+    },
+    {
+      "id": "STMT_DECLS",
+      "specs": {
+        "id": "AST_DECLSPEC",
+        "typedef": true,
+        "tok": "__gnu_va_list",
+        "name": "__gnu_va_list"
+      },
+      "seq": [
+        {
+          "id": "AST_DECL",
+          "tok": "va_list",
+          "type": false,
+          "decls": []
+        }
+      ]
+    },
+    {
+      "id": "STMT_DECLS",
+      "specs": {
+        "id": "AST_DECLSPEC",
+        "tok": "void"
+      },
+      "seq": [
+        {
+          "id": "AST_DECL",
+          "tok": "g",
+          "type": {
+            "id": "AST_DECLFN",
+            "args": [
+              {
+                "id": "STMT_DECLS",
+                "specs": {
+                  "id": "AST_DECLSPEC",
+                  "tok": "char",
+                  "const": true
+                },
+                "seq": [
+                  {
+                    "id": "AST_DECL",
+                    "tok": "fmt",
+                    "type": {
+                      "id": "AST_DECLPTR",
+                      "type": false
+                    },
+                    "decls": []
+                  }
+                ]
+              },
+              {
+                "id": "STMT_DECLS",
+                "specs": {
+                  "id": "AST_DECLSPEC",
+                  "tok": "__builtin_va_list"
+                },
+                "seq": [
+                  {
+                    "id": "AST_DECL",
+                    "tok": "w",
+                    "type": false,
+                    "decls": []
+                  }
+                ]
+              }
+            ],
+            "type": false
+          },
+          "decls": [],
+          "init": {
+            "id": "STMT_BLOCK",
+            "seq": [
+              {
+                "id": "STMT_DECLS",
+                "specs": {
+                  "id": "AST_DECLSPEC",
+                  "tok": "int"
+                },
+                "seq": [
+                  {
+                    "id": "AST_DECL",
+                    "tok": "x",
+                    "type": false,
+                    "decls": [],
+                    "init": {
+                      "id": "EXPR_BUILTIN",
+                      "tok": "__builtin_va_arg",
+                      "sizing": -4,
+                      "specs": {
+                        "id": "AST_DECLSPEC",
+                        "tok": "int"
+                      },
+                      "type": {
+                        "id": "AST_DECL",
+                        "type": false,
+                        "decls": []
+                      },
+                      "expr1": {
+                        "id": "EXPR_REF",
+                        "tok": "w",
+                        "sizing": 8
+                      },
+                      "sizeof": 0
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "STMT_DECLS",
+      "specs": {
+        "id": "AST_DECLSPEC",
+        "tok": "void"
+      },
+      "seq": [
+        {
+          "id": "AST_DECL",
+          "tok": "f",
+          "type": {
+            "id": "AST_DECLFN",
+            "args": [
+              {
+                "id": "STMT_DECLS",
+                "specs": {
+                  "id": "AST_DECLSPEC",
+                  "tok": "char",
+                  "const": true
+                },
+                "seq": [
+                  {
+                    "id": "AST_DECL",
+                    "tok": "fmt",
+                    "type": {
+                      "id": "AST_DECLPTR",
+                      "type": false
+                    },
+                    "decls": []
+                  }
+                ]
+              }
+            ],
+            "varargs": true,
+            "type": false
+          },
+          "decls": [],
+          "init": {
+            "id": "STMT_BLOCK",
+            "seq": [
+              {
+                "id": "STMT_DECLS",
+                "specs": {
+                  "id": "AST_DECLSPEC",
+                  "tok": "va_list",
+                  "name": "va_list"
+                },
+                "seq": [
+                  {
+                    "id": "AST_DECL",
+                    "tok": "v",
+                    "type": false,
+                    "decls": []
+                  }
+                ]
+              },
+              {
+                "id": "EXPR_BUILTIN",
+                "tok": "__builtin_va_start",
+                "expr1": {
+                  "id": "EXPR_REF",
+                  "tok": "v",
+                  "take_addr": true,
+                  "sizing": 8
+                },
+                "expr2": {
+                  "id": "EXPR_REF",
+                  "tok": "fmt",
+                  "sizing": 8
+                },
+                "sizeof": 0
+              },
+              {
+                "id": "EXPR_CALL",
+                "fn": {
+                  "id": "EXPR_REF",
+                  "tok": "g",
+                  "take_addr": true,
+                  "sizing": 8
+                },
+                "args": [
+                  {
+                    "id": "EXPR_REF",
+                    "tok": "fmt",
+                    "sizing": 8
+                  },
+                  {
+                    "id": "EXPR_REF",
+                    "tok": "v",
+                    "take_addr": true,
+                    "sizing": 8
+                  }
+                ]
+              },
+              {
+                "id": "STMT_DECLS",
+                "specs": {
+                  "id": "AST_DECLSPEC",
+                  "tok": "int"
+                },
+                "seq": [
+                  {
+                    "id": "AST_DECL",
+                    "tok": "x",
+                    "type": false,
+                    "decls": [],
+                    "init": {
+                      "id": "EXPR_BUILTIN",
+                      "tok": "__builtin_va_arg",
+                      "sizing": -4,
+                      "specs": {
+                        "id": "AST_DECLSPEC",
+                        "tok": "int"
+                      },
+                      "type": {
+                        "id": "AST_DECL",
+                        "type": false,
+                        "decls": []
+                      },
+                      "expr1": {
+                        "id": "EXPR_REF",
+                        "tok": "v",
+                        "take_addr": true,
+                        "sizing": 8
+                      },
+                      "sizeof": 0
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "EXPR_BUILTIN",
+                "tok": "__builtin_va_end",
+                "expr1": {
+                  "id": "EXPR_REF",
+                  "tok": "v"
+                },
+                "sizeof": 0
+              },
+              {
+                "id": "EXPR_CALL",
+                "fn": {
+                  "id": "EXPR_REF",
+                  "tok": "f",
+                  "take_addr": true,
+                  "sizing": 8
+                },
+                "args": [
+                  {
+                    "id": "EXPR_LIT",
+                    "value": 0
+                  },
+                  {
+                    "id": "EXPR_LIT",
+                    "value": 1,
+                    "suffix": "D"
+                  },
+                  {
+                    "id": "EXPR_LIT",
+                    "value": 2,
+                    "suffix": "D"
+                  },
+                  {
+                    "id": "EXPR_LIT",
+                    "value": 2,
+                    "suffix": "D"
+                  },
+                  {
+                    "id": "EXPR_LIT",
+                    "value": 2,
+                    "suffix": "D"
+                  },
+                  {
+                    "id": "EXPR_LIT",
+                    "value": 2,
+                    "suffix": "D"
+                  },
+                  {
+                    "id": "EXPR_LIT",
+                    "value": 2,
+                    "suffix": "D"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
