@@ -15,3 +15,6 @@ static __forceinline size_t _seqview_start(SeqView seq, size_t* p)
 }
 
 #define FOREACH_SEQ(i, seq) for (size_t _end##i, i = _seqview_start((seq), &_end##i); i < _end##i; ++i)
+
+#define FOREACH_SEQ_T(type, i, seq, base)                                                                              \
+    for (type* i = (type*)(base) + (seq).off, *_end##i = i + (seq).ext; i != _end##i; ++i)

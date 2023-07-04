@@ -363,6 +363,7 @@ typedef struct StmtDecls
     // SeqView<Decl>
     SeqView seq;
 } StmtDecls;
+typedef const StmtDecls* StmtDeclsCPtr;
 #define AST_STRUCT_STMT_DECLS StmtDecls
 #define AST_KIND_StmtDecls STMT_DECLS
 
@@ -455,11 +456,19 @@ typedef struct StmtLabel
 
     struct Ast* stmt;
 } StmtLabel;
+#define AST_STRUCT_STMT_LABEL StmtLabel
+#define AST_KIND_StmtLabel STMT_LABEL
+
 typedef struct StmtBreak
 {
     INHERIT_AST;
 } StmtBreak;
+#define AST_STRUCT_STMT_BREAK StmtBreak
+#define AST_KIND_StmtBreak STMT_BREAK
+
 typedef struct StmtContinue
 {
     INHERIT_AST;
 } StmtContinue;
+#define AST_STRUCT_STMT_CONTINUE StmtContinue
+#define AST_KIND_StmtContinue STMT_CONTINUE

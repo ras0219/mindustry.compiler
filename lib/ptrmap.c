@@ -1,5 +1,15 @@
 #include "ptrmap.h"
 
+zuset_index zuset_find(ZUSet* s, size_t k)
+{
+    const size_t* data = s->data.data;
+    for (size_t i = 0, j = arrsz_size(&s->data); i < j; ++i)
+    {
+        if (data[i] == k) return i;
+    }
+    return -1;
+}
+
 size_t* ptrmap_find(const PtrMap* m, const void* k)
 {
     const void** data = m->ptrs.data;

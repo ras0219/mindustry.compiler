@@ -122,6 +122,26 @@ static void valinfo_init_integer(ValueInfo* info, Sizing sz, uint64_t value)
     info->val.sz = sz;
     info->val.base = value;
 }
+#if 0
+static void valinfo_init_one(ValueInfo* info)
+{
+    memset(info, 0, sizeof(ValueInfo));
+    info->kind = value_info_integer;
+    info->val = s_interval_one;
+}
+static void valinfo_init_zero(ValueInfo* info)
+{
+    memset(info, 0, sizeof(ValueInfo));
+    info->kind = value_info_integer;
+    info->val = s_interval_zero;
+}
+static void valinfo_init_zero_one(ValueInfo* info)
+{
+    memset(info, 0, sizeof(ValueInfo));
+    info->kind = value_info_integer;
+    info->val = s_interval_zero_one;
+}
+#endif
 static void value_cast_to_bool(ValueInfo* result)
 {
     int n = 0;
@@ -158,12 +178,15 @@ typedef struct Invalidation
 
 typedef struct CheckContext
 {
+    // PtrMap<const Symbol*, SSAIndex>
     PtrMap sym_to_ssa;
     // Array<ValueInfo>
     Array info;
     // Array<Invalidation>
     Array invalidations;
-    struct CheckContext* parent;
+    // Index of parent CheckContext plus 1
+    size_t parent;
+    // Is this context executed at all?
     unsigned char is_void : 1;
 } CheckContext;
 
@@ -173,14 +196,39 @@ static void chkctx_destroy(CheckContext* ctx)
     array_destroy(&ctx->info);
     array_destroy(&ctx->invalidations);
 }
+static void chkctx_clear(CheckContext* ctx)
+{
+    ptrmap_clear(&ctx->sym_to_ssa);
+    array_clear(&ctx->info);
+    array_clear(&ctx->invalidations);
+    ctx->parent = 0;
+    ctx->is_void = 0;
+}
+static void chkctx_clone(CheckContext* chk, const CheckContext* other)
+{
+    ptrmap_copy(&chk->sym_to_ssa, &other->sym_to_ssa);
+    array_copy(&chk->info, &other->info);
+    array_copy(&chk->invalidations, &other->invalidations);
+    chk->parent = other->parent;
+    chk->is_void = other->is_void;
+}
 
 struct Checker
 {
     const Elaborator* elab;
     const Parser* p;
+    // Array<char>
     Array fmt_tmp;
+    // Array<ValueInfo>
     Array ssa_info;
+    // Array<const RowCol*>
     Array ssa_rc;
+
+    // Array<CheckContext>
+    Array saved_ctx;
+
+    BStringMap label_to_index;
+    Array labelled;
     CheckContext* ctx;
 };
 void checker_free(struct Checker* chk)
@@ -188,7 +236,18 @@ void checker_free(struct Checker* chk)
     array_destroy(&chk->fmt_tmp);
     array_destroy(&chk->ssa_info);
     array_destroy(&chk->ssa_rc);
+    bsm_destroy(&chk->label_to_index);
+    array_destroy(&chk->labelled);
+    // TODO: free saved_ctx
     my_free(chk);
+}
+size_t check_push_ctx(Checker* chk)
+{
+    array_push(&chk->saved_ctx, chk->ctx, sizeof(CheckContext));
+    memset(chk->ctx, 0, sizeof(CheckContext));
+    size_t p = array_size(&chk->saved_ctx, sizeof(CheckContext));
+    chk->ctx->parent = p;
+    return p;
 }
 
 static ValueInfo* chkctx_get_ssa_info(const CheckContext* ctx, size_t ssa)
@@ -208,15 +267,16 @@ static ValueInfo* chkctx_get_ssa_info(const CheckContext* ctx, size_t ssa)
 }
 
 /// @return 0 on failure
-static size_t chkctx_get_ssa_rec(const CheckContext* ctx, const Symbol* sym)
+static size_t check_get_ssa_rec(const Checker* chk, const CheckContext* ctx, const Symbol* sym)
 {
+    if (!ctx) abort();
     do
     {
         const size_t* p = ptrmap_find(&ctx->sym_to_ssa, sym);
         if (p) return *p;
-        ctx = ctx->parent;
-    } while (ctx);
-    return 0;
+        if (!ctx->parent) return 0;
+        ctx = (const CheckContext*)chk->saved_ctx.data + (ctx->parent - 1);
+    } while (1);
 }
 
 static const ValueInfo* check_get_ssa_info_rec(const Checker* chk, const CheckContext* ctx, size_t ssa)
@@ -230,7 +290,7 @@ static const ValueInfo* check_get_ssa_info_rec(const Checker* chk, const CheckCo
             [ref_ssa_null - 1] = &s_valueinfo_null,
             [ref_ssa_uninit_agg - 1] = &s_valueinfo_uninit_agg,
         };
-        if (ssa == 0) abort();
+        if (ssa == 0) return &s_valueinfo_uninit;
         return valinfo_const_by_ssa[ssa - 1];
     }
     const ValueInfo* info;
@@ -247,7 +307,8 @@ static const ValueInfo* check_get_ssa_info_rec(const Checker* chk, const CheckCo
                 goto found;
             }
         }
-        ctx = ctx->parent;
+        if (!ctx->parent) break;
+        ctx = (const CheckContext*)chk->saved_ctx.data + (ctx->parent - 1);
     }
     info = (const ValueInfo*)chk->ssa_info.data + ssa - ref_ssa_start;
 found:
@@ -286,7 +347,7 @@ static const Symbol* check_find_field_or_containing(Checker* chk,
 
 static void check_read_sym(Checker* chk, const ValueInfoSym* s, ValueInfo* result, const RowCol* rc)
 {
-    size_t ssa = chkctx_get_ssa_rec(chk->ctx, s->sym);
+    size_t ssa = check_get_ssa_rec(chk, chk->ctx, s->sym);
     const ValueInfo* info = check_get_ssa_info_rec(chk, chk->ctx, ssa);
     if (!info)
     {
@@ -407,9 +468,9 @@ static void check_assign_sym(Checker* chk, const ValueInfoSym* s, const ValueInf
     if (!s->field) abort();
     if (s->field != s->sym)
     {
-        size_t ssa = chkctx_get_ssa_rec(chk->ctx, s->sym);
+        size_t ssa = check_get_ssa_rec(chk, chk->ctx, s->sym);
         new_ssa = check_replace_field_in_ssa(chk, ssa, s->sym, s->field, s->sym_offset, new_ssa, rc);
-        dump_ssa(chk, new_ssa);
+        (void)dump_ssa;
     }
     ptrmap_set(&chk->ctx->sym_to_ssa, s->sym, new_ssa);
 }
@@ -443,7 +504,7 @@ static void check_generalize_sym(Checker* chk, ValueInfo* v, const RowCol* rc)
         return;
     }
     const Symbol* sym = v->sym.sym;
-    size_t ssa = chkctx_get_ssa_rec(chk->ctx, v->sym.sym);
+    size_t ssa = check_get_ssa_rec(chk, chk->ctx, v->sym.sym);
     const ValueInfo* info = check_get_ssa_info_rec(chk, chk->ctx, ssa);
     if (v->kind == value_info_sym)
         v->kind = value_info_addr_obj;
@@ -611,6 +672,35 @@ static size_t check_invalidate_tbaa_sym(Checker* chk, size_t ssa, const TypeStrB
     check_merge_values(chk, &w, &i->info, i->rc);
     return check_push_ssa(chk, &w, i->rc);
 }
+static size_t check_invalidates_tbaa_sym(
+    Checker* chk, size_t ssa, const TypeStrBuf* sym_tsb, const Invalidation* xs, size_t nx)
+{
+    size_t i;
+    ValueInfo w;
+    const RowCol* rc;
+    int is_invalidated = 0;
+    for (i = 0; i < nx; ++i)
+    {
+        if (xs[i].info.ref_ssa == ssa) continue;
+        if (tsb_get_cvr(sym_tsb) & TYPESTR_CVR_C) continue; // cannot assign to const objects
+        if (!check_can_alias(chk, sym_tsb, &xs[i].tsb)) continue;
+        if (!is_invalidated)
+        {
+            w = *check_get_ssa_info_rec(chk, chk->ctx, ssa);
+            rc = xs[i].rc;
+            is_invalidated = 1;
+        }
+        check_merge_values(chk, &w, &xs[i].info, xs[i].rc);
+    }
+    if (is_invalidated)
+    {
+        return check_push_ssa(chk, &w, rc);
+    }
+    else
+    {
+        return ssa;
+    }
+}
 
 static void check_invalidate_tbaa(Checker* chk, const TypeStrBuf* tsb, const ValueInfo* v, const RowCol* rc)
 {
@@ -625,6 +715,7 @@ static void check_invalidate_tbaa(Checker* chk, const TypeStrBuf* tsb, const Val
     array_push(&chk->ctx->invalidations, &inv, sizeof(inv));
 }
 
+#if 0
 static void chkctx_replace_ssa(CheckContext* ctx, const ValueInfo* v)
 {
     if (!v->ref_ssa) abort();
@@ -641,39 +732,69 @@ static void chkctx_replace_ssa(CheckContext* ctx, const ValueInfo* v)
     }
     array_push(&ctx->info, v, sizeof(*v));
 }
-
+#endif
 static void check_flatten_context(Checker* chk, CheckContext* ctx)
 {
     if (!ctx->parent) abort();
-    ptrmap_insert_all(&ctx->parent->sym_to_ssa, &ctx->sym_to_ssa);
-    for (size_t i = 0; i < ptrmap_size(&ctx->parent->sym_to_ssa); ++i)
+    const CheckContext* const parent = (const CheckContext*)chk->saved_ctx.data + (ctx->parent - 1);
+    if (!ctx->is_void && parent->is_void) abort();
+    for (size_t i = 0; i < ptrmap_size(&parent->sym_to_ssa); ++i)
     {
-        const Symbol* sym = ptrmap_nth_ptr(&ctx->parent->sym_to_ssa, i);
+        const Symbol* sym = ptrmap_nth_ptr(&parent->sym_to_ssa, i);
         if (!ptrmap_find(&ctx->sym_to_ssa, sym))
         {
-            size_t* ssa = ptrmap_nth_val(&ctx->parent->sym_to_ssa, i);
-            ARRAY_FOREACH(const Invalidation, j, &ctx->invalidations)
-            {
-                *ssa = check_invalidate_tbaa_sym(chk, *ssa, &sym->type.buf, j);
-            }
+            size_t* ssa = ptrmap_nth_val(&parent->sym_to_ssa, i);
+            *ssa = check_invalidates_tbaa_sym(chk,
+                                              *ssa,
+                                              &sym->type.buf,
+                                              ctx->invalidations.data,
+                                              array_size(&ctx->invalidations, sizeof(Invalidation)));
         }
     }
-    const size_t n_i = array_size(&ctx->info, sizeof(ValueInfo));
-    const ValueInfo* const info = ctx->info.data;
-    for (size_t i = 0; i < n_i; ++i)
+    ARRAY_FOREACH(const ValueInfo, i, &parent->info)
     {
-        chkctx_replace_ssa(ctx->parent, info + i);
+        ARRAY_FOREACH(const ValueInfo, j, &ctx->info)
+        {
+            if (j->ref_ssa == i->ref_ssa) goto found;
+        }
+        array_push(&ctx->info, i, sizeof(*i));
+    found:;
     }
-    array_push(&ctx->parent->invalidations, ctx->invalidations.data, ctx->invalidations.sz);
-    ctx->parent->is_void |= ctx->is_void;
+    array_concat(&ctx->invalidations, &parent->invalidations);
+    ctx->parent = parent->parent;
 }
+#if 0
 
-static void chkctx_clone(CheckContext* chk, const CheckContext* other)
+static void check_freeze(Checker* chk, CheckContext* out, const CheckContext* in)
 {
-    chk->parent = other->parent;
-    array_copy(&chk->info, &other->info);
-    ptrmap_copy(&chk->sym_to_ssa, &other->sym_to_ssa);
+    out->is_void = 0;
+    out->parent = NULL;
+    array_clear(&out->info);
+    array_clear(&out->invalidations);
+    ptrmap_clear(&out->sym_to_ssa);
+    while (!out->is_void && in)
+    {
+        for (size_t i = 0, j = ptrmap_size(&in->sym_to_ssa); i < j; ++i)
+        {
+            const Symbol* sym = ptrmap_nth_ptr(&in->sym_to_ssa, i);
+            if (!ptrmap_find(&out->sym_to_ssa, sym))
+            {
+                const size_t* ssa = ptrmap_nth_val(&in->sym_to_ssa, i);
+                size_t new_ssa = check_invalidates_tbaa_sym(chk,
+                                                            *ssa,
+                                                            &sym->type.buf,
+                                                            out->invalidations.data,
+                                                            array_size(&out->invalidations, sizeof(Invalidation)));
+                ptrmap_set(&out->sym_to_ssa, sym, new_ssa);
+            }
+        }
+        ARRAY_FOREACH(const ValueInfo, i, &in->info) { chkctx_replace_ssa(out, i); }
+        array_concat(&out->invalidations, &in->invalidations);
+        out->is_void |= in->is_void;
+        in = in->parent;
+    }
 }
+#endif
 
 static void check_merge_context_matching(Checker* chk, CheckContext* ctx1, const CheckContext* ctx2, const RowCol* rc)
 {
@@ -682,7 +803,7 @@ static void check_merge_context_matching(Checker* chk, CheckContext* ctx1, const
     {
         const Symbol* sym = ptrmap_nth_ptr(&ctx1->sym_to_ssa, i);
         size_t* ssa = ptrmap_nth_val(&ctx1->sym_to_ssa, i);
-        size_t ssa2 = chkctx_get_ssa_rec(ctx2, sym);
+        size_t ssa2 = check_get_ssa_rec(chk, ctx2, sym);
         if (ssa2 && ssa2 != *ssa)
         {
             ValueInfo w = *check_get_ssa_info_rec(chk, ctx1, *ssa);
@@ -703,7 +824,7 @@ static void check_merge_context_missing(Checker* chk, CheckContext* ctx1, const 
         size_t* ssa = ptrmap_nth_val(&ctx2->sym_to_ssa, i);
         // skip common symbols, handled separately
         if (ptrmap_find(&ctx1->sym_to_ssa, sym)) continue;
-        size_t ssa1 = chkctx_get_ssa_rec(ctx1->parent, sym);
+        size_t ssa1 = check_get_ssa_rec(chk, ctx1, sym);
         if (ssa1 && ssa1 != *ssa)
         {
             const ValueInfo* v1 = check_get_ssa_info_rec(chk, ctx1, *ssa);
@@ -716,8 +837,17 @@ static void check_merge_context_missing(Checker* chk, CheckContext* ctx1, const 
     }
 }
 
-static void check_merge_context(Checker* chk, CheckContext* ctx1, const CheckContext* ctx2, const RowCol* rc)
+static void check_merge_context_impl(Checker* chk, CheckContext* ctx1, CheckContext* ctx2, const RowCol* rc)
 {
+    while (ctx1->parent != ctx2->parent)
+    {
+        if (ctx1->parent < ctx2->parent)
+            check_flatten_context(chk, ctx2);
+        else
+            check_flatten_context(chk, ctx1);
+    }
+    if (ctx1->parent == 0) abort();
+
     check_merge_context_matching(chk, ctx1, ctx2, rc);
     check_merge_context_missing(chk, ctx1, ctx2, rc);
 
@@ -736,7 +866,20 @@ static void check_merge_context(Checker* chk, CheckContext* ctx1, const CheckCon
         }
     }
     array_shrink(&ctx1->info, k, sizeof(ValueInfo));
-    array_push(&ctx1->invalidations, ctx2->invalidations.data, ctx2->invalidations.sz);
+    array_concat(&ctx1->invalidations, &ctx2->invalidations);
+}
+static void check_merge_context(Checker* chk, CheckContext* ctx1, const CheckContext* ctx2, const RowCol* rc)
+{
+    if (ctx2->is_void) return;
+    if (ctx1->is_void)
+    {
+        chkctx_clone(ctx1, ctx2);
+        return;
+    }
+    CheckContext tmp = {0};
+    chkctx_clone(&tmp, ctx2);
+    check_merge_context_impl(chk, ctx1, &tmp, rc);
+    chkctx_destroy(&tmp);
 }
 
 static Interval chk_neg_ofchk(Checker* chk, Interval i, const Token* tok)
@@ -787,13 +930,14 @@ static ValueInfo* check_refine_ssa(Checker* chk, CheckContext* ctx, size_t ssa)
     ValueInfo* info = chkctx_get_ssa_info(ctx, ssa);
     if (!info)
     {
-        info = array_push(&ctx->info, check_get_ssa_info_rec(chk, ctx->parent, ssa), sizeof(ValueInfo));
+        info = array_push(&ctx->info, check_get_ssa_info_rec(chk, ctx, ssa), sizeof(ValueInfo));
     }
     return info;
 }
 
 static void check_refine_ssa_true(Checker* chk, CheckContext* ctx, size_t ssa)
 {
+    if (ctx->is_void) return;
     ValueInfo* info = check_refine_ssa(chk, ctx, ssa);
     switch (info->kind)
     {
@@ -808,6 +952,7 @@ static void check_refine_ssa_true(Checker* chk, CheckContext* ctx, size_t ssa)
 }
 static void check_refine_ssa_false(Checker* chk, CheckContext* ctx, size_t ssa)
 {
+    if (ctx->is_void) return;
     ValueInfo* info = check_refine_ssa(chk, ctx, ssa);
     switch (info->kind)
     {
@@ -1012,14 +1157,15 @@ static void check_ExprBuiltin(Checker* chk, const ExprBuiltin* e, ValueInfo* res
             switch (result->kind)
             {
                 case value_info_sym:
-                    fprintf(stderr, "Prove: Sym: %s\n", result->sym.sym->name ? result->sym.sym->name : "(anon)");
+                    // fprintf(stderr, "Prove: Sym: %s\n", result->sym.sym->name ? result->sym.sym->name : "(anon)");
                     break;
-                case value_info_addr_obj: fprintf(stderr, "Prove: Sym unknown\n"); break;
+                case value_info_addr_obj: // fprintf(stderr, "Prove: Sym unknown\n");
+                    break;
                 case value_info_integer:
                     array_clear(&chk->fmt_tmp);
                     interval_fmt(&chk->fmt_tmp, result->val);
                     array_push_byte(&chk->fmt_tmp, '\0');
-                    fprintf(stderr, "Prove: Range: %s\n", (char*)chk->fmt_tmp.data);
+                    // fprintf(stderr, "Prove: Range: %s\n", (char*)chk->fmt_tmp.data);
                     if (interval_contains_0(result->val))
                     {
                         array_clear(&chk->fmt_tmp);
@@ -1080,56 +1226,30 @@ static void check_cond_ExprAndOr(
 {
     CheckContext true_ctx2 = {0};
     CheckContext false_ctx2 = {0};
-    CheckContext dup = {0};
-    check_cond(chk, e->lhs, result, true_ctx, false_ctx);
-    value_cast_to_bool(result);
-    if (result->kind == value_info_bottom) goto fail;
-    int nonzero = interval_contains_nonzero(result->val);
-    int zero = interval_contains_0(result->val);
+    CheckContext* prev_ctx = chk->ctx;
     if (e->tok->type == TOKEN_SYM2('&', '&'))
     {
-        if (nonzero)
-        {
-            CheckContext* ctx = chk->ctx;
-            chk->ctx = true_ctx;
-            true_ctx2.parent = true_ctx;
-            false_ctx2.parent = true_ctx;
-            check_cond(chk, e->rhs, result, &true_ctx2, &false_ctx2);
-            chk->ctx = ctx;
-            value_cast_to_bool(result);
-            if (zero) result->val = interval_merge(s_interval_zero, result->val);
-
-            chkctx_clone(&dup, true_ctx);
-            false_ctx2.parent = &dup;
-            check_flatten_context(chk, &false_ctx2);
-            check_flatten_context(chk, &true_ctx2);
-            check_merge_context(chk, false_ctx, &dup, token_rc(e->tok));
-        }
+        check_cond(chk, e->lhs, result, &true_ctx2, false_ctx);
+        chk->ctx = &true_ctx2;
+        check_cond(chk, e->rhs, result, true_ctx, &false_ctx2);
+        check_merge_context(chk, false_ctx, &false_ctx2, token_rc(e->tok));
     }
     else
     {
-        if (zero)
-        {
-            CheckContext* ctx = chk->ctx;
-            chk->ctx = false_ctx;
-            true_ctx2.parent = false_ctx;
-            false_ctx2.parent = false_ctx;
-            check_cond(chk, e->rhs, result, &true_ctx2, &false_ctx2);
-            chk->ctx = ctx;
-            value_cast_to_bool(result);
-            if (nonzero) result->val = interval_merge(s_interval_one, result->val);
-
-            chkctx_clone(&dup, false_ctx);
-            true_ctx2.parent = &dup;
-            check_flatten_context(chk, &false_ctx2);
-            check_flatten_context(chk, &true_ctx2);
-            check_merge_context(chk, true_ctx, &dup, token_rc(e->tok));
-        }
+        check_cond(chk, e->lhs, result, true_ctx, &false_ctx2);
+        chk->ctx = &false_ctx2;
+        check_cond(chk, e->rhs, result, &true_ctx2, false_ctx);
+        check_merge_context(chk, true_ctx, &true_ctx2, token_rc(e->tok));
     }
-fail:
+    if (true_ctx->is_void)
+        valinfo_init_interval(result, s_interval_zero);
+    else if (false_ctx->is_void)
+        valinfo_init_interval(result, s_interval_one);
+    else
+        valinfo_init_interval(result, s_interval_zero_one);
+    chk->ctx = prev_ctx;
     chkctx_destroy(&false_ctx2);
     chkctx_destroy(&true_ctx2);
-    chkctx_destroy(&dup);
 }
 
 static void check_ExprBinOp_finish(Checker* chk, const ExprBinOp* e, ValueInfo* result, ValueInfo* rhs)
@@ -1232,6 +1352,9 @@ static void check_cond_ExprBinOp(
     if (e->tok->type == TOKEN_SYM1(',')) return check_cond(chk, e->rhs, result, true_ctx, false_ctx);
     ValueInfo rhs;
     check_expr(chk, e->rhs, &rhs);
+    chkctx_clear(true_ctx);
+    chkctx_clear(false_ctx);
+    true_ctx->parent = false_ctx->parent = check_push_ctx(chk);
     if (result->ref_ssa)
     {
         check_refine_ssa_rel(
@@ -1268,20 +1391,32 @@ static void check_cond_ExprBinOp(
 static void check_ExprUnOp(Checker* chk, const ExprUnOp* e, ValueInfo* result)
 {
     check_expr(chk, e->lhs, result);
-    switch (result->kind)
+    if (result->kind == value_info_bottom) return;
+    switch (e->tok->type)
     {
-        case value_info_bottom: return;
-        case value_info_integer:
-            switch (e->tok->type)
+        case TOKEN_SYM1('-'):
+        {
+            if (result->kind == value_info_integer)
+                result->val = chk_neg_ofchk(chk, result->val, e->tok);
+            else
             {
-                case TOKEN_SYM1('-'): result->val = chk_neg_ofchk(chk, result->val, e->tok); return;
-                default:
-                    parser_tok_error(e->tok, "error: unimplemented ExprUnOp type (%s)\n", token_str(chk->p, e->tok));
-                    *result = s_valueinfo_bottom;
+                parser_tok_error(
+                    e->tok, "error: unimplemented '-' on non-integers (%s)\n", value_info_kind_to_string(result->kind));
+                *result = s_valueinfo_bottom;
             }
-            break;
+            return;
+        }
+        case TOKEN_SYM1('!'):
+        {
+            value_cast_to_bool(result);
+            if (result->kind == value_info_integer)
+            {
+                if (result->val.maxoff == 0) result->val.base = 1 - result->val.base;
+            }
+            return;
+        }
         default:
-            parser_tok_error(e->tok, "error: unimplemented ExprUnOp on non-integers\n");
+            parser_tok_error(e->tok, "error: unimplemented ExprUnOp type (%s)\n", token_str(chk->p, e->tok));
             *result = s_valueinfo_bottom;
             return;
     }
@@ -1451,7 +1586,7 @@ static void check_ExprCall_arg(Checker* chk, const Expr* e, size_t i, const Decl
     }
     if (traits & value_traits_sym)
     {
-        size_t ssa = chkctx_get_ssa_rec(chk->ctx, arg.sym.sym);
+        size_t ssa = check_get_ssa_rec(chk, chk->ctx, arg.sym.sym);
         if (!ssa) abort();
         const ValueInfo* sym_val = check_get_ssa_info_rec(chk, chk->ctx, ssa);
         if (!sym_val) abort();
@@ -1529,6 +1664,11 @@ static void check_expr_impl(Checker* chk, const Expr* e, ValueInfo* result)
 }
 static void check_expr(Checker* chk, const Expr* e, ValueInfo* result)
 {
+    if (chk->ctx->is_void)
+    {
+        *result = s_valueinfo_bottom;
+        return;
+    }
     check_expr_impl(chk, e, result);
     if (result->kind == value_info_integer && result->val.sz.width == 0) abort();
     if (result->kind > value_info_void) abort();
@@ -1543,18 +1683,43 @@ static void check_cond_impl(
         DISPATCH_CHECK(ExprBinOp);
         DISPATCH_CHECK(ExprAndOr);
 #undef DISPATCH_CHECK
-        default: return check_expr(chk, e, result);
+        default:
+            check_expr(chk, e, result);
+            chkctx_clear(true_ctx);
+            chkctx_clear(false_ctx);
+            size_t x = check_push_ctx(chk);
+            true_ctx->parent = x;
+            false_ctx->parent = x;
+            break;
     }
 }
 
 static void check_cond(Checker* chk, const Expr* e, ValueInfo* result, CheckContext* true_ctx, CheckContext* false_ctx)
 {
+    if (chk->ctx->is_void)
+    {
+        *result = s_valueinfo_bottom;
+        chkctx_clear(true_ctx);
+        chkctx_clear(false_ctx);
+        false_ctx->parent = true_ctx->parent = chk->ctx->parent;
+        true_ctx->is_void = false_ctx->is_void = 1;
+        return;
+    }
+
     check_cond_impl(chk, e, result, true_ctx, false_ctx);
+    if (true_ctx->parent == 0 || false_ctx->parent == 0) abort();
     if (result->ref_ssa)
     {
         check_refine_ssa_true(chk, true_ctx, result->ref_ssa);
         check_refine_ssa_false(chk, false_ctx, result->ref_ssa);
     }
+    else
+    {
+        value_cast_to_bool(result);
+        if (!interval_contains_nonzero(result->val)) true_ctx->is_void = 1;
+        if (!interval_contains_0(result->val)) false_ctx->is_void = 1;
+    }
+    chk->ctx = NULL;
 }
 
 static void check_DeclSpecs(Checker* chk, const DeclSpecs* e) { }
@@ -1580,61 +1745,56 @@ static void check_FnParam(Checker* chk, const Decl* d, size_t index, const Decl*
 static void check_Decl(Checker* chk, const Decl* e)
 {
     const Symbol* const sym = e->sym;
-    if (sym->def == e)
+    if (sym->def != e) return;
+
+    if (sym->is_fn)
     {
-        // fn
-        const unsigned tym = typestr_mask(&sym->type);
-        if (tym & TYPE_FLAGS_FUNCTION)
+        if (e->type->kind != AST_DECLFN) abort();
+        const DeclFn* fn = (void*)e->type;
+
+        const Decl* const* decls = (const Decl* const*)chk->elab->p->expr_seqs.data;
+        FOREACH_SEQ(i, e->decl_list) { check_FnParam(chk, decls[i], 99, e); }
+        size_t j = 0;
+        FOREACH_SEQ_T(StmtDeclsCPtr, i, fn->seq, chk->elab->p->expr_seqs.data)
         {
-            if (e->type->kind != AST_DECLFN) abort();
-            const DeclFn* fn = (void*)e->type;
-
-            const StmtDecls* const* stmtdecls = (const StmtDecls* const*)chk->elab->p->expr_seqs.data;
-            const Decl* const* decls = (const Decl* const*)chk->elab->p->expr_seqs.data;
-            FOREACH_SEQ(i, e->decl_list) { check_FnParam(chk, decls[i], 99, e); }
-            size_t j = 0;
-            FOREACH_SEQ(i, fn->seq)
-            {
-                const StmtDecls* stmt = stmtdecls[i];
-                if (stmt->ast.kind != STMT_DECLS) abort();
-                if (stmt->seq.ext != 1) abort();
-                if (decls[stmt->seq.off]->ast.kind != AST_DECL) abort();
-                check_FnParam(chk, decls[stmt->seq.off], j, e);
-                ++j;
-            }
-
-            check_stmt(chk, e->init);
+            StmtDeclsCPtr stmt = *i;
+            if (stmt->ast.kind != STMT_DECLS) abort();
+            if (stmt->seq.ext != 1) abort();
+            if (decls[stmt->seq.off]->ast.kind != AST_DECL) abort();
+            check_FnParam(chk, decls[stmt->seq.off], j, e);
+            ++j;
         }
-        else
+
+        check_stmt(chk, e->init);
+    }
+    else
+    {
+        check_init_sym(chk, sym, &s_valueinfo_uninit, token_rc(e->tok));
+        if (e->init)
         {
-            check_init_sym(chk, sym, &s_valueinfo_uninit, token_rc(e->tok));
-            if (e->init)
+            if (ast_kind_is_expr(e->init->kind))
             {
-                if (ast_kind_is_expr(e->init->kind))
+                ValueInfo v;
+                check_expr(chk, (const Expr*)e->init, &v);
+                check_init_sym(chk, sym, &v, token_rc(e->tok));
+            }
+            else if (e->init->kind == AST_INIT)
+            {
+                const AstInit* init = (const AstInit*)e->init;
+                if (init->init && init->next && !init->next->init && init->init->kind == EXPR_LIT)
                 {
                     ValueInfo v;
-                    check_expr(chk, (const Expr*)e->init, &v);
+                    check_expr(chk, (const Expr*)init->init, &v);
                     check_init_sym(chk, sym, &v, token_rc(e->tok));
-                }
-                else if (e->init->kind == AST_INIT)
-                {
-                    const AstInit* init = (const AstInit*)e->init;
-                    if (init->init && init->next && !init->next->init && init->init->kind == EXPR_LIT)
-                    {
-                        ValueInfo v;
-                        check_expr(chk, (const Expr*)init->init, &v);
-                        check_init_sym(chk, sym, &v, token_rc(e->tok));
-                    }
-                    else
-                    {
-                        parser_tok_error(init->tok,
-                                         "error: unimplemented check initializer -- must be single literal\n");
-                    }
                 }
                 else
                 {
-                    parser_tok_error(e->init->tok, "error: unimplemented check initializer\n");
+                    parser_tok_error(init->tok, "error: unimplemented check initializer -- must be single literal\n");
                 }
+            }
+            else
+            {
+                parser_tok_error(e->init->tok, "error: unimplemented check initializer\n");
             }
         }
     }
@@ -1655,28 +1815,49 @@ static void check_StmtBlock(Checker* chk, const StmtBlock* e)
 static void check_StmtIf(Checker* chk, const StmtIf* e)
 {
     ValueInfo result;
-    CheckContext true_ctx = {.parent = chk->ctx}, false_ctx = {.parent = chk->ctx};
+    CheckContext* const prev_ctx = chk->ctx;
+    CheckContext true_ctx = {0}, false_ctx = {0};
     check_cond(chk, e->cond, &result, &true_ctx, &false_ctx);
+    chkctx_clone(prev_ctx, &false_ctx);
+    chkctx_destroy(&false_ctx);
+
     chk->ctx = &true_ctx;
     check_stmt(chk, e->if_body);
-    chk->ctx = &false_ctx;
+
+    chk->ctx = prev_ctx;
     if (e->else_body) check_stmt(chk, e->else_body);
-    chk->ctx = true_ctx.parent;
-    if (false_ctx.is_void)
+
+    check_merge_context(chk, chk->ctx, &true_ctx, token_rc(e->tok));
+    chkctx_destroy(&true_ctx);
+}
+static void check_StmtLoop(Checker* chk, const StmtLoop* e)
+{
+    if (e->init)
     {
-        check_flatten_context(chk, &true_ctx);
+        check_stmt(chk, e->init);
     }
-    else
-    {
-        if (!true_ctx.is_void)
-        {
-            check_merge_context(chk, &false_ctx, &true_ctx, token_rc(e->tok));
-        }
-        check_flatten_context(chk, &false_ctx);
-    }
+    const size_t top_ctx = check_push_ctx(chk);
+    CheckContext* const prev_ctx = chk->ctx;
+    if (e->is_do_while) abort();
+    if (!e->cond) abort();
+
+    ValueInfo result;
+    CheckContext true_ctx = {0}, false_ctx = {0};
+    check_cond(chk, e->cond, &result, &true_ctx, &false_ctx);
+    chk->ctx = &true_ctx;
+    check_stmt(chk, e->body);
+    check_stmt(chk, &e->advance->ast);
+    CheckContext* const out_true_ctx = chk->ctx;
+    // TODO: compare out_true_ctx vs top_ctx
+    (void)out_true_ctx;
+    (void)top_ctx;
+
+    chkctx_clone(prev_ctx, &false_ctx);
     chkctx_destroy(&true_ctx);
     chkctx_destroy(&false_ctx);
 }
+static void check_StmtGoto(Checker* chk, const StmtGoto* e) { chk->ctx->is_void = 1; }
+static void check_StmtLabel(Checker* chk, const StmtLabel* e) { check_stmt(chk, e->stmt); }
 static void check_StmtReturn(Checker* chk, const StmtReturn* e)
 {
     if (e->expr)
@@ -1699,6 +1880,9 @@ static void check_stmt(Checker* chk, const Ast* ast)
 #define DISPATCH_CHECK(type) DISPATCH(check_, type, ast)
         DISPATCH_CHECK(StmtDecls);
         DISPATCH_CHECK(StmtIf);
+        DISPATCH_CHECK(StmtGoto);
+        DISPATCH_CHECK(StmtLabel);
+        DISPATCH_CHECK(StmtLoop);
         DISPATCH_CHECK(StmtReturn);
         DISPATCH_CHECK(StmtBlock);
         default: parser_tok_error(ast->tok, "error: unknown stmt kind: %s\n", ast_kind_to_string(ast->kind)); return;
