@@ -213,6 +213,12 @@ static void chkctx_clone(CheckContext* chk, const CheckContext* other)
     chk->is_void = other->is_void;
 }
 
+typedef struct Labelled
+{
+    size_t goto_ctx;
+    size_t label_ctx;
+} Labelled;
+
 struct Checker
 {
     const Elaborator* elab;
@@ -227,7 +233,8 @@ struct Checker
     // Array<CheckContext>
     Array saved_ctx;
 
-    BStringMap label_to_index;
+    StringSet label_to_index;
+    // Array<Labelled>
     Array labelled;
     CheckContext* ctx;
 };
@@ -236,7 +243,7 @@ void checker_free(struct Checker* chk)
     array_destroy(&chk->fmt_tmp);
     array_destroy(&chk->ssa_info);
     array_destroy(&chk->ssa_rc);
-    bsm_destroy(&chk->label_to_index);
+    strset_destroy(&chk->label_to_index);
     array_destroy(&chk->labelled);
     // TODO: free saved_ctx
     my_free(chk);
@@ -737,18 +744,21 @@ static void check_flatten_context(Checker* chk, CheckContext* ctx)
 {
     if (!ctx->parent) abort();
     const CheckContext* const parent = (const CheckContext*)chk->saved_ctx.data + (ctx->parent - 1);
-    if (!ctx->is_void && parent->is_void) abort();
+    ctx->parent = parent->parent;
+    if (ctx->is_void) return;
+    if (parent->is_void) abort();
     for (size_t i = 0; i < ptrmap_size(&parent->sym_to_ssa); ++i)
     {
         const Symbol* sym = ptrmap_nth_ptr(&parent->sym_to_ssa, i);
         if (!ptrmap_find(&ctx->sym_to_ssa, sym))
         {
             size_t* ssa = ptrmap_nth_val(&parent->sym_to_ssa, i);
-            *ssa = check_invalidates_tbaa_sym(chk,
-                                              *ssa,
-                                              &sym->type.buf,
-                                              ctx->invalidations.data,
-                                              array_size(&ctx->invalidations, sizeof(Invalidation)));
+            size_t new_ssa = check_invalidates_tbaa_sym(chk,
+                                                        *ssa,
+                                                        &sym->type.buf,
+                                                        ctx->invalidations.data,
+                                                        array_size(&ctx->invalidations, sizeof(Invalidation)));
+            ptrmap_set(&ctx->sym_to_ssa, sym, new_ssa);
         }
     }
     ARRAY_FOREACH(const ValueInfo, i, &parent->info)
@@ -761,7 +771,6 @@ static void check_flatten_context(Checker* chk, CheckContext* ctx)
     found:;
     }
     array_concat(&ctx->invalidations, &parent->invalidations);
-    ctx->parent = parent->parent;
 }
 #if 0
 
@@ -839,12 +848,10 @@ static void check_merge_context_missing(Checker* chk, CheckContext* ctx1, const 
 
 static void check_merge_context_impl(Checker* chk, CheckContext* ctx1, CheckContext* ctx2, const RowCol* rc)
 {
+    if (ctx1->is_void || ctx2->is_void) abort();
     while (ctx1->parent != ctx2->parent)
     {
-        if (ctx1->parent < ctx2->parent)
-            check_flatten_context(chk, ctx2);
-        else
-            check_flatten_context(chk, ctx1);
+        check_flatten_context(chk, ctx1->parent < ctx2->parent ? ctx2 : ctx1);
     }
     if (ctx1->parent == 0) abort();
 
@@ -1127,7 +1134,7 @@ struct Checker* checker_alloc(const struct Elaborator* elab)
 
 static void check_stmt(Checker* chk, const Ast* ast);
 static void check_expr(Checker* chk, const Expr* e, ValueInfo* result);
-static void check_cond(Checker* chk, const Expr* e, ValueInfo* result, CheckContext* true_ctx, CheckContext* false_ctx);
+static void check_cond(Checker* chk, const Expr* e, CheckContext* false_ctx);
 
 static void check_ExprLit(Checker* chk, const ExprLit* e, ValueInfo* result)
 {
@@ -1221,35 +1228,26 @@ static void check_ExprAndOr(Checker* chk, const ExprAndOr* e, ValueInfo* result)
         }
     }
 }
-static void check_cond_ExprAndOr(
-    Checker* chk, const ExprAndOr* e, ValueInfo* result, CheckContext* true_ctx, CheckContext* false_ctx)
+static void check_cond_ExprAndOr(Checker* chk, const ExprAndOr* e, CheckContext* false_ctx)
 {
-    CheckContext true_ctx2 = {0};
-    CheckContext false_ctx2 = {0};
-    CheckContext* prev_ctx = chk->ctx;
+    CheckContext tmp = {0};
     if (e->tok->type == TOKEN_SYM2('&', '&'))
     {
-        check_cond(chk, e->lhs, result, &true_ctx2, false_ctx);
-        chk->ctx = &true_ctx2;
-        check_cond(chk, e->rhs, result, true_ctx, &false_ctx2);
-        check_merge_context(chk, false_ctx, &false_ctx2, token_rc(e->tok));
+        check_cond(chk, e->lhs, false_ctx);
+        check_cond(chk, e->rhs, &tmp);
+        check_merge_context(chk, false_ctx, &tmp, token_rc(e->tok));
     }
     else
     {
-        check_cond(chk, e->lhs, result, true_ctx, &false_ctx2);
-        chk->ctx = &false_ctx2;
-        check_cond(chk, e->rhs, result, &true_ctx2, false_ctx);
-        check_merge_context(chk, true_ctx, &true_ctx2, token_rc(e->tok));
+        CheckContext tmp = {0};
+        check_cond(chk, e->lhs, &tmp);
+        CheckContext* t1 = chk->ctx;
+        chk->ctx = &tmp;
+        check_cond(chk, e->rhs, false_ctx);
+        check_merge_context(chk, t1, &tmp, token_rc(e->tok));
+        chk->ctx = t1;
     }
-    if (true_ctx->is_void)
-        valinfo_init_interval(result, s_interval_zero);
-    else if (false_ctx->is_void)
-        valinfo_init_interval(result, s_interval_one);
-    else
-        valinfo_init_interval(result, s_interval_zero_one);
-    chk->ctx = prev_ctx;
-    chkctx_destroy(&false_ctx2);
-    chkctx_destroy(&true_ctx2);
+    chkctx_destroy(&tmp);
 }
 
 static void check_ExprBinOp_finish(Checker* chk, const ExprBinOp* e, ValueInfo* result, ValueInfo* rhs)
@@ -1345,23 +1343,22 @@ static void check_ExprBinOp(Checker* chk, const ExprBinOp* e, ValueInfo* result)
     check_ExprBinOp_finish(chk, e, result, &rhs);
 }
 
-static void check_cond_ExprBinOp(
-    Checker* chk, const ExprBinOp* e, ValueInfo* result, CheckContext* true_ctx, CheckContext* false_ctx)
+static void check_cond_ExprBinOp(Checker* chk, const ExprBinOp* e, CheckContext* false_ctx)
 {
-    check_expr(chk, e->lhs, result);
-    if (e->tok->type == TOKEN_SYM1(',')) return check_cond(chk, e->rhs, result, true_ctx, false_ctx);
+    ValueInfo result;
+    check_expr(chk, e->lhs, &result);
+    if (e->tok->type == TOKEN_SYM1(',')) return check_cond(chk, e->rhs, false_ctx);
     ValueInfo rhs;
     check_expr(chk, e->rhs, &rhs);
-    chkctx_clear(true_ctx);
     chkctx_clear(false_ctx);
-    true_ctx->parent = false_ctx->parent = check_push_ctx(chk);
-    if (result->ref_ssa)
+    false_ctx->parent = check_push_ctx(chk);
+    if (result.ref_ssa)
     {
         check_refine_ssa_rel(
-            chk, true_ctx, result->ref_ssa, &rhs, e->tok->type, e->common_sz.is_signed, token_rc(e->tok));
+            chk, chk->ctx, result.ref_ssa, &rhs, e->tok->type, e->common_sz.is_signed, token_rc(e->tok));
         check_refine_ssa_rel(chk,
                              false_ctx,
-                             result->ref_ssa,
+                             result.ref_ssa,
                              &rhs,
                              negate_relation(e->tok->type),
                              e->common_sz.is_signed,
@@ -1370,9 +1367,9 @@ static void check_cond_ExprBinOp(
     if (rhs.ref_ssa)
     {
         check_refine_ssa_rel(chk,
-                             true_ctx,
+                             chk->ctx,
                              rhs.ref_ssa,
-                             result,
+                             &result,
                              reverse_relation(e->tok->type),
                              e->common_sz.is_signed,
                              token_rc(e->tok));
@@ -1380,12 +1377,12 @@ static void check_cond_ExprBinOp(
         check_refine_ssa_rel(chk,
                              false_ctx,
                              rhs.ref_ssa,
-                             result,
+                             &result,
                              negate_reverse_relation(e->tok->type),
                              e->common_sz.is_signed,
                              token_rc(e->tok));
     }
-    check_ExprBinOp_finish(chk, e, result, &rhs);
+    check_ExprBinOp_finish(chk, e, &result, &rhs);
 }
 
 static void check_ExprUnOp(Checker* chk, const ExprUnOp* e, ValueInfo* result)
@@ -1674,52 +1671,47 @@ static void check_expr(Checker* chk, const Expr* e, ValueInfo* result)
     if (result->kind > value_info_void) abort();
 }
 
-static void check_cond_impl(
-    Checker* chk, const Expr* e, ValueInfo* result, CheckContext* true_ctx, CheckContext* false_ctx)
+static void check_cond_impl(Checker* chk, const Expr* e, CheckContext* false_ctx)
 {
     switch (e->kind)
     {
-#define DISPATCH_CHECK(type) DISPATCH(check_cond_, type, e, result, true_ctx, false_ctx)
+#define DISPATCH_CHECK(type) DISPATCH(check_cond_, type, e, false_ctx)
         DISPATCH_CHECK(ExprBinOp);
         DISPATCH_CHECK(ExprAndOr);
 #undef DISPATCH_CHECK
-        default:
-            check_expr(chk, e, result);
-            chkctx_clear(true_ctx);
+        default:;
+            ValueInfo result;
+            check_expr(chk, e, &result);
             chkctx_clear(false_ctx);
             size_t x = check_push_ctx(chk);
-            true_ctx->parent = x;
             false_ctx->parent = x;
+            if (result.ref_ssa)
+            {
+                check_refine_ssa_true(chk, chk->ctx, result.ref_ssa);
+                check_refine_ssa_false(chk, false_ctx, result.ref_ssa);
+            }
+            else
+            {
+                value_cast_to_bool(&result);
+                if (!interval_contains_nonzero(result.val)) chk->ctx->is_void = 1;
+                if (!interval_contains_0(result.val)) false_ctx->is_void = 1;
+            }
             break;
     }
 }
 
-static void check_cond(Checker* chk, const Expr* e, ValueInfo* result, CheckContext* true_ctx, CheckContext* false_ctx)
+static void check_cond(Checker* chk, const Expr* e, CheckContext* false_ctx)
 {
     if (chk->ctx->is_void)
     {
-        *result = s_valueinfo_bottom;
-        chkctx_clear(true_ctx);
         chkctx_clear(false_ctx);
-        false_ctx->parent = true_ctx->parent = chk->ctx->parent;
-        true_ctx->is_void = false_ctx->is_void = 1;
+        false_ctx->parent = chk->ctx->parent;
+        false_ctx->is_void = 1;
         return;
     }
 
-    check_cond_impl(chk, e, result, true_ctx, false_ctx);
-    if (true_ctx->parent == 0 || false_ctx->parent == 0) abort();
-    if (result->ref_ssa)
-    {
-        check_refine_ssa_true(chk, true_ctx, result->ref_ssa);
-        check_refine_ssa_false(chk, false_ctx, result->ref_ssa);
-    }
-    else
-    {
-        value_cast_to_bool(result);
-        if (!interval_contains_nonzero(result->val)) true_ctx->is_void = 1;
-        if (!interval_contains_0(result->val)) false_ctx->is_void = 1;
-    }
-    chk->ctx = NULL;
+    check_cond_impl(chk, e, false_ctx);
+    if (chk->ctx->parent == 0 || false_ctx->parent == 0) abort();
 }
 
 static void check_DeclSpecs(Checker* chk, const DeclSpecs* e) { }
@@ -1814,21 +1806,20 @@ static void check_StmtBlock(Checker* chk, const StmtBlock* e)
 }
 static void check_StmtIf(Checker* chk, const StmtIf* e)
 {
-    ValueInfo result;
-    CheckContext* const prev_ctx = chk->ctx;
-    CheckContext true_ctx = {0}, false_ctx = {0};
-    check_cond(chk, e->cond, &result, &true_ctx, &false_ctx);
-    chkctx_clone(prev_ctx, &false_ctx);
-    chkctx_destroy(&false_ctx);
-
-    chk->ctx = &true_ctx;
+    CheckContext false_ctx = {0};
+    check_cond(chk, e->cond, &false_ctx);
     check_stmt(chk, e->if_body);
 
-    chk->ctx = prev_ctx;
-    if (e->else_body) check_stmt(chk, e->else_body);
+    if (e->else_body)
+    {
+        CheckContext* t = chk->ctx;
+        chk->ctx = &false_ctx;
+        check_stmt(chk, e->else_body);
+        chk->ctx = t;
+    }
 
-    check_merge_context(chk, chk->ctx, &true_ctx, token_rc(e->tok));
-    chkctx_destroy(&true_ctx);
+    check_merge_context(chk, chk->ctx, &false_ctx, token_rc(e->tok));
+    chkctx_destroy(&false_ctx);
 }
 static void check_StmtLoop(Checker* chk, const StmtLoop* e)
 {
@@ -1837,27 +1828,51 @@ static void check_StmtLoop(Checker* chk, const StmtLoop* e)
         check_stmt(chk, e->init);
     }
     const size_t top_ctx = check_push_ctx(chk);
-    CheckContext* const prev_ctx = chk->ctx;
     if (e->is_do_while) abort();
     if (!e->cond) abort();
 
-    ValueInfo result;
-    CheckContext true_ctx = {0}, false_ctx = {0};
-    check_cond(chk, e->cond, &result, &true_ctx, &false_ctx);
-    chk->ctx = &true_ctx;
+    CheckContext false_ctx = {0};
+    check_cond(chk, e->cond, &false_ctx);
     check_stmt(chk, e->body);
     check_stmt(chk, &e->advance->ast);
-    CheckContext* const out_true_ctx = chk->ctx;
-    // TODO: compare out_true_ctx vs top_ctx
-    (void)out_true_ctx;
+    // TODO: compare chk->ctx vs top_ctx
     (void)top_ctx;
 
-    chkctx_clone(prev_ctx, &false_ctx);
-    chkctx_destroy(&true_ctx);
+    check_merge_context(chk, chk->ctx, &false_ctx, token_rc(e->tok));
     chkctx_destroy(&false_ctx);
 }
-static void check_StmtGoto(Checker* chk, const StmtGoto* e) { chk->ctx->is_void = 1; }
-static void check_StmtLabel(Checker* chk, const StmtLabel* e) { check_stmt(chk, e->stmt); }
+static void check_StmtGoto(Checker* chk, const StmtGoto* e)
+{
+    size_t n = strset_insert(&chk->label_to_index, token_str(chk->p, e->dst), e->dst->tok_len);
+    Labelled* lbl = (n >= array_size(&chk->labelled, sizeof(Labelled)))
+                        ? array_push_zeroes(&chk->labelled, sizeof(Labelled))
+                        : (Labelled*)chk->labelled.data + n;
+
+    if (lbl->goto_ctx != 0)
+    {
+        CheckContext incoming = {.parent = lbl->goto_ctx};
+        check_merge_context(chk, chk->ctx, &incoming, token_rc(e->tok));
+        chkctx_destroy(&incoming);
+    }
+    lbl->goto_ctx = check_push_ctx(chk);
+    chk->ctx->is_void = 1;
+}
+static void check_StmtLabel(Checker* chk, const StmtLabel* e)
+{
+    size_t n = strset_insert(&chk->label_to_index, token_str(chk->p, e->tok), e->tok->tok_len);
+    Labelled* lbl = (n >= array_size(&chk->labelled, sizeof(Labelled)))
+                        ? array_push_zeroes(&chk->labelled, sizeof(Labelled))
+                        : (Labelled*)chk->labelled.data + n;
+
+    if (lbl->goto_ctx != 0)
+    {
+        CheckContext incoming = {.parent = lbl->goto_ctx};
+        check_merge_context(chk, chk->ctx, &incoming, token_rc(e->tok));
+        chkctx_destroy(&incoming);
+    }
+    lbl->label_ctx = check_push_ctx(chk);
+    check_stmt(chk, e->stmt);
+}
 static void check_StmtReturn(Checker* chk, const StmtReturn* e)
 {
     if (e->expr)

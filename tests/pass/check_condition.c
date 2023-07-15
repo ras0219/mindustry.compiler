@@ -4,7 +4,7 @@ int main()
     int* p = &x;
     if (p)
     {
-        *p;
+        __prove(p);
     }
     else
     {
