@@ -22,18 +22,21 @@ static const Sizing s_sizing_uint = {
     .width = 4,
 };
 
+/// @brief example: 0xFFFF for [2]
 static const uint64_t s_umax_sizing[] = {
     [1] = UINT8_MAX,
     [2] = UINT16_MAX,
     [4] = UINT32_MAX,
     [8] = UINT64_MAX,
 };
+/// @brief example: 0x7FFF for [2]
 static const uint64_t s_imax_sizing[] = {
     [1] = INT8_MAX,
     [2] = INT16_MAX,
     [4] = INT32_MAX,
     [8] = INT64_MAX,
 };
+/// @brief example: 0x8000 for [2]
 static const uint64_t s_imaxp1_sizing[] = {
     [1] = INT8_MAX + 1ULL,
     [2] = INT16_MAX + 1ULL,
@@ -41,6 +44,7 @@ static const uint64_t s_imaxp1_sizing[] = {
     [8] = INT64_MAX + 1ULL,
 };
 
+/// @brief example: 0xFFFFFFFFFFFF8000 for [2]
 static const uint64_t s_imin_sizing[] = {
     [1] = INT8_MIN,
     [2] = INT16_MIN,
@@ -48,12 +52,15 @@ static const uint64_t s_imin_sizing[] = {
     [8] = INT64_MIN,
 };
 
+/// @brief example: 0xFFFFFFFFFFFF8000 for [2]
 static const int64_t s_i64_imin_sizing[] = {
     [1] = INT8_MIN,
     [2] = INT16_MIN,
     [4] = INT32_MIN,
     [8] = INT64_MIN,
 };
+
+/// @brief example: 0x7FFF for [2]
 static const uint64_t s_i64_imax_sizing[] = {
     [1] = INT8_MAX,
     [2] = INT16_MAX,

@@ -81,6 +81,19 @@ static __forceinline int64_t interval_signed_from_i64(uint64_t i, uint32_t width
     return ((i + s_imaxp1_sizing[width]) ^ s_imaxp1_sizing[width]) & s_umax_sizing[width];
 }
 
+int interval_contains_interval(Interval i, Interval j)
+{
+    // consider cases with umax of 16:
+    // (any, small) cannot contain (any, large)
+    if (j.maxoff > i.maxoff) return 0;
+    // (any, max) contains any
+    if (i.maxoff == s_umax_sizing[j.sz.width]) return 1;
+    // (1, 5) contains (2, 3)
+    // (14, 10) contains (1, 1)
+    // (1, 2) does not contain (2, 2)
+    return i.maxoff - j.maxoff >= j.base - i.base;
+}
+
 void interval_fmt(Array* buf, Interval i)
 {
     if (i.sz.is_signed)

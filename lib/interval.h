@@ -5,6 +5,15 @@
 #include "sizing.h"
 #include "stdint.h"
 
+/// @brief Represents sets of integer intervals for abstract interpretation. Empty set is not representable.
+///
+/// Ranges are represented as [base, base + extent]. This can wrap around the maximum, producing a set that excludes a
+/// middle section. For example, [UINT64_MAX-10, 20] contains (UINT64_MAX-10) and 9 but excludes 10.
+///
+/// unsigned numbers are based from 0 to UINT??_MAX
+/// signed numbers are mapped with a wrap-around at INT??_MAX
+/// - [0, INT??_MAX] => [0, INT??_MAX]
+/// - [INT_??MIN, -1] => [INT??_MAX + 1, UINT??_MAX]
 typedef struct Interval
 {
     uint64_t base, maxoff;
@@ -22,23 +31,24 @@ static const Interval s_interval_nonneg = {.base = 0, .maxoff = INT64_MAX, .sz.w
 //     [4] = {.base = INT32_MIN, .maxoff = INT32_MAX - 1, .sz.width = 4},
 //     [8] = {.base = INT64_MIN, .maxoff = INT64_MAX - 1, .sz.width = 8},
 // };
-static const Interval s_intervals_nonneg_sz[] = {
-    [1] = {.base = 0, .maxoff = INT8_MAX},
-    [2] = {.base = 0, .maxoff = INT16_MAX},
-    [4] = {.base = 0, .maxoff = INT32_MAX},
-    [8] = {.base = 0, .maxoff = INT64_MAX},
-};
-static const Interval s_intervals_pos_sz[] = {
-    [1] = {.base = 1, .maxoff = INT8_MAX - 1},
-    [2] = {.base = 1, .maxoff = INT16_MAX - 1},
-    [4] = {.base = 1, .maxoff = INT32_MAX - 1},
-    [8] = {.base = 1, .maxoff = INT64_MAX - 1},
-};
+// static const Interval s_intervals_nonneg_sz[] = {
+//     [1] = {.base = 0, .maxoff = INT8_MAX},
+//     [2] = {.base = 0, .maxoff = INT16_MAX},
+//     [4] = {.base = 0, .maxoff = INT32_MAX},
+//     [8] = {.base = 0, .maxoff = INT64_MAX},
+// };
+// static const Interval s_intervals_pos_sz[] = {
+//     [1] = {.base = 1, .maxoff = INT8_MAX - 1},
+//     [2] = {.base = 1, .maxoff = INT16_MAX - 1},
+//     [4] = {.base = 1, .maxoff = INT32_MAX - 1},
+//     [8] = {.base = 1, .maxoff = INT64_MAX - 1},
+// };
 
 static const Interval s_interval_zero = {.base = 0, .maxoff = 0, .sz.width = 4, .sz.is_signed = 1};
 static const Interval s_interval_one = {.base = 1, .maxoff = 0, .sz.width = 4, .sz.is_signed = 1};
 static const Interval s_interval_zero_one = {.base = 0, .maxoff = 1, .sz.width = 4, .sz.is_signed = 1};
 
+// These have a base of INT??_MIN so that the extent is logically contiguous (-N to +N) instead of (0 to -1)
 static const Interval s_interval_i64 = {.base = INT64_MIN, .maxoff = UINT64_MAX, .sz.width = 8, .sz.is_signed = 1};
 static const Interval s_interval_i32 = {
     .base = INT32_MAX + 1ULL, .maxoff = UINT32_MAX, .sz.width = 4, .sz.is_signed = 1};
@@ -51,7 +61,7 @@ static const Interval s_interval_u32 = {.base = 0, .maxoff = UINT32_MAX, .sz.wid
 static const Interval s_interval_u16 = {.base = 0, .maxoff = UINT16_MAX, .sz.width = 2};
 static const Interval s_interval_u8 = {.base = 0, .maxoff = UINT8_MAX, .sz.width = 1};
 
-static __forceinline int interval_wrapped(Interval i) { return UINT64_MAX - i.maxoff < i.base; }
+// static __forceinline int interval_wrapped(Interval i) { return UINT64_MAX - i.maxoff < i.base; }
 
 int interval_contains_0(Interval i);
 int interval_contains_nonzero(Interval i);
@@ -60,6 +70,7 @@ int interval_remove_0(Interval* out, Interval i);
 int interval_remove_nonzero(Interval* out, Interval i);
 
 static __forceinline int interval_contains(Interval i, uint64_t j) { return i.maxoff >= j - i.base; }
+int interval_contains_interval(Interval i, Interval j);
 
 // static int interval_is_intersect(Interval i, Interval j)
 // {

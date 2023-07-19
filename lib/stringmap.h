@@ -35,6 +35,7 @@ size_t strset_get(const StringSet* set, const void* key, size_t key_len);
 size_t strset_insert(StringSet* set, const void* key, size_t key_len);
 /// Swaps last element into removed slot.
 void strset_remove(StringSet* set, size_t index);
+void strset_clear(StringSet* set);
 void strset_destroy(StringSet* set);
 typedef int (*strset_foreach_cb)(void* userp, const void* key, size_t key_len, size_t index);
 int strset_foreach(const StringSet* set, strset_foreach_cb cb, void* userp);

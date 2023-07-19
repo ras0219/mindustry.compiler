@@ -213,11 +213,65 @@ static void chkctx_clone(CheckContext* chk, const CheckContext* other)
     chk->is_void = other->is_void;
 }
 
-typedef struct Labelled
+typedef struct JumpData
 {
     size_t goto_ctx;
     size_t label_ctx;
-} Labelled;
+    const Ast* ast;
+    // Seq<StmtMergeData::syminfo>
+    SeqView seq;
+} JumpData;
+
+typedef struct JumpDataEntry
+{
+    const Symbol* sym;
+    ValueInfo info;
+} JumpDataEntry;
+
+typedef struct StmtMergeData
+{
+    // Keys<labels>
+    StringSet labels;
+
+    // Array<Index<data>>
+    Array labels_v;
+
+    // Map<Ast*, Index<data>>
+    PtrMap map;
+
+    // Array<JumpData>
+    Array jdata;
+
+    // Array<JumpDataEntry>
+    Array syminfo;
+} StmtMergeData;
+
+// @return Index<s->data>
+static size_t smd_push_stmt(StmtMergeData* s, const Ast* ast, size_t ctx)
+{
+    const size_t i = array_size(&s->jdata, sizeof(JumpData));
+    JumpData* data = array_push_zeroes(&s->jdata, sizeof(JumpData));
+    data->ast = ast;
+    data->label_ctx = ctx;
+    ptrmap_set(&s->map, ast, i);
+    return i;
+}
+static void smd_clear(StmtMergeData* s)
+{
+    strset_clear(&s->labels);
+    array_clear(&s->labels_v);
+    ptrmap_clear(&s->map);
+    array_clear(&s->jdata);
+    array_clear(&s->syminfo);
+}
+static void smd_destroy(StmtMergeData* s)
+{
+    strset_destroy(&s->labels);
+    array_destroy(&s->labels_v);
+    ptrmap_destroy(&s->map);
+    array_destroy(&s->jdata);
+    array_destroy(&s->syminfo);
+}
 
 struct Checker
 {
@@ -233,9 +287,8 @@ struct Checker
     // Array<CheckContext>
     Array saved_ctx;
 
-    StringSet label_to_index;
-    // Array<Labelled>
-    Array labelled;
+    StmtMergeData stmt_loop_data;
+
     CheckContext* ctx;
 };
 void checker_free(struct Checker* chk)
@@ -243,11 +296,21 @@ void checker_free(struct Checker* chk)
     array_destroy(&chk->fmt_tmp);
     array_destroy(&chk->ssa_info);
     array_destroy(&chk->ssa_rc);
-    strset_destroy(&chk->label_to_index);
-    array_destroy(&chk->labelled);
-    // TODO: free saved_ctx
+    ARRAY_FOREACH(CheckContext, i, &chk->saved_ctx) { chkctx_destroy(i); }
+    array_destroy(&chk->saved_ctx);
+    smd_destroy(&chk->stmt_loop_data);
     my_free(chk);
 }
+static void check_fn_start(Checker* chk) { smd_clear(&chk->stmt_loop_data); }
+static void check_fn_iter(Checker* chk)
+{
+    ARRAY_FOREACH(JumpData, j, &chk->stmt_loop_data.jdata)
+    {
+        j->goto_ctx = 0;
+        j->label_ctx = 0;
+    }
+}
+
 size_t check_push_ctx(Checker* chk)
 {
     array_push(&chk->saved_ctx, chk->ctx, sizeof(CheckContext));
@@ -256,6 +319,27 @@ size_t check_push_ctx(Checker* chk)
     chk->ctx->parent = p;
     return p;
 }
+static size_t check_jumpdata_for_ast(Checker* chk, const Ast* ast)
+{
+    size_t* p;
+    if (p = ptrmap_find(&chk->stmt_loop_data.map, ast))
+    {
+        return *p;
+    }
+    return smd_push_stmt(&chk->stmt_loop_data, ast, check_push_ctx(chk));
+}
+static size_t check_jumpdata_for_label(Checker* chk, const Ast* ast, const Token* tok)
+{
+    size_t n = strset_insert(&chk->stmt_loop_data.labels, token_str(chk->p, tok), tok->tok_len);
+    if (n >= arrsz_size(&chk->stmt_loop_data.labels_v))
+    {
+        arrsz_push(&chk->stmt_loop_data.labels_v, array_size(&chk->stmt_loop_data.jdata, sizeof(JumpData)));
+        JumpData* j = array_push_zeroes(&chk->stmt_loop_data.jdata, sizeof(JumpData));
+        j->ast = ast;
+    }
+    return arrsz_at(&chk->stmt_loop_data.labels_v, n);
+}
+static JumpData* check_get_jumpdata(Checker* chk, size_t i) { return (JumpData*)chk->stmt_loop_data.jdata.data + i; }
 
 static ValueInfo* chkctx_get_ssa_info(const CheckContext* ctx, size_t ssa)
 {
@@ -465,6 +549,10 @@ static void dump_ssa(Checker* chk, size_t ssa)
             fprintf(stderr, "  [3]=%zu\n", info->field_ssa[3]);
             fprintf(stderr, "  .next=%zu\n", info->next_ssa);
             break;
+        case value_info_integer:
+            fprintf(stderr, "  .base=%llu\n", info->val.base);
+            fprintf(stderr, "  .maxoff=%llu\n", info->val.maxoff);
+            break;
         default: break;
     }
 }
@@ -554,6 +642,18 @@ static unsigned valinfo_get_traits(const ValueInfo* v)
     }
 }
 
+static int valinfo_contains(const ValueInfo* v, const ValueInfo* w)
+{
+    unsigned v_traits = valinfo_get_traits(v), w_traits = valinfo_get_traits(w);
+    if ((v_traits & value_traits_null) && (w_traits & value_traits_only_null)) return 1;
+    if (v->kind != w->kind) return 0;
+    switch (v->kind)
+    {
+        case value_info_integer: return interval_contains_interval(v->val, w->val);
+        default: return 0;
+    }
+}
+
 static void check_merge_values_null(Checker* chk, ValueInfo* v, const RowCol* rc)
 {
     if (v->kind == value_info_sym)
@@ -619,6 +719,91 @@ static void check_merge_values(Checker* chk, ValueInfo* v, const ValueInfo* w, c
         if (v->kind == value_info_integer)
         {
             v->val = interval_merge(v->val, w->val);
+            return;
+        }
+        else if (v->kind == value_info_uninitialized)
+            return;
+        else if (v->kind == value_info_void)
+            return;
+    }
+
+    unsigned v_traits = valinfo_get_traits(v);
+    unsigned w_traits = valinfo_get_traits(w);
+    if (!(v_traits & w_traits))
+    {
+        goto fail_to_merge;
+    }
+    if (v_traits & w_traits & value_traits_ptr)
+    {
+        if (w_traits & value_traits_null)
+        {
+            check_merge_values_null(chk, v, rc);
+        }
+        if (w_traits & value_traits_sym)
+        {
+            check_merge_values_sym(chk, v, w, rc);
+        }
+        if (w_traits & value_traits_addr)
+        {
+            check_merge_values_addr(chk, v, w, rc);
+        }
+    }
+
+    return;
+
+fail_to_merge:
+    parser_ferror(rc,
+                  "error: cannot merge values of types (%s vs %s)\n",
+                  value_info_kind_to_string(v->kind),
+                  value_info_kind_to_string(w->kind));
+    *v = s_valueinfo_bottom;
+    return;
+}
+
+static void check_merge_values_biased(Checker* chk, ValueInfo* v, const ValueInfo* w, const RowCol* rc)
+{
+    if (w->kind == value_info_bottom) *v = s_valueinfo_bottom;
+    if (v->kind == value_info_bottom) return;
+    if (v->ref_ssa == w->ref_ssa && v->ref_ssa != 0) return;
+    v->ref_ssa = 0;
+
+    if (v->kind == w->kind)
+    {
+        if (v->kind == value_info_integer)
+        {
+            if (interval_contains_interval(w->val, v->val))
+            {
+                v->val = w->val;
+                return;
+            }
+            if (v->val.sz.is_signed)
+            {
+                IntervalLimitsI64 limits_v = interval_signed_limits(v->val);
+                IntervalLimitsI64 limits_w = interval_signed_limits(w->val);
+                if (limits_v.min < limits_w.min)
+                {
+                    limits_v.min = s_i64_imin_sizing[v->val.sz.width];
+                }
+                if (limits_v.max > limits_w.max)
+                {
+                    limits_v.max = s_i64_imax_sizing[v->val.sz.width];
+                }
+                v->val = interval_from_signed_limits(limits_v.min, limits_v.max, v->val.sz.width);
+            }
+            else
+            {
+                IntervalLimitsU64 limits_v = interval_unsigned_limits(v->val);
+                IntervalLimitsU64 limits_w = interval_unsigned_limits(w->val);
+                if (limits_v.min < limits_w.min)
+                {
+                    limits_v.min = 0;
+                }
+                if (limits_v.max > limits_w.max)
+                {
+                    limits_v.max = s_umax_sizing[v->val.sz.width];
+                }
+                v->val = interval_from_unsigned_limits(limits_v.min, limits_v.max, v->val.sz.width);
+            }
             return;
         }
         else if (v->kind == value_info_uninitialized)
@@ -805,6 +990,15 @@ static void check_freeze(Checker* chk, CheckContext* out, const CheckContext* in
 }
 #endif
 
+static size_t check_push_totient(
+    Checker* chk, size_t ssa1, const CheckContext* ctx1, size_t ssa2, const CheckContext* ctx2, const RowCol* rc)
+{
+    ValueInfo w = *check_get_ssa_info_rec(chk, ctx1, ssa1);
+    const ValueInfo* v2 = check_get_ssa_info_rec(chk, ctx2, ssa2);
+    check_merge_values(chk, &w, v2, rc);
+    return check_push_ssa(chk, &w, rc);
+}
+
 static void check_merge_context_matching(Checker* chk, CheckContext* ctx1, const CheckContext* ctx2, const RowCol* rc)
 {
     const size_t n = ptrmap_size(&ctx1->sym_to_ssa);
@@ -815,10 +1009,7 @@ static void check_merge_context_matching(Checker* chk, CheckContext* ctx1, const
         size_t ssa2 = check_get_ssa_rec(chk, ctx2, sym);
         if (ssa2 && ssa2 != *ssa)
         {
-            ValueInfo w = *check_get_ssa_info_rec(chk, ctx1, *ssa);
-            const ValueInfo* v2 = check_get_ssa_info_rec(chk, ctx2, ssa2);
-            check_merge_values(chk, &w, v2, rc);
-            *ssa = check_push_ssa(chk, &w, rc);
+            *ssa = check_push_totient(chk, *ssa, ctx1, ssa2, ctx2, rc);
         }
     }
 }
@@ -875,6 +1066,16 @@ static void check_merge_context_impl(Checker* chk, CheckContext* ctx1, CheckCont
     array_shrink(&ctx1->info, k, sizeof(ValueInfo));
     array_concat(&ctx1->invalidations, &ctx2->invalidations);
 }
+static void check_create_context(Checker* chk, CheckContext* out, JumpData* jdata, const RowCol* rc)
+{
+    const JumpDataEntry* const entries = chk->stmt_loop_data.syminfo.data;
+    FOREACH_SEQ(i, jdata->seq)
+    {
+        ValueInfoSym sym = {.field = entries[i].sym, .sym = entries[i].sym};
+        check_assign_sym(chk, &sym, &entries[i].info, rc);
+    }
+}
+
 static void check_merge_context(Checker* chk, CheckContext* ctx1, const CheckContext* ctx2, const RowCol* rc)
 {
     if (ctx2->is_void) return;
@@ -887,6 +1088,81 @@ static void check_merge_context(Checker* chk, CheckContext* ctx1, const CheckCon
     chkctx_clone(&tmp, ctx2);
     check_merge_context_impl(chk, ctx1, &tmp, rc);
     chkctx_destroy(&tmp);
+}
+
+static void check_compute_loop_syminfo(Checker* chk, const JumpData* lbl, Array* out_syminfo)
+{
+    if (lbl->goto_ctx == 0) return;
+    CheckContext goto_ctx = {.parent = lbl->goto_ctx};
+    CheckContext label_ctx = {.parent = lbl->label_ctx};
+    while (goto_ctx.parent != label_ctx.parent)
+    {
+        check_flatten_context(chk, goto_ctx.parent > label_ctx.parent ? &goto_ctx : &label_ctx);
+    }
+    const size_t n = ptrmap_size(&goto_ctx.sym_to_ssa);
+    for (size_t i = 0; i < n; ++i)
+    {
+        const Symbol* sym = ptrmap_nth_ptr(&goto_ctx.sym_to_ssa, i);
+        size_t* ssa = ptrmap_nth_val(&goto_ctx.sym_to_ssa, i);
+        size_t ssa2 = check_get_ssa_rec(chk, &label_ctx, sym);
+        if (ssa2 && ssa2 != *ssa)
+        {
+            JumpDataEntry jdata = {
+                .sym = sym,
+                .info = *check_get_ssa_info_rec(chk, &goto_ctx, *ssa),
+            };
+            jdata.info.ref_ssa = 0;
+            array_push(out_syminfo, &jdata, sizeof(JumpDataEntry));
+        }
+    }
+    chkctx_destroy(&goto_ctx);
+    chkctx_destroy(&label_ctx);
+}
+
+static void check_label_subset(Checker* chk, JumpData* lbl)
+{
+    if (lbl->goto_ctx == 0) return;
+    CheckContext goto_ctx = {.parent = lbl->goto_ctx};
+    CheckContext label_ctx = {.parent = lbl->label_ctx};
+    while (goto_ctx.parent != label_ctx.parent)
+    {
+        check_flatten_context(chk, goto_ctx.parent > label_ctx.parent ? &goto_ctx : &label_ctx);
+    }
+    const size_t n = ptrmap_size(&goto_ctx.sym_to_ssa);
+    for (size_t i = 0; i < n; ++i)
+    {
+        const Symbol* sym = ptrmap_nth_ptr(&goto_ctx.sym_to_ssa, i);
+        size_t* ssa = ptrmap_nth_val(&goto_ctx.sym_to_ssa, i);
+        size_t ssa2 = check_get_ssa_rec(chk, &label_ctx, sym);
+        if (ssa2 && ssa2 != *ssa)
+        {
+            // TODO: ensure that the symbol has a jump data entry
+
+            if (valinfo_contains(check_get_ssa_info_rec(chk, &label_ctx, ssa2),
+                                 check_get_ssa_info_rec(chk, &goto_ctx, *ssa)))
+            {
+            }
+            else
+            {
+                parser_tok_error(lbl->ast->tok,
+                                 "info: unable to prove loop bounds on %s -- goto:$%zu vs label:$%zu\n",
+                                 sym->name ? sym->name : "???",
+                                 *ssa,
+                                 ssa2);
+                dump_ssa(chk, *ssa);
+                dump_ssa(chk, ssa2);
+            }
+#if 0
+            const ValueInfo* w = check_get_ssa_info_rec(chk, &goto_ctx, *ssa);
+            const ValueInfo* v = check_get_ssa_info_rec(chk, &label_ctx, ssa2);
+            check_merge_values(chk, &w, v2, rc);
+            *ssa = check_push_ssa(chk, &w, rc);
+#endif
+        }
+    }
+
+    chkctx_destroy(&goto_ctx);
+    chkctx_destroy(&label_ctx);
 }
 
 static Interval chk_neg_ofchk(Checker* chk, Interval i, const Token* tok)
@@ -1734,6 +2010,60 @@ static void check_FnParam(Checker* chk, const Decl* d, size_t index, const Decl*
     }
     check_init_sym(chk, d->sym, &info, token_rc(d->tok));
 }
+static void check_FnParams(Checker* chk, const Decl* e)
+{
+    if (e->type->kind != AST_DECLFN) abort();
+    const DeclFn* fn = (void*)e->type;
+    const Decl* const* decls = (const Decl* const*)chk->elab->p->expr_seqs.data;
+    FOREACH_SEQ(i, e->decl_list) { check_FnParam(chk, decls[i], 99, e); }
+    size_t j = 0;
+    FOREACH_SEQ_T(StmtDeclsCPtr, i, fn->seq, chk->elab->p->expr_seqs.data)
+    {
+        StmtDeclsCPtr stmt = *i;
+        if (stmt->ast.kind != STMT_DECLS) abort();
+        if (stmt->seq.ext != 1) abort();
+        if (decls[stmt->seq.off]->ast.kind != AST_DECL) abort();
+        check_FnParam(chk, decls[stmt->seq.off], j, e);
+        ++j;
+    }
+}
+static void check_merge_jump_data(
+    Checker* chk, Array* dst_data, size_t dst_start, const JumpDataEntry* old_data, size_t old_data_n, const RowCol* rc)
+{
+    for (size_t i = 0; i < old_data_n; ++i)
+    {
+        JumpDataEntry* const new_data = dst_data->data;
+        for (size_t j = dst_start; j < array_size(dst_data, sizeof(JumpDataEntry)); ++j)
+        {
+            if (new_data[j].sym == old_data[i].sym)
+            {
+                check_merge_values(chk, &new_data[j].info, &old_data[i].info, rc);
+                goto found;
+            }
+        }
+        array_push(dst_data, old_data + i, sizeof(JumpDataEntry));
+    found:;
+    }
+}
+static void check_merge_jump_data2(
+    Checker* chk, Array* dst_data, size_t dst_start, const JumpDataEntry* old_data, size_t old_data_n, const RowCol* rc)
+{
+    for (size_t i = 0; i < old_data_n; ++i)
+    {
+        JumpDataEntry* const new_data = dst_data->data;
+        for (size_t j = dst_start; j < array_size(dst_data, sizeof(JumpDataEntry)); ++j)
+        {
+            if (new_data[j].sym == old_data[i].sym)
+            {
+                check_merge_values_biased(chk, &new_data[j].info, &old_data[i].info, rc);
+                goto found;
+            }
+        }
+        array_push(dst_data, old_data + i, sizeof(JumpDataEntry));
+    found:;
+    }
+}
+
 static void check_Decl(Checker* chk, const Decl* e)
 {
     const Symbol* const sym = e->sym;
@@ -1741,23 +2071,54 @@ static void check_Decl(Checker* chk, const Decl* e)
 
     if (sym->is_fn)
     {
-        if (e->type->kind != AST_DECLFN) abort();
-        const DeclFn* fn = (void*)e->type;
-
-        const Decl* const* decls = (const Decl* const*)chk->elab->p->expr_seqs.data;
-        FOREACH_SEQ(i, e->decl_list) { check_FnParam(chk, decls[i], 99, e); }
-        size_t j = 0;
-        FOREACH_SEQ_T(StmtDeclsCPtr, i, fn->seq, chk->elab->p->expr_seqs.data)
+        check_fn_start(chk);
+        CheckContext ctx = {0}, *prev_ctx = chk->ctx;
+        chk->ctx = &ctx;
+        Array new_syminfo = {0};
+        const int MAX_LOOPS = 3;
+        for (int x = 0; x <= MAX_LOOPS; ++x)
         {
-            StmtDeclsCPtr stmt = *i;
-            if (stmt->ast.kind != STMT_DECLS) abort();
-            if (stmt->seq.ext != 1) abort();
-            if (decls[stmt->seq.off]->ast.kind != AST_DECL) abort();
-            check_FnParam(chk, decls[stmt->seq.off], j, e);
-            ++j;
+            check_FnParams(chk, e);
+            check_stmt(chk, e->init);
+            if (x >= MAX_LOOPS || parser_has_errors()) break;
+            array_clear(&new_syminfo);
+            const JumpDataEntry* const prev_data = chk->stmt_loop_data.syminfo.data;
+            ARRAY_FOREACH(JumpData, lbl, &chk->stmt_loop_data.jdata)
+            {
+                const size_t new_offset = array_size(&new_syminfo, sizeof(JumpDataEntry));
+                check_compute_loop_syminfo(chk, lbl, &new_syminfo);
+                if (lbl->seq.ext)
+                {
+                    if (x == 0)
+                    {
+                        check_merge_jump_data(chk,
+                                              &new_syminfo,
+                                              new_offset,
+                                              prev_data + lbl->seq.off,
+                                              lbl->seq.ext,
+                                              token_rc(lbl->ast->tok));
+                    }
+                    else if (x == 1)
+                    {
+                        check_merge_jump_data2(chk,
+                                               &new_syminfo,
+                                               new_offset,
+                                               prev_data + lbl->seq.off,
+                                               lbl->seq.ext,
+                                               token_rc(lbl->ast->tok));
+                    }
+                }
+                lbl->seq.off = new_offset;
+                lbl->seq.ext = array_size(&new_syminfo, sizeof(JumpDataEntry)) - new_offset;
+            }
+            array_assign(&chk->stmt_loop_data.syminfo, new_syminfo.data, new_syminfo.sz);
+            chkctx_clear(&ctx);
+            check_fn_iter(chk);
         }
+        array_destroy(&new_syminfo);
 
-        check_stmt(chk, e->init);
+        ARRAY_FOREACH(JumpData, lbl, &chk->stmt_loop_data.jdata) { check_label_subset(chk, lbl); }
+        chk->ctx = prev_ctx;
     }
     else
     {
@@ -1827,7 +2188,7 @@ static void check_StmtLoop(Checker* chk, const StmtLoop* e)
     {
         check_stmt(chk, e->init);
     }
-    const size_t top_ctx = check_push_ctx(chk);
+    const size_t top_label = check_jumpdata_for_ast(chk, &e->ast);
     if (e->is_do_while) abort();
     if (!e->cond) abort();
 
@@ -1835,42 +2196,38 @@ static void check_StmtLoop(Checker* chk, const StmtLoop* e)
     check_cond(chk, e->cond, &false_ctx);
     check_stmt(chk, e->body);
     check_stmt(chk, &e->advance->ast);
-    // TODO: compare chk->ctx vs top_ctx
-    (void)top_ctx;
-
+    check_get_jumpdata(chk, top_label)->goto_ctx = check_push_ctx(chk);
     check_merge_context(chk, chk->ctx, &false_ctx, token_rc(e->tok));
     chkctx_destroy(&false_ctx);
 }
 static void check_StmtGoto(Checker* chk, const StmtGoto* e)
 {
-    size_t n = strset_insert(&chk->label_to_index, token_str(chk->p, e->dst), e->dst->tok_len);
-    Labelled* lbl = (n >= array_size(&chk->labelled, sizeof(Labelled)))
-                        ? array_push_zeroes(&chk->labelled, sizeof(Labelled))
-                        : (Labelled*)chk->labelled.data + n;
-
-    if (lbl->goto_ctx != 0)
+    const size_t i = check_jumpdata_for_label(chk, &e->ast, e->dst);
+    JumpData* jdata = check_get_jumpdata(chk, i);
+    if (jdata->goto_ctx != 0)
     {
-        CheckContext incoming = {.parent = lbl->goto_ctx};
+        CheckContext incoming = {.parent = jdata->goto_ctx};
         check_merge_context(chk, chk->ctx, &incoming, token_rc(e->tok));
         chkctx_destroy(&incoming);
     }
-    lbl->goto_ctx = check_push_ctx(chk);
+    jdata->goto_ctx = check_push_ctx(chk);
     chk->ctx->is_void = 1;
 }
 static void check_StmtLabel(Checker* chk, const StmtLabel* e)
 {
-    size_t n = strset_insert(&chk->label_to_index, token_str(chk->p, e->tok), e->tok->tok_len);
-    Labelled* lbl = (n >= array_size(&chk->labelled, sizeof(Labelled)))
-                        ? array_push_zeroes(&chk->labelled, sizeof(Labelled))
-                        : (Labelled*)chk->labelled.data + n;
-
-    if (lbl->goto_ctx != 0)
+    const size_t i = check_jumpdata_for_label(chk, &e->ast, e->tok);
+    JumpData* jdata = check_get_jumpdata(chk, i);
+    if (jdata->goto_ctx != 0)
     {
-        CheckContext incoming = {.parent = lbl->goto_ctx};
+        CheckContext incoming = {.parent = jdata->goto_ctx};
         check_merge_context(chk, chk->ctx, &incoming, token_rc(e->tok));
         chkctx_destroy(&incoming);
     }
-    lbl->label_ctx = check_push_ctx(chk);
+    jdata->goto_ctx = 0;
+    CheckContext iter_ctx = {.parent = check_push_ctx(chk)};
+    check_create_context(chk, &iter_ctx, jdata, token_rc(e->tok));
+    check_merge_context(chk, chk->ctx, &iter_ctx, token_rc(e->tok));
+    jdata->label_ctx = check_push_ctx(chk);
     check_stmt(chk, e->stmt);
 }
 static void check_StmtReturn(Checker* chk, const StmtReturn* e)

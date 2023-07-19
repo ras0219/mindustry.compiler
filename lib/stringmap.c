@@ -46,6 +46,12 @@ void strset_remove(StringSet* set, size_t index)
         key_lens[index] = len;
     }
 }
+void strset_clear(StringSet* set)
+{
+    autoheap_destroy(&set->keys);
+    memset(&set->keys, 0, sizeof(set->keys));
+    array_clear(&set->lens);
+}
 void strset_destroy(StringSet* set)
 {
     autoheap_destroy(&set->keys);
