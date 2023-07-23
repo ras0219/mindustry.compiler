@@ -15,7 +15,7 @@ struct W
 
 void foo(struct W* p)
 {
-    struct A s1 = {0};
+    struct A a = {0};
     struct W w = {
         .s = p->buf,
     };

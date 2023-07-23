@@ -74,7 +74,8 @@
                   "id": "AST_DECL",
                   "tok": "a",
                   "type": false,
-                  "decls": []
+                  "decls": [],
+                  "field_slot": 1
                 }
               ]
             }
@@ -347,7 +348,8 @@
                   "id": "AST_DECL",
                   "tok": "e",
                   "type": false,
-                  "decls": []
+                  "decls": [],
+                  "field_slot": 1
                 }
               ]
             }

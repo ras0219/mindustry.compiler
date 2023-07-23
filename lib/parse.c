@@ -158,6 +158,7 @@ static struct ExprCall* parse_alloc_expr_call(
 static struct Decl* parse_alloc_decl(Parser* p, struct DeclSpecs* specs)
 {
     Decl* decl = parse_alloc_ast(p, NULL, AST_DECL, sizeof(struct Decl));
+    decl->attr = specs->attr;
     decl->specs = specs;
     return decl;
 }

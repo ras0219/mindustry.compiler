@@ -43,22 +43,19 @@
           "init": {
             "id": "AST_INIT",
             "elems": [
-              0,
-              0,
+              1,
               {
                 "id": "EXPR_LIT",
                 "value": 1,
                 "suffix": "D"
               },
-              0,
-              0,
+              2,
               {
                 "id": "EXPR_REF",
                 "tok": "v1",
                 "sizing": -4
               },
-              0,
-              0,
+              3,
               {
                 "id": "EXPR_LIT",
                 "value": 3,
@@ -91,14 +88,12 @@
           "init": {
             "id": "AST_INIT",
             "elems": [
-              0,
-              0,
+              1,
               {
                 "id": "EXPR_STRLIT",
                 "take_addr": true
               },
-              0,
-              0,
+              2,
               {
                 "id": "EXPR_STRLIT",
                 "take_addr": true
@@ -175,16 +170,14 @@
           "init": {
             "id": "AST_INIT",
             "elems": [
-              0,
-              0,
+              1,
               {
                 "id": "EXPR_REF",
                 "tok": "foo",
                 "take_addr": true,
                 "sizing": 8
               },
-              0,
-              0,
+              2,
               {
                 "id": "EXPR_REF",
                 "tok": "bar",

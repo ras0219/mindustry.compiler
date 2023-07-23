@@ -28,14 +28,12 @@
           "init": {
             "id": "AST_INIT",
             "elems": [
-              0,
-              0,
+              1,
               {
                 "id": "EXPR_STRLIT",
                 "take_addr": true
               },
-              0,
-              0,
+              7,
               {
                 "id": "EXPR_STRLIT",
                 "take_addr": true

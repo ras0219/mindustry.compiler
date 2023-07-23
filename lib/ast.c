@@ -162,6 +162,11 @@ static void ast_to_json_ast(struct Parser* p, JsonDOM* f, void* ptr, int depth)
             ast_to_json_type_ast(p, f, blk->type, depth + 1);
             JSONDOM_WRITE_KEY(f, "decls");
             ast_to_json_expr_seq(p, f, blk->decl_list, depth);
+            if (blk->sym && blk->sym->field_slot)
+            {
+                JSONDOM_WRITE_KEY(f, "field_slot");
+                jsondom_write_u64(f, blk->sym->field_slot);
+            }
             ast_to_json_key_if(p, f, CSTR("init"), blk->init, depth);
             break;
         }
@@ -380,8 +385,7 @@ static void ast_to_json_ast(struct Parser* p, JsonDOM* f, void* ptr, int depth)
             jsondom_write_open_arr(f);
             while (a->init != NULL)
             {
-                jsondom_write_u64(f, a->designator_offset);
-                jsondom_write_u64(f, a->designator_extent);
+                jsondom_write_u64(f, a->slot);
                 ast_to_json_ast(p, f, a->init, depth + 1);
                 a = a->next;
             }

@@ -545,6 +545,35 @@ unsigned long long tsb_get_add_size(const TypeTable* types, const TypeStrBuf* ts
 static const Sizing s_sizing_zero = {0};
 // static const Sizing s_sizing_one = {.width = 1};
 
+unsigned long long tsb_calc_slots_i(const struct TypeTable* types, const TypeStrBuf* ts, int i, const struct RowCol* rc)
+{
+    size_t add = 0;
+    size_t mult = 1;
+    for (tsb_skip_cvr_i(ts, &i); ts->buf[i] == TYPE_BYTE_ARRAY; tsb_skip_cvr_i(ts, &i))
+    {
+        size_t n = tsb_extract_offset_i(ts, &i);
+        mult *= n;
+        add = (add + 1) * n;
+        if (add > UINT32_MAX)
+        {
+            tsb_error1(rc, types, "error: type too large: %.*s\n", ts);
+            return 1;
+        }
+    }
+
+    switch (ts->buf[i])
+    {
+        case TYPE_BYTE_UNION:
+        case TYPE_BYTE_STRUCT:;
+            size_t init_slots = tt_get(types, tsb_get_offset_i(ts, i))->init_slots;
+            add += mult * init_slots;
+            if (init_slots == 0) tsb_error1(rc, types, "error: unable to get slots of incomplete type: %.*s\n", ts);
+            break;
+        default: break;
+    }
+    return add;
+}
+
 static Sizing tsb_calc_sizing_i(const TypeTable* types, const TypeStrBuf* ts, int i, const RowCol* rc)
 {
     SizAlign sz = tsb_calc_sizalign_i(types, ts, i, rc);
@@ -606,6 +635,10 @@ Sizing tsb_calc_sizing_zero_void(const TypeTable* types, const TypeStrBuf* ts, c
 Sizing tsb_calc_sizing(const TypeTable* types, const TypeStrBuf* ts, const RowCol* rc)
 {
     return tsb_calc_sizing_i(types, ts, ts->buf[0], rc);
+}
+unsigned long long tsb_calc_slots(const TypeTable* types, const TypeStrBuf* ts, const RowCol* rc)
+{
+    return tsb_calc_slots_i(types, ts, ts->buf[0], rc);
 }
 
 enum
@@ -925,10 +958,12 @@ uint32_t tsb_pop_offset(TypeStrBuf* ts)
     }
 TypeSymbol* tsb_get_decl(TypeTable* tt, const TypeStrBuf* ts)
 {
-    char ch = ts->buf[ts->buf[0]];
+    int i = ts->buf[0];
+    tsb_skip_cvr_i(ts, &i);
+    char ch = ts->buf[i];
     if (ch == TYPE_BYTE_STRUCT || ch == TYPE_BYTE_UNION)
     {
-        TypeSymbol* r = tt_get(tt, tsb_get_offset(ts));
+        TypeSymbol* r = tt_get(tt, tsb_get_offset_i(ts, i));
         CC_ASSERT(r);
         return r;
     }
@@ -965,32 +1000,38 @@ int typestr_decay(TypeStr* t)
     return r;
 }
 
-FnTypeInfo typestr_strip_fn(const TypeTable* tt, TypeStr* t)
+const TypeStrBuf* tt_fn_arg(const struct TypeTable* tt, int index) { return (TypeStrBuf*)tt->fn_args.data + index; }
+
+FnTypeInfo tsb_strip_fn(const TypeTable* tt, TypeStrBuf* t)
 {
     FnTypeInfo ret = {0};
-    if (t->buf.buf[t->buf.buf[0]] == TYPE_BYTE_POINTER)
+    int i = t->buf[0];
+    tsb_skip_cvr_i(t, &i);
+    if (t->buf[i] == TYPE_BYTE_POINTER) --i;
+    if (t->buf[i] == TYPE_BYTE_FUNCTION)
     {
-        typestr_dereference(t);
-    }
-    if (t->buf.buf[t->buf.buf[0]] == TYPE_BYTE_FUNCTION)
-    {
-        t->c = s_not_constant;
-        uint32_t x = typestr_pop_offset(t);
+        uint32_t x = tsb_extract_offset_i(t, &i);
         if (x == UINT32_MAX) abort();
         if (x > 0) ret.offset = arrsz_at(&tt->fn_args_ends, x - 1);
         ret.extent = arrsz_at(&tt->fn_args_ends, x) - ret.offset;
         if (ret.extent > 0)
         {
-            ret.is_variadic =
-                tsb_byte((TypeStrBuf*)tt->fn_args.data + ret.offset + ret.extent - 1) == TYPE_BYTE_VARIADIC;
+            ret.is_variadic = tsb_byte(tt_fn_arg(tt, ret.offset + ret.extent - 1)) == TYPE_BYTE_VARIADIC;
             ret.extent -= ret.is_variadic;
         }
+        t->buf[0] = i;
     }
     else
     {
-        *t = s_type_unknown;
+        memset(t, 0, sizeof(*t));
     }
     return ret;
+}
+
+FnTypeInfo typestr_strip_fn(const TypeTable* tt, TypeStr* t)
+{
+    t->c = s_not_constant;
+    return tsb_strip_fn(tt, &t->buf);
 }
 
 void typestr_apply_integral_type(TypeStr* dst, const TypeStr* src)

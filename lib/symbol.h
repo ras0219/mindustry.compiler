@@ -21,6 +21,7 @@ typedef struct TypeSymbol
     struct Symbol* first_member;
     size_t idx;
     SizAlign size;
+    size_t init_slots;
 } TypeSymbol;
 
 typedef struct AstType
@@ -145,6 +146,7 @@ typedef struct Symbol
     struct ExprStrLit* string_constant;
 
     // elaboration information
+    unsigned char is_static_lifetime : 1;
     unsigned char is_enum_constant : 1;
     unsigned char is_aggregate : 1;
     unsigned char is_fn : 1;
@@ -154,7 +156,10 @@ typedef struct Symbol
     Constant const_init;
 
     Sizing fn_ret_sizing;
+    size_t field_index;
     size_t field_offset;
+    size_t field_slot;
+    size_t init_slots;
     Sizing size;
     uint32_t align;
 

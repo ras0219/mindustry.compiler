@@ -59,7 +59,7 @@ static uint64_t u64constant_or_err(const TypeStr* ts, const Token* rc)
     return 0;
 }
 
-static Symbol* find_field_by_name(TypeSymbol* def, const char* fieldname, size_t* offset)
+static Symbol* find_field_by_name(TypeSymbol* def, const char* fieldname, size_t* offset, size_t* slot)
 {
     for (Symbol* field = def->first_member; field; field = field->next_field)
     {
@@ -68,10 +68,11 @@ static Symbol* find_field_by_name(TypeSymbol* def, const char* fieldname, size_t
             if (field->def->specs->suinit)
             {
                 // anonymous nested struct
-                Symbol* inner_field = find_field_by_name(field->def->specs->sym, fieldname, offset);
+                Symbol* inner_field = find_field_by_name(field->def->specs->sym, fieldname, offset, slot);
                 if (inner_field)
                 {
                     *offset += field->field_offset;
+                    *slot += field->field_slot;
                     return inner_field;
                 }
             }
@@ -81,6 +82,7 @@ static Symbol* find_field_by_name(TypeSymbol* def, const char* fieldname, size_t
             if (strcmp(field->name, fieldname) == 0)
             {
                 *offset = field->field_offset;
+                *slot = field->field_slot;
                 return field;
             }
         }
@@ -249,6 +251,7 @@ static void elaborate_expr_ExprTernary(struct Elaborator* elab, ExprTernary* e, 
                        &efalse_ty);
         *rty = s_type_unknown;
     }
+    e->ty = rty->buf;
 
     if (cond_ty.c.is_const && !cond_ty.c.is_lvalue && efalse_ty.c.is_const && !efalse_ty.c.is_lvalue &&
         etrue_ty.c.is_const && !etrue_ty.c.is_lvalue)
@@ -830,6 +833,7 @@ static void elaborate_stmts(struct Elaborator* elab, SeqView stmts)
 
 typedef struct DInitFrame
 {
+    size_t slot;
     size_t offset;
     Symbol* field;
     uint8_t is_array : 1;
@@ -838,12 +842,14 @@ typedef struct DInitFrame
     uint32_t extent;
     uint32_t index;
     uint32_t elem_size;
+    size_t elem_slots;
     /// Always cvr-stripped
     struct TypeStr ty;
 } DInitFrame;
 
 typedef struct DInitIter
 {
+    size_t slot;
     size_t offset;
     TypeStr cur_ty;
     /// Array<DInitFrame>
@@ -856,6 +862,7 @@ static void di_destroy(DInitIter* i) { array_destroy(&i->stk); }
 static int di_fill_frame(DInitFrame* frame,
                          Elaborator* elab,
                          size_t offset,
+                         size_t slot,
                          const TypeStr* parent_ty,
                          size_t designator_idx,
                          const RowCol* rc)
@@ -881,6 +888,7 @@ static int di_fill_frame(DInitFrame* frame,
             typestr_remove_array(&frame->ty);
             typestr_strip_cvr(&frame->ty);
             frame->elem_size = typestr_get_size(elab->types, &frame->ty, rc);
+            frame->elem_slots = tsb_calc_slots(elab->types, &frame->ty.buf, rc);
             if (frame->extent == 0)
             {
                 return parser_ferror(rc, "error: array must have nonzero extent\n");
@@ -903,6 +911,7 @@ static int di_fill_frame(DInitFrame* frame,
                 }
                 frame->index = k;
             }
+            frame->slot = slot + frame->elem_slots * frame->index + frame->index + 1;
             frame->offset = offset + frame->elem_size * frame->index;
             return 0;
         }
@@ -919,6 +928,7 @@ static int di_fill_frame(DInitFrame* frame,
                 frame->field = sym->first_member;
                 if (!frame->field) return 1;
                 frame->offset = frame->field->field_offset;
+                frame->slot = frame->field->field_slot;
             }
             else
             {
@@ -928,12 +938,13 @@ static int di_fill_frame(DInitFrame* frame,
                 {
                     return parser_ferror(rc, "error: invalid array designator for struct/union\n");
                 }
-                frame->field = find_field_by_name(sym, designator->field, &frame->offset);
+                frame->field = find_field_by_name(sym, designator->field, &frame->offset, &frame->slot);
                 if (!frame->field)
                 {
                     return parser_ferror(rc, "error: field not found in structure: '%s'\n", designator->field);
                 }
             }
+            frame->slot += slot;
             frame->offset += offset;
             typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, &frame->ty, frame->field->def);
             typestr_strip_cvr(&frame->ty);
@@ -947,15 +958,18 @@ static int di_enter(DInitIter* i, struct Elaborator* elab, const RowCol* rc)
 {
     if (0 == i->stk.sz)
     {
-        return di_fill_frame(array_alloc(&i->stk, sizeof(DInitFrame)), elab, i->offset, &i->cur_ty, SIZE_MAX, rc);
+        return di_fill_frame(
+            array_alloc(&i->stk, sizeof(DInitFrame)), elab, i->offset, i->slot, &i->cur_ty, SIZE_MAX, rc);
     }
     DInitFrame* new_frame = array_alloc(&i->stk, sizeof(DInitFrame));
     DInitFrame* prev_frame = new_frame - 1;
-    return di_fill_frame(new_frame, elab, prev_frame->offset, &prev_frame->ty, SIZE_MAX, rc);
+    return di_fill_frame(new_frame, elab, prev_frame->offset, prev_frame->slot, &prev_frame->ty, SIZE_MAX, rc);
 }
 
-static int di_reset(DInitIter* i, struct Elaborator* elab, size_t offset, const struct TypeStr* dty, const RowCol* rc)
+static int di_reset(
+    DInitIter* i, struct Elaborator* elab, size_t offset, size_t slot, const struct TypeStr* dty, const RowCol* rc)
 {
+    i->slot = slot;
     i->offset = offset;
     i->cur_ty = *dty;
     array_clear(&i->stk);
@@ -975,16 +989,19 @@ loop:;
         ++back->index;
         if (back->index == back->extent) goto pop;
         back->offset += back->elem_size;
+        back->slot += back->elem_slots + 1;
     }
     else
     {
-        const size_t prev_field_offset = back->field->field_offset;
+        back->slot -= back->field->field_slot;
+        back->offset -= back->field->field_offset;
         if (back->is_union)
             back->field = NULL;
         else
             back->field = back->field->next_field;
         if (back->field == NULL) goto pop;
-        back->offset += back->field->field_offset - prev_field_offset;
+        back->offset += back->field->field_offset;
+        back->slot += back->field->field_slot;
         typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, &back->ty, back->field->def);
         typestr_strip_cvr(&back->ty);
     }
@@ -992,18 +1009,20 @@ loop:;
 
 static int di_end(DInitIter* i) { return 0 == i->stk.sz; }
 
-static void elaborate_init_ty_AstInit(struct Elaborator* elab, size_t offset, const TypeStr* dty, struct AstInit* init)
+static void elaborate_init_ty_AstInit(
+    struct Elaborator* elab, size_t offset, size_t slot, const TypeStr* dty, struct AstInit* init)
 {
     if (typestr_is_char_array(dty) && init->is_braced_strlit)
     {
         TypeStr ts;
         elaborate_expr(elab, (Expr*)init->init, &ts);
+        init->slot = slot;
         return;
     }
 
     struct DInitIter iter;
     di_init(&iter);
-    if (di_reset(&iter, elab, offset, dty, &init->tok->rc)) goto fail;
+    if (di_reset(&iter, elab, offset, slot, dty, token_rc(init->tok))) goto fail;
 
     for (; init->init; init = init->next, di_next(&iter, elab))
     {
@@ -1013,14 +1032,16 @@ static void elaborate_init_ty_AstInit(struct Elaborator* elab, size_t offset, co
             if (di_fill_frame(array_alloc(&iter.stk, sizeof(DInitFrame)),
                               elab,
                               iter.offset,
+                              iter.slot,
                               &iter.cur_ty,
                               init->designator_offset,
-                              &init->tok->rc))
+                              token_rc(init->tok)))
                 goto fail;
             for (size_t k = 1; k < init->designator_extent; ++k)
             {
                 DInitFrame* f = array_alloc(&iter.stk, sizeof(DInitFrame));
-                if (di_fill_frame(f, elab, f[-1].offset, &f[-1].ty, init->designator_offset + k, &init->tok->rc))
+                if (di_fill_frame(
+                        f, elab, f[-1].offset, f[-1].slot, &f[-1].ty, init->designator_offset + k, token_rc(init->tok)))
                     goto fail;
             }
         }
@@ -1029,9 +1050,10 @@ static void elaborate_init_ty_AstInit(struct Elaborator* elab, size_t offset, co
         DInitFrame* back = array_back(&iter.stk, sizeof(*back));
         if (init->init->kind == AST_INIT)
         {
+            init->slot = back->slot;
             init->offset = back->offset;
             init->width = typestr_calc_sizing(elab->types, &back->ty, rc).width;
-            elaborate_init_ty_AstInit(elab, back->offset, &back->ty, (AstInit*)init->init);
+            elaborate_init_ty_AstInit(elab, back->offset, back->slot, &back->ty, (AstInit*)init->init);
         }
         else
         {
@@ -1050,13 +1072,14 @@ static void elaborate_init_ty_AstInit(struct Elaborator* elab, size_t offset, co
             {
                 if (ts_is_strlit && typestr_is_char_array(&back->ty)) goto skip_conversion;
                 if (tsb_match(&back->ty.buf, &ts.buf)) break;
-                if (di_enter(&iter, elab, &init->tok->rc)) goto fail;
+                if (di_enter(&iter, elab, token_rc(init->tok))) goto fail;
                 back = array_back(&iter.stk, sizeof(*back));
             }
             typestr_implicit_conversion(elab->types, rc, &ts, &back->ty);
         skip_conversion:
             init->is_aggregate_init = typestr_is_aggregate(&back->ty);
             init->offset = back->offset;
+            init->slot = back->slot;
             init->width = typestr_calc_sizing(elab->types, &back->ty, rc).width;
         }
     }
@@ -1071,11 +1094,12 @@ fail:
     di_destroy(&iter);
 }
 
-static void elaborate_init_ty(struct Elaborator* elab, size_t offset, const TypeStr* dty, Constant* c, struct Ast* ast)
+static void elaborate_init_ty(
+    struct Elaborator* elab, size_t offset, size_t slot, const TypeStr* dty, Constant* c, struct Ast* ast)
 {
     if (ast->kind == AST_INIT)
     {
-        return elaborate_init_ty_AstInit(elab, offset, dty, (struct AstInit*)ast);
+        return elaborate_init_ty_AstInit(elab, offset, slot, dty, (struct AstInit*)ast);
     }
     const char tyb = typestr_byte(dty);
     switch (tyb)
@@ -1125,9 +1149,7 @@ static void elaborate_init_ty(struct Elaborator* elab, size_t offset, const Type
 }
 
 #define DISPATCH(X, Y)                                                                                                 \
-    case AST_KIND_##Y:                                                                                                 \
-        X##Y(elab, (struct Y*)ast);                                                                                    \
-        break
+    case AST_KIND_##Y: X##Y(elab, (struct Y*)ast); break
 
 #define DISPATCH_STMT(Y) DISPATCH(elaborate_stmt_, Y)
 
@@ -1397,7 +1419,7 @@ static void elaborate_expr_ExprField_lhs(Elaborator* elab, ExprField* f, TypeStr
         if (sym->def)
         {
             // find field in decl
-            Symbol* field = find_field_by_name(sym, f->fieldname, &f->field_offset);
+            Symbol* field = find_field_by_name(sym, f->fieldname, &f->field_offset, &f->field_slot);
             if (field)
             {
                 f->field = field;
@@ -1528,6 +1550,7 @@ static void elaborate_expr_ExprCast(Elaborator* elab, ExprCast* e, TypeStr* rty)
     elaborate_declspecs(elab, e->specs);
     elaborate_decl(elab, e->type);
     typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, rty, e->type);
+    e->ty = rty->buf;
     rty->c = orig.c;
     if (orig.c.is_const)
     {
@@ -1733,6 +1756,7 @@ static int elaborate_decl(Elaborator* const elab, Decl* const decl)
         sym->is_fn = !!(t & TYPE_FLAGS_FUNCTION);
         sym->is_array_or_fn = !!(t & TYPE_MASK_FN_ARR);
         sym->is_aggregate = !!(t & TYPE_MASK_AGGREGATE);
+        sym->is_static_lifetime = decl->specs->is_static || !elab->cur_decl;
     }
     if (sym->def == decl)
     {
@@ -1755,7 +1779,7 @@ static int elaborate_decl(Elaborator* const elab, Decl* const decl)
 
                 Decl* prev = elab->cur_decl;
                 elab->cur_decl = decl;
-                elaborate_init_ty(elab, 0, &sym->type, &sym->const_init, decl->init);
+                elaborate_init_ty(elab, 0, 0, &sym->type, &sym->const_init, decl->init);
                 if (!typestr_is_const(&sym->type)) sym->const_init = s_not_constant;
                 elab->cur_decl = prev;
             }
@@ -1765,7 +1789,7 @@ static int elaborate_decl(Elaborator* const elab, Decl* const decl)
                 {
                     Decl* prev = elab->cur_decl;
                     elab->cur_decl = decl;
-                    elaborate_init_ty(elab, 0, &sym->type, &sym->const_init, decl->init);
+                    elaborate_init_ty(elab, 0, 0, &sym->type, &sym->const_init, decl->init);
                     if (!typestr_is_const(&sym->type)) sym->const_init = s_not_constant;
                     elab->cur_decl = prev;
                 }
@@ -1830,6 +1854,8 @@ static int elaborate_decl(Elaborator* const elab, Decl* const decl)
                 else
                 {
                     sym->size = typestr_calc_sizing(elab->types, &sym->type, token_rc(decl->tok));
+                    const TypeSymbol* ts = typestr_get_decl(elab->types, &sym->type);
+                    sym->init_slots = ts ? ts->init_slots + 1 : 1;
 
                     if (sym->size.width == 0)
                     {
@@ -1947,6 +1973,8 @@ static int elaborate_declspecs(struct Elaborator* elab, struct DeclSpecs* specs)
 
             size_t struct_align = 1;
             size_t struct_size = 0;
+            size_t struct_slots = 0;
+            size_t field_index = 0;
 
             Symbol** p_next_decl = &specs->sym->first_member;
 
@@ -1963,6 +1991,7 @@ static int elaborate_declspecs(struct Elaborator* elab, struct DeclSpecs* specs)
                 {
                     struct Decl* field = decl_seqs[j];
                     UNWRAP(elaborate_decl(elab, field));
+                    field->sym->field_index = field_index++;
                     *p_next_decl = field->sym;
                     p_next_decl = &field->sym->next_field;
                     if (field->type || !field->sym->name)
@@ -1972,6 +2001,8 @@ static int elaborate_declspecs(struct Elaborator* elab, struct DeclSpecs* specs)
                             return parser_tok_error(field->tok,
                                                     "error: structure and union fields cannot have initializers\n");
                         }
+                        field->sym->field_slot = struct_slots + 1;
+                        struct_slots += field->sym->init_slots;
                         // insert padding
                         struct_size = round_to_alignment(struct_size, field->sym->align);
                         if (specs->is_struct)
@@ -1998,6 +2029,7 @@ static int elaborate_declspecs(struct Elaborator* elab, struct DeclSpecs* specs)
             struct_size = round_to_alignment(struct_size, struct_align);
             specs->sym->size.align = struct_align;
             specs->sym->size.width = struct_size;
+            specs->sym->init_slots = struct_slots;
         }
     }
 

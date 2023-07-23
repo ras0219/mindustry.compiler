@@ -118,12 +118,19 @@ struct TypeSymbol* tsb_get_decl(struct TypeTable* tt, const TypeStrBuf* ts);
 
 unsigned long long tsb_get_size_i(const struct TypeTable* types, const TypeStrBuf* ts, int i, const struct RowCol* rc);
 
-__forceinline unsigned long long tsb_get_size(const struct TypeTable* types,
-                                              const TypeStrBuf* ts,
-                                              const struct RowCol* rc)
+static __forceinline unsigned long long tsb_get_size(const struct TypeTable* types,
+                                                     const TypeStrBuf* ts,
+                                                     const struct RowCol* rc)
 {
     return tsb_get_size_i(types, ts, ts->buf[0], rc);
 }
+
+unsigned long long tsb_calc_slots_i(const struct TypeTable* types,
+                                    const TypeStrBuf* ts,
+                                    int i,
+                                    const struct RowCol* rc);
+
+unsigned long long tsb_calc_slots(const struct TypeTable* types, const TypeStrBuf* ts, const struct RowCol* rc);
 
 SizAlign tsb_calc_sizalign_i(const struct TypeTable* types, const TypeStrBuf* ts, int i, const struct RowCol* rc);
 

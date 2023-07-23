@@ -1,8 +1,156 @@
-#include "interval.h"
+typedef unsigned long long uint64_t;
+typedef unsigned int uint32_t;
+typedef long long int64_t;
+typedef int int32_t;
 
-#include "array.h"
-#include "stdlibe.h"
-#include "string.h"
+void abort(void);
+
+#define UINT8_MAX 0xFFU
+#define UINT16_MAX 0xFFFFU
+#define UINT32_MAX 0xFFFFFFFFU
+#define UINT64_MAX 0xFFFFFFFFFFFFFFFFULL
+
+#define INT8_MAX 0x7F
+#define INT16_MAX 0x7FFF
+#define INT32_MAX 0x7FFFFFFF
+#define INT64_MAX 0x7FFFFFFFFFFFFFFFLL
+
+// 9223372036854775807
+
+#define INT8_MIN (-INT8_MAX - 1)
+#define INT16_MIN (-INT16_MAX - 1)
+#define INT32_MIN (-INT32_MAX - 1)
+#define INT64_MIN (-INT64_MAX - 1)
+
+typedef struct Sizing
+{
+    uint32_t is_signed : 1, width : 31;
+} Sizing;
+
+typedef struct SizAlign
+{
+    uint32_t is_signed : 1, width : 31;
+    uint32_t align;
+} SizAlign;
+
+static const Sizing s_sizing_ptr = {.width = 8};
+static const Sizing s_sizing_int = {
+    .is_signed = 1,
+    .width = 4,
+};
+static const Sizing s_sizing_uint = {
+    .width = 4,
+};
+
+/// @brief example: 0xFFFF for [2]
+static const uint64_t s_umax_sizing[] = {
+    [1] = UINT8_MAX,
+    [2] = UINT16_MAX,
+    [4] = UINT32_MAX,
+    [8] = UINT64_MAX,
+};
+/// @brief example: 0x7FFF for [2]
+static const uint64_t s_imax_sizing[] = {
+    [1] = INT8_MAX,
+    [2] = INT16_MAX,
+    [4] = INT32_MAX,
+    [8] = INT64_MAX,
+};
+/// @brief example: 0x8000 for [2]
+static const uint64_t s_imaxp1_sizing[] = {
+    [1] = INT8_MAX + 1ULL,
+    [2] = INT16_MAX + 1ULL,
+    [4] = INT32_MAX + 1ULL,
+    [8] = INT64_MAX + 1ULL,
+};
+
+/// @brief example: 0xFFFFFFFFFFFF8000 for [2]
+static const uint64_t s_imin_sizing[] = {
+    [1] = INT8_MIN,
+    [2] = INT16_MIN,
+    [4] = INT32_MIN,
+    [8] = INT64_MIN,
+};
+
+/// @brief example: 0xFFFFFFFFFFFF8000 for [2]
+static const int64_t s_i64_imin_sizing[] = {
+    [1] = INT8_MIN,
+    [2] = INT16_MIN,
+    [4] = INT32_MIN,
+    [8] = INT64_MIN,
+};
+
+/// @brief example: 0x7FFF for [2]
+static const uint64_t s_i64_imax_sizing[] = {
+    [1] = INT8_MAX,
+    [2] = INT16_MAX,
+    [4] = INT32_MAX,
+    [8] = INT64_MAX,
+};
+
+/// @brief Represents sets of integer intervals for abstract interpretation. Empty set is not representable.
+///
+/// Ranges are represented as [base, base + extent]. This can wrap around the maximum, producing a set that excludes a
+/// middle section. For example, [UINT64_MAX-10, 20] contains (UINT64_MAX-10) and 9 but excludes 10.
+///
+/// unsigned numbers are based from 0 to UINT??_MAX
+/// signed numbers are mapped with a wrap-around at INT??_MAX
+/// - [0, INT??_MAX] => [0, INT??_MAX]
+/// - [INT_??MIN, -1] => [INT??_MAX + 1, UINT??_MAX]
+typedef struct Interval
+{
+    uint64_t base, maxoff;
+    Sizing sz;
+} Interval;
+
+// static const Interval s_interval_zero = {.base = 0, .maxoff = 0};
+static const Interval s_interval_all = {.base = 0, .maxoff = UINT64_MAX, .sz.width = 8};
+static const Interval s_interval_neg = {.base = INT64_MIN, .maxoff = INT64_MAX, .sz.width = 8};
+static const Interval s_interval_pos = {.base = 1, .maxoff = INT64_MAX - 1, .sz.width = 8};
+static const Interval s_interval_nonneg = {.base = 0, .maxoff = INT64_MAX, .sz.width = 8};
+// static const Interval s_intervals_neg_sz[] = {
+//     [1] = {.base = INT8_MIN, .maxoff = INT8_MAX - 1, .sz.width = 8},
+//     [2] = {.base = INT16_MIN, .maxoff = INT16_MAX - 1, .sz.width = 2},
+//     [4] = {.base = INT32_MIN, .maxoff = INT32_MAX - 1, .sz.width = 4},
+//     [8] = {.base = INT64_MIN, .maxoff = INT64_MAX - 1, .sz.width = 8},
+// };
+// static const Interval s_intervals_nonneg_sz[] = {
+//     [1] = {.base = 0, .maxoff = INT8_MAX},
+//     [2] = {.base = 0, .maxoff = INT16_MAX},
+//     [4] = {.base = 0, .maxoff = INT32_MAX},
+//     [8] = {.base = 0, .maxoff = INT64_MAX},
+// };
+// static const Interval s_intervals_pos_sz[] = {
+//     [1] = {.base = 1, .maxoff = INT8_MAX - 1},
+//     [2] = {.base = 1, .maxoff = INT16_MAX - 1},
+//     [4] = {.base = 1, .maxoff = INT32_MAX - 1},
+//     [8] = {.base = 1, .maxoff = INT64_MAX - 1},
+// };
+
+static const Interval s_interval_zero = {.base = 0, .maxoff = 0, .sz.width = 4, .sz.is_signed = 1};
+static const Interval s_interval_one = {.base = 1, .maxoff = 0, .sz.width = 4, .sz.is_signed = 1};
+static const Interval s_interval_zero_one = {.base = 0, .maxoff = 1, .sz.width = 4, .sz.is_signed = 1};
+
+// These have a base of INT??_MIN so that the extent is logically contiguous (-N to +N) instead of (0 to -1)
+static const Interval s_interval_i64 = {.base = INT64_MIN, .maxoff = UINT64_MAX, .sz.width = 8, .sz.is_signed = 1};
+static const Interval s_interval_i32 = {
+    .base = INT32_MAX + 1ULL, .maxoff = UINT32_MAX, .sz.width = 4, .sz.is_signed = 1};
+static const Interval s_interval_i16 = {
+    .base = INT16_MAX + 1ULL, .maxoff = UINT16_MAX, .sz.width = 2, .sz.is_signed = 1};
+static const Interval s_interval_i8 = {.base = INT8_MAX + 1ULL, .maxoff = UINT8_MAX, .sz.width = 1, .sz.is_signed = 1};
+
+static const Interval s_interval_u64 = {.base = 0, .maxoff = UINT64_MAX, .sz.width = 8};
+static const Interval s_interval_u32 = {.base = 0, .maxoff = UINT32_MAX, .sz.width = 4};
+static const Interval s_interval_u16 = {.base = 0, .maxoff = UINT16_MAX, .sz.width = 2};
+static const Interval s_interval_u8 = {.base = 0, .maxoff = UINT8_MAX, .sz.width = 1};
+
+int interval_contains_0(Interval i);
+int interval_contains_nonzero(Interval i);
+
+int interval_remove_0(Interval* out, Interval i);
+int interval_remove_nonzero(Interval* out, Interval i);
+
+int interval_contains_interval(Interval i, Interval j);
 
 // static int interval_is_intersect(Interval i, Interval j)
 // {
@@ -10,21 +158,83 @@
 //     return i.maxoff >= base || i.maxoff >= base + j.maxoff;
 // }
 
-// static uint64_t interval_signed_min(Interval i)
-// {
-//     if (interval_contains(i, INT64_MIN))
-//         return INT64_MIN;
-//     else
-//         return i.base;
-// }
-// static uint64_t interval_i64_max(Interval i)
-// {
-//     if (interval_contains(i, INT64_MAX))
-//         return INT64_MAX;
-//     else
-//         return i.base + i.maxoff;
-// }
+Interval interval_merge(Interval i, Interval j);
+int interval_intersection(Interval i, Interval j, Interval* out);
 
+enum interval_intersection_result
+{
+    interval_only_inner,
+    interval_only_outer,
+    interval_outer_inner,
+};
+enum interval_intersection_result interval_intersect_lti(Interval i, int64_t j, Interval* inner, Interval* outer);
+enum interval_intersection_result interval_intersect_ltu(Interval i, uint64_t j, Interval* inner, Interval* outer);
+enum interval_intersection_result interval_intersect_ltei(Interval i, int64_t j, Interval* inner, Interval* outer);
+enum interval_intersection_result interval_intersect_lteu(Interval i, uint64_t j, Interval* inner, Interval* outer);
+enum interval_intersection_result interval_intersect_eq(Interval i, uint64_t j, Interval* inner, Interval* outer);
+enum interval_intersection_result interval_intersect_false(Interval i, Interval* inner, Interval* outer);
+
+int interval_relation_lti(Interval* out, int64_t j);
+int interval_relation_ltu(Interval* out, uint64_t j);
+int interval_relation_ltei(Interval* out, int64_t j);
+int interval_relation_lteu(Interval* out, uint64_t j);
+int interval_relation_gti(Interval* out, int64_t j);
+int interval_relation_gtu(Interval* out, uint64_t j);
+int interval_relation_gtei(Interval* out, int64_t j);
+int interval_relation_gteu(Interval* out, uint64_t j);
+
+int interval_relation_lt(Interval* out, Interval j, Sizing sz);
+int interval_relation_lte(Interval* out, Interval j, Sizing sz);
+int interval_relation_gt(Interval* out, Interval j, Sizing sz);
+int interval_relation_gte(Interval* out, Interval j, Sizing sz);
+int interval_relation_eq(Interval* out, Interval i);
+int interval_relation_neq(Interval* out, Interval j);
+
+Interval interval_cast(Interval i, Sizing sz);
+
+Interval interval_sub(Interval i, Interval j);
+int interval_sub_ofchk(Interval i, Interval j);
+Interval interval_add(Interval i, Interval j);
+int interval_add_ofchk(Interval i, Interval j);
+Interval interval_neg(Interval i);
+int interval_neg_ofchk(Interval i);
+// zero on failure
+int interval_udiv(Interval* i, Interval j);
+// zero on failure
+int interval_div(Interval* i, Interval j);
+Interval interval_mult(Interval i, Interval j);
+Interval interval_band(Interval i, Interval j);
+Interval interval_bor(Interval a, Interval b);
+Interval interval_bxor(Interval a, Interval b);
+
+int64_t interval_signed_min(Interval i);
+int64_t interval_signed_max(Interval i);
+uint64_t interval_unsigned_min(Interval i);
+uint64_t interval_unsigned_max(Interval i);
+
+typedef struct IntervalLimitsI64
+{
+    int64_t min;
+    int64_t max;
+} IntervalLimitsI64;
+IntervalLimitsI64 interval_signed_limits(Interval i);
+Interval interval_from_signed_limits(int64_t imin, int64_t imax, uint32_t width);
+
+typedef struct IntervalLimitsU64
+{
+    uint64_t min;
+    uint64_t max;
+} IntervalLimitsU64;
+IntervalLimitsU64 interval_unsigned_limits(Interval i);
+Interval interval_from_unsigned_limits(uint64_t umin, uint64_t umax, uint32_t width);
+
+Interval interval_lt(Interval a, Interval b);
+Interval interval_ltu(Interval a, Interval b);
+Interval interval_lte(Interval a, Interval b);
+Interval interval_lteu(Interval a, Interval b);
+Interval interval_eq(Interval a, Interval b);
+Interval interval_equ(Interval a, Interval b);
+Interval interval_neq(Interval a, Interval b);
 int interval_contains_0(Interval i)
 {
     return i.base == 0 || ((i.base + i.maxoff) & s_umax_sizing[i.sz.width]) < i.base;
@@ -94,17 +304,6 @@ int interval_contains_interval(Interval i, Interval j)
     return i.maxoff - j.maxoff >= j.base - i.base;
 }
 
-void interval_fmt(Array* buf, Interval i)
-{
-    if (i.sz.is_signed)
-        // array_appendf(buf,
-        //               "%lld to %lld",
-        //               interval_signed_min(i),
-        //               interval_signed_max(i));
-        array_appendf(buf, "%lld (+%llu)", interval_signed_to_i64(i.base, i.sz.width), i.maxoff);
-    else
-        array_appendf(buf, "%llu to %llu", i.base, (i.base + i.maxoff) & s_umax_sizing[i.sz.width]);
-}
 // static uint64_t icast(uint64_t n, Sizing sz)
 // {
 //     switch (sz.width)
@@ -778,7 +977,7 @@ __attribute__((nonnull)) int interval_div(Interval* i, Interval j)
     IntervalLimitsI64 il = interval_signed_limits(*i);
     IntervalLimitsI64 jl = interval_signed_limits(j);
     if (jl.min <= 0 && jl.max >= 0) return 0;
-    if (jl.min <= -1 && jl.max >= -1 && il.min <= s_i64_imin_sizing[i->sz.width]) return 0;
+    if (jl.min <= -1 && jl.max >= -1 && il.min <= s_imin_sizing[i->sz.width]) return 0;
 
     IntervalLimitsI64 out = {0};
 

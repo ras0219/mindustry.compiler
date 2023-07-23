@@ -148,6 +148,7 @@ typedef struct ExprCast
     struct Expr* expr;
     struct DeclSpecs* specs;
     struct Decl* type;
+    TypeStrBuf ty;
 } ExprCast;
 #define AST_STRUCT_EXPR_CAST ExprCast
 #define AST_KIND_ExprCast EXPR_CAST
@@ -184,6 +185,7 @@ typedef struct ExprField
     /* filled by elaboration */
     struct Symbol* field;
     size_t field_offset;
+    size_t field_slot;
 } ExprField;
 #define AST_STRUCT_EXPR_FIELD ExprField
 #define AST_KIND_ExprField EXPR_FIELD
@@ -256,6 +258,7 @@ typedef struct ExprTernary
     struct Expr* cond;
     struct Expr* iftrue;
     struct Expr* iffalse;
+    TypeStrBuf ty;
 } ExprTernary;
 #define AST_STRUCT_EXPR_TERNARY ExprTernary
 #define AST_KIND_ExprTernary EXPR_TERNARY
@@ -336,6 +339,7 @@ typedef struct AstInit
     size_t designator_extent;
     struct AstInit* next;
 
+    size_t slot;
     uint32_t offset;
     uint32_t width;
     uint8_t is_aggregate_init;

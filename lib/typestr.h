@@ -71,6 +71,13 @@ static __forceinline struct Sizing typestr_calc_sizing(const struct TypeTable* t
     return tsb_calc_sizing(types, &ts->buf, rc);
 }
 
+static __forceinline unsigned long long typestr_calc_slots(const struct TypeTable* types,
+                                                           const struct TypeStr* ts,
+                                                           const struct RowCol* rc)
+{
+    return tsb_calc_slots(types, &ts->buf, rc);
+}
+
 static __forceinline struct Sizing typestr_calc_sizing_zero_void(const struct TypeTable* types,
                                                                  const struct TypeStr* ts,
                                                                  const struct RowCol* rc)
@@ -123,7 +130,10 @@ static __forceinline unsigned int typestr_strip_cvr(struct TypeStr* ts) { return
 static __forceinline unsigned int typestr_get_cvr(const TypeStr* ts) { return tsb_get_cvr(&ts->buf); }
 void typestr_remove_array(struct TypeStr* ts);
 void typestr_dereference(struct TypeStr* ts);
-static __forceinline int typestr_is_const(const struct TypeStr* ts) { return (typestr_get_cvr(ts) & TYPESTR_CVR_C) != 0; }
+static __forceinline int typestr_is_const(const struct TypeStr* ts)
+{
+    return (typestr_get_cvr(ts) & TYPESTR_CVR_C) != 0;
+}
 
 // fmt should contain exactly one %.*s
 void typestr_error1(const struct RowCol* rc, const struct TypeTable* e, const char* fmt, const struct TypeStr* ts);
@@ -142,6 +152,8 @@ static __forceinline struct TypeSymbol* typestr_get_decl(struct TypeTable* tt, c
     return tsb_get_decl(tt, &ts->buf);
 }
 
+const TypeStrBuf* tt_fn_arg(const struct TypeTable* tt, int index);
+
 void tsb_copy_elem_type(TypeStrBuf* out, const TypeStrBuf* in);
 
 /// \return nonzero if address was taken
@@ -154,6 +166,7 @@ typedef struct FnTypeInfo
     unsigned short is_variadic;
 } FnTypeInfo;
 
+FnTypeInfo tsb_strip_fn(const struct TypeTable* tt, TypeStrBuf* t);
 FnTypeInfo typestr_strip_fn(const struct TypeTable* tt, TypeStr* t);
 
 const TypeStrBuf* typestr_get_arg(const struct TypeTable* tt, const FnTypeInfo* info, unsigned index);

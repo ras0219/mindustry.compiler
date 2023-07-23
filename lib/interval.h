@@ -69,7 +69,6 @@ int interval_contains_nonzero(Interval i);
 int interval_remove_0(Interval* out, Interval i);
 int interval_remove_nonzero(Interval* out, Interval i);
 
-static __forceinline int interval_contains(Interval i, uint64_t j) { return i.maxoff >= j - i.base; }
 int interval_contains_interval(Interval i, Interval j);
 
 // static int interval_is_intersect(Interval i, Interval j)
@@ -104,6 +103,10 @@ int interval_relation_gtu(Interval* out, uint64_t j);
 int interval_relation_gtei(Interval* out, int64_t j);
 int interval_relation_gteu(Interval* out, uint64_t j);
 
+int interval_relation_lt(Interval* out, Interval j, Sizing sz);
+int interval_relation_lte(Interval* out, Interval j, Sizing sz);
+int interval_relation_gt(Interval* out, Interval j, Sizing sz);
+int interval_relation_gte(Interval* out, Interval j, Sizing sz);
 int interval_relation_eq(Interval* out, Interval i);
 int interval_relation_neq(Interval* out, Interval j);
 
@@ -115,9 +118,14 @@ Interval interval_add(Interval i, Interval j);
 int interval_add_ofchk(Interval i, Interval j);
 Interval interval_neg(Interval i);
 int interval_neg_ofchk(Interval i);
-Interval interval_udiv(Interval i, Interval j);
+// zero on failure
+int interval_udiv(Interval* i, Interval j);
+// zero on failure
+int interval_div(Interval* i, Interval j);
 Interval interval_mult(Interval i, Interval j);
-Interval interval_div(Interval i, Interval j);
+Interval interval_band(Interval i, Interval j);
+Interval interval_bor(Interval a, Interval b);
+Interval interval_bxor(Interval a, Interval b);
 
 int64_t interval_signed_min(Interval i);
 int64_t interval_signed_max(Interval i);
@@ -146,3 +154,4 @@ Interval interval_lte(Interval a, Interval b);
 Interval interval_lteu(Interval a, Interval b);
 Interval interval_eq(Interval a, Interval b);
 Interval interval_equ(Interval a, Interval b);
+Interval interval_neq(Interval a, Interval b);

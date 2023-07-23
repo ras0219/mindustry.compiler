@@ -54,7 +54,8 @@
                             "id": "AST_DECL",
                             "tok": "x",
                             "type": false,
-                            "decls": []
+                            "decls": [],
+                            "field_slot": 1
                           }
                         ]
                       }

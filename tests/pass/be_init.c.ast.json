@@ -21,25 +21,29 @@
                   "id": "AST_DECL",
                   "tok": "x",
                   "type": false,
-                  "decls": []
+                  "decls": [],
+                  "field_slot": 1
                 },
                 {
                   "id": "AST_DECL",
                   "tok": "y",
                   "type": false,
-                  "decls": []
+                  "decls": [],
+                  "field_slot": 2
                 },
                 {
                   "id": "AST_DECL",
                   "tok": "z",
                   "type": false,
-                  "decls": []
+                  "decls": [],
+                  "field_slot": 3
                 },
                 {
                   "id": "AST_DECL",
                   "tok": "w",
                   "type": false,
-                  "decls": []
+                  "decls": [],
+                  "field_slot": 4
                 }
               ]
             }
@@ -69,13 +73,15 @@
                   "id": "AST_DECL",
                   "tok": "s1",
                   "type": false,
-                  "decls": []
+                  "decls": [],
+                  "field_slot": 1
                 },
                 {
                   "id": "AST_DECL",
                   "tok": "s2",
                   "type": false,
-                  "decls": []
+                  "decls": [],
+                  "field_slot": 6
                 }
               ]
             }
@@ -108,7 +114,8 @@
                     "id": "AST_DECLPTR",
                     "type": false
                   },
-                  "decls": []
+                  "decls": [],
+                  "field_slot": 1
                 }
               ]
             },
@@ -131,7 +138,8 @@
                     },
                     "type": false
                   },
-                  "decls": []
+                  "decls": [],
+                  "field_slot": 2
                 }
               ]
             }
@@ -189,14 +197,13 @@
                 "seq": [
                   {
                     "id": "AST_DECL",
-                    "tok": "s1",
+                    "tok": "a",
                     "type": false,
                     "decls": [],
                     "init": {
                       "id": "AST_INIT",
                       "elems": [
-                        0,
-                        0,
+                        2,
                         {
                           "id": "EXPR_LIT",
                           "value": 0
@@ -222,7 +229,6 @@
                     "init": {
                       "id": "AST_INIT",
                       "elems": [
-                        0,
                         1,
                         {
                           "id": "EXPR_FIELD",
