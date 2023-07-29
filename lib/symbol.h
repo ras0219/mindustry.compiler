@@ -11,6 +11,9 @@ typedef struct Attribute
 {
     unsigned char is_nonnull;
     unsigned char nonnull_addrs[10];
+    unsigned char noreturn;
+    unsigned char ret_nonnull;
+    struct Expr* pre;
 } Attribute;
 
 typedef struct TypeSymbol

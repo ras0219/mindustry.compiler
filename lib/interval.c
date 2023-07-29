@@ -83,6 +83,8 @@ static __forceinline int64_t interval_signed_from_i64(uint64_t i, uint32_t width
 
 int interval_contains_interval(Interval i, Interval j)
 {
+    if (j.sz.is_signed != i.sz.is_signed || j.sz.width != i.sz.width) abort();
+
     // consider cases with umax of 16:
     // (any, small) cannot contain (any, large)
     if (j.maxoff > i.maxoff) return 0;
@@ -91,31 +93,16 @@ int interval_contains_interval(Interval i, Interval j)
     // (1, 5) contains (2, 3)
     // (14, 10) contains (1, 1)
     // (1, 2) does not contain (2, 2)
-    return i.maxoff - j.maxoff >= j.base - i.base;
+    return i.maxoff - j.maxoff >= ((j.base - i.base) & s_umax_sizing[j.sz.width]);
 }
 
 void interval_fmt(Array* buf, Interval i)
 {
     if (i.sz.is_signed)
-        // array_appendf(buf,
-        //               "%lld to %lld",
-        //               interval_signed_min(i),
-        //               interval_signed_max(i));
         array_appendf(buf, "%lld (+%llu)", interval_signed_to_i64(i.base, i.sz.width), i.maxoff);
     else
         array_appendf(buf, "%llu to %llu", i.base, (i.base + i.maxoff) & s_umax_sizing[i.sz.width]);
 }
-// static uint64_t icast(uint64_t n, Sizing sz)
-// {
-//     switch (sz.width)
-//     {
-//         case 1: return sz.is_signed && n > INT8_MAX ? (n | INT8_MIN) : (n & UINT8_MAX);
-//         case 2: return sz.is_signed && n > INT16_MAX ? (n | INT16_MIN) : (n & UINT16_MAX);
-//         case 4: return sz.is_signed && n > INT32_MAX ? (n | INT32_MIN) : (n & UINT32_MAX);
-//         case 8: return n;
-//         default: abort();
-//     }
-// }
 Interval interval_merge(Interval i, Interval j)
 {
     if (i.sz.width != j.sz.width || i.sz.is_signed != j.sz.is_signed) abort();

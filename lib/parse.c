@@ -705,6 +705,29 @@ static const Token* parse_attribute(Parser* p, const Token* cur_tok, struct Attr
             goto error;
         }
     }
+    else if (strcmp(attrkind_str, "returns_nonnull") == 0)
+    {
+        attr->ret_nonnull = 1;
+        PARSER_DO(parse_until_comma_or_cparen(p, cur_tok));
+    }
+    else if (strcmp(attrkind_str, "pre") == 0)
+    {
+        if (token_is_sym(p, cur_tok, '('))
+        {
+            PARSER_DO(parse_expr(p, cur_tok + 1, &attr->pre, PRECEDENCE_COMMA));
+            cur_tok = token_consume_sym(p, cur_tok, ')', "in pre() attribute");
+        }
+        else
+        {
+            parser_tok_warn(cur_tok, "warning: ill-formed attribute. expected precondition expression.\n");
+            goto error;
+        }
+    }
+    else if (strcmp(attrkind_str, "__noreturn__") == 0 || strcmp(attrkind_str, "noreturn") == 0)
+    {
+        attr->noreturn = 1;
+        PARSER_DO(parse_until_comma_or_cparen(p, cur_tok));
+    }
     else
     {
         static const char* skip_attrs[] = {
@@ -1232,6 +1255,36 @@ fail:
     return cur_tok;
 }
 
+static int insert_definition(Parser* p, Decl* decl);
+static const struct Token* parse_attribute_plist_in_fn(
+    Parser* p, const struct Token* cur_tok, struct Decl* decl, struct DeclFn* fn, struct Attribute* attr)
+{
+    Decl* const prev_parent = p->parent;
+    scope_push_subscope(&p->scope);
+    p->parent = decl;
+    if (fn->is_param_list)
+    {
+        PARSER_FAIL("error: attributes on K&R style declarations are unsupported.\n");
+    }
+    else if (fn->seq.ext > 0)
+    {
+        void* const* const decls = (void**)p->expr_seqs.data + fn->seq.off;
+        for (size_t i = 0; i < fn->seq.ext; ++i)
+        {
+            StmtDecls* argdecl = decls[i];
+            if (argdecl->seq.ext != 1) abort();
+            PARSER_CHECK_NOT(insert_definition(p, ((void**)p->expr_seqs.data)[argdecl->seq.off]));
+        }
+    }
+    PARSER_DO(parse_attribute_plist(p, cur_tok, attr));
+fail:
+    // Remove function arguments from the scope
+    scope_pop_subscope(&p->scope);
+    p->parent = prev_parent;
+
+    return cur_tok;
+}
+
 static const struct Token* parse_declarator(Parser* p, const struct Token* cur_tok, struct Decl* decl)
 {
     Decl* const prev_parent = p->parent;
@@ -1253,7 +1306,14 @@ static const struct Token* parse_declarator(Parser* p, const struct Token* cur_t
     {
         if (cur_tok->type == LEX_ATTRIBUTE)
         {
-            PARSER_DO(parse_attribute_plist(p, cur_tok + 1, &decl->attr));
+            if (decl->type && decl->type->kind == AST_DECLFN)
+            {
+                PARSER_DO(parse_attribute_plist_in_fn(p, cur_tok + 1, decl, (DeclFn*)decl->type, &decl->attr));
+            }
+            else
+            {
+                PARSER_DO(parse_attribute_plist(p, cur_tok + 1, &decl->attr));
+            }
             continue;
         }
         else if (cur_tok->type == LEX_UUASM)
@@ -1439,13 +1499,19 @@ static int insert_declaration(Parser* p, Decl* decl, int in_subscope)
         }
         else
         {
-            make_new_sym(p, decl);
+            if (!decl->sym)
+                make_new_sym(p, decl);
+            else
+                decl->sym->last_decl = decl;
             scope_insert(scope, decl->sym, decl->sym->name);
         }
     }
     else
     {
-        make_new_sym(p, decl);
+        if (!decl->sym)
+            make_new_sym(p, decl);
+        else
+            decl->sym->last_decl = decl;
     }
 #if defined(TRACING_SCOPES)
     if (scope == &p->su_scope)
@@ -1462,7 +1528,7 @@ static int insert_definition(Parser* p, Decl* decl)
 {
     if (insert_declaration(p, decl, 1)) return 1;
 
-    if (decl->sym->def)
+    if (decl->sym->def && decl->sym->def != decl)
     {
         if (decl->specs->is_typedef)
         {

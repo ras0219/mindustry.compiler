@@ -1231,7 +1231,7 @@ static void elaborate_stmt(struct Elaborator* elab, struct Ast* ast)
         {
             struct StmtDecls* stmt = top;
             elaborate_declspecs(elab, stmt->specs);
-            Decl* const* const decls = (void*)((void**)elab->p->expr_seqs.data + stmt->seq.off);
+            Decl* const* const decls = (Decl* const*)elab->p->expr_seqs.data + stmt->seq.off;
             for (size_t i = 0; i < stmt->seq.ext; ++i)
                 elaborate_decl(elab, decls[i]);
             return;
@@ -1541,7 +1541,12 @@ static void elaborate_expr(struct Elaborator* elab, struct Expr* expr, struct Ty
     expr->elaborated = 1;
 }
 
-static void elaborate_expr_ExprRef(Elaborator* elab, ExprRef* e, TypeStr* rty) { *rty = e->sym->type; }
+static void elaborate_expr_ExprRef(Elaborator* elab, ExprRef* e, TypeStr* rty)
+{
+    if (!e->sym) abort();
+    *rty = e->sym->type;
+    if (rty->buf.buf[0] == 0) abort();
+}
 static void elaborate_expr_ExprCast(Elaborator* elab, ExprCast* e, TypeStr* rty)
 {
     TypeStr orig;
@@ -1647,10 +1652,7 @@ static void elaborate_decltype(Elaborator* elab, AstType* ast)
         {
             struct DeclFn* fn = (void*)ast;
             elaborate_decltype(elab, fn->type);
-            if (!fn->is_param_list)
-            {
-                elaborate_stmts(elab, fn->seq);
-            }
+            elaborate_stmts(elab, fn->seq);
             break;
         }
         case AST_DECLPTR:
@@ -1751,6 +1753,7 @@ static int elaborate_decl(Elaborator* const elab, Decl* const decl)
     if (!decl->prev_decl)
     {
         typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, &sym->type, decl);
+        if (sym->type.buf.buf[0] == 0) abort();
 
         unsigned int t = typestr_mask(&sym->type);
         sym->is_fn = !!(t & TYPE_FLAGS_FUNCTION);
@@ -1762,6 +1765,7 @@ static int elaborate_decl(Elaborator* const elab, Decl* const decl)
     {
         // Refresh symbol's type with concrete definition information
         typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, &sym->type, decl);
+        if (sym->type.buf.buf[0] == 0) abort();
 
         if (!decl->specs->is_typedef)
         {
@@ -1779,6 +1783,10 @@ static int elaborate_decl(Elaborator* const elab, Decl* const decl)
 
                 Decl* prev = elab->cur_decl;
                 elab->cur_decl = decl;
+                if (decl->attr.pre)
+                {
+                    elaborate_stmt(elab, &decl->attr.pre->ast);
+                }
                 elaborate_init_ty(elab, 0, 0, &sym->type, &sym->const_init, decl->init);
                 if (!typestr_is_const(&sym->type)) sym->const_init = s_not_constant;
                 elab->cur_decl = prev;

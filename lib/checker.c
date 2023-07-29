@@ -136,7 +136,6 @@ static void valinfo_init_addr(ValueInfo* info, const TypeStrBuf* tsb)
     memset(info, 0, sizeof(ValueInfo));
     info->kind = value_info_addr_any;
     info->addr.sym_type = *tsb;
-    info->addr.or_uninit = 1;
 }
 static void valinfo_init_integer(ValueInfo* info, Sizing sz, uint64_t value)
 {
@@ -378,10 +377,21 @@ static void check_fn_iter(Checker* chk)
 
 size_t check_push_ctx(Checker* chk)
 {
+    int is_void = chk->ctx->is_void;
     array_push(&chk->saved_ctx, chk->ctx, sizeof(CheckContext));
     memset(chk->ctx, 0, sizeof(CheckContext));
     size_t p = array_size(&chk->saved_ctx, sizeof(CheckContext));
     chk->ctx->parent = p;
+    chk->ctx->is_void = is_void;
+    return p;
+}
+static size_t check_ctx_nonvoid_parent(Checker* chk, size_t p)
+{
+    const CheckContext* const saved = chk->saved_ctx.data;
+    while (p && saved[p - 1].is_void)
+    {
+        p = saved[p - 1].parent;
+    }
     return p;
 }
 static size_t check_jumpdata_for_ast(Checker* chk, const Ast* ast)
@@ -686,6 +696,16 @@ static void check_valinfo_cast(Checker* chk, const TypeStrBuf* tsb, ValueInfo* v
             case TYPE_BYTE_ENUM: v->val = interval_cast(v->val, s_interval_i32.sz); break;
             default:
                 tsb_error1(rc, chk->elab->types, "error: cannot cast integer to type: %.*s\n", tsb);
+                *v = s_valueinfo_bottom;
+        }
+    }
+    else if (v->kind == value_info_addr_obj)
+    {
+        switch (tsb_byte(tsb))
+        {
+            case TYPE_BYTE_POINTER: v->addr.sym_type = *tsb; break;
+            default:
+                tsb_error1(rc, chk->elab->types, "error: cannot cast object address to type: %.*s\n", tsb);
                 *v = s_valueinfo_bottom;
         }
     }
@@ -1248,7 +1268,7 @@ static void check_compute_loop_syminfo(Checker* chk, const JumpData* lbl, Array*
 {
     if (lbl->goto_ctx == 0) return;
     CheckContext goto_ctx = {.parent = lbl->goto_ctx};
-    CheckContext label_ctx = {.parent = lbl->label_ctx};
+    CheckContext label_ctx = {.parent = check_ctx_nonvoid_parent(chk, lbl->label_ctx)};
     while (goto_ctx.parent != label_ctx.parent)
     {
         check_flatten_context(chk, goto_ctx.parent > label_ctx.parent ? &goto_ctx : &label_ctx);
@@ -1277,7 +1297,7 @@ static void check_label_subset(Checker* chk, JumpData* lbl)
 {
     if (lbl->goto_ctx == 0) return;
     CheckContext goto_ctx = {.parent = lbl->goto_ctx};
-    CheckContext label_ctx = {.parent = lbl->label_ctx};
+    CheckContext label_ctx = {.parent = check_ctx_nonvoid_parent(chk, lbl->label_ctx)};
     while (goto_ctx.parent != label_ctx.parent)
     {
         check_flatten_context(chk, goto_ctx.parent > label_ctx.parent ? &goto_ctx : &label_ctx);
@@ -1381,11 +1401,9 @@ static ValueInfo* check_refine_ssa(Checker* chk, CheckContext* ctx, size_t ssa)
     }
     return info;
 }
-
-static void check_refine_ssa_true(Checker* chk, CheckContext* ctx, size_t ssa)
+static void check_refine_valinfo_true(Checker* chk, CheckContext* ctx, ValueInfo* info)
 {
     if (ctx->is_void) return;
-    ValueInfo* info = check_refine_ssa(chk, ctx, ssa);
     switch (info->kind)
     {
         case value_info_sym_null: info->kind = value_info_sym; break;
@@ -1396,6 +1414,11 @@ static void check_refine_ssa_true(Checker* chk, CheckContext* ctx, size_t ssa)
         case value_info_null: ctx->is_void = 1; break;
         default: break;
     }
+}
+static void check_refine_ssa_true(Checker* chk, CheckContext* ctx, size_t ssa)
+{
+    if (ctx->is_void) return;
+    check_refine_valinfo_true(chk, ctx, check_refine_ssa(chk, ctx, ssa));
 }
 static void check_refine_ssa_false(Checker* chk, CheckContext* ctx, size_t ssa)
 {
@@ -1563,6 +1586,7 @@ struct Checker* checker_alloc(const struct Elaborator* elab)
 static void check_stmt(Checker* chk, const Ast* ast);
 static void check_expr(Checker* chk, const Expr* e, ValueInfo* result);
 static void check_cond(Checker* chk, const Expr* e, CheckContext* false_ctx);
+static void check_cond_with_result(Checker* chk, ValueInfo* result, CheckContext* false_ctx);
 
 static void check_ExprLit(Checker* chk, const ExprLit* e, ValueInfo* result)
 {
@@ -1663,8 +1687,11 @@ static void check_prove(Checker* chk, const Expr* e)
     }
 }
 
+static const TypeStrBuf s_tsb_valist_ptr = {.buf = {2, TYPE_BYTE_UUVALIST, TYPE_BYTE_POINTER}};
+
 static void check_ExprBuiltin(Checker* chk, const ExprBuiltin* e, ValueInfo* result)
 {
+    const RowCol* rc = token_rc(e->tok);
     switch (e->tok->type)
     {
         case LEX_PROVE:;
@@ -1672,11 +1699,65 @@ static void check_ExprBuiltin(Checker* chk, const ExprBuiltin* e, ValueInfo* res
             check_prove(chk, e->expr1);
             chkctx_clear(chk->ctx);
             chk->ctx->parent = saved_ctx;
+            *result = s_valueinfo_void;
+            break;
+        case LEX_SIZEOF: valinfo_init_integer(result, s_sizing_ptr, e->sizeof_size); break;
+        case LEX_UUVA_START:
+            check_expr(chk, e->expr1, result);
+            if (result->kind == value_info_bottom)
+            {
+            }
+            else if (result->kind == value_info_sym)
+            {
+                ValueInfo any_valist;
+                valinfo_init_agg_any(&any_valist, &s_tsb_valist_ptr);
+                check_assign_sym(chk, &result->sym, &any_valist, rc);
+            }
+            else
+            {
+                parser_ferror(rc,
+                              "error: va_start must be called on a concrete object (was %s)\n",
+                              value_info_kind_to_string(result->kind));
+            }
+            check_expr(chk, e->expr2, result);
+            *result = s_valueinfo_void;
+            break;
+        case LEX_UUVA_ARG:
+            check_expr(chk, e->expr1, result);
+            // TODO: ensure expr1 is initialized and valid
+            check_any_from_decl(chk, result, e->type, rc);
+            break;
+        case LEX_UUVA_END:
+            check_expr(chk, e->expr1, result);
+            // TODO: ensure expr1 is initialized and valid
+            *result = s_valueinfo_void;
+            break;
+        case LEX_UUVA_COPY:
+            check_expr(chk, e->expr1, result);
+            if (result->kind == value_info_bottom)
+            {
+            }
+            else if (result->kind == value_info_sym)
+            {
+                ValueInfo any_valist;
+                valinfo_init_agg_any(&any_valist, &s_tsb_valist_ptr);
+                check_assign_sym(chk, &result->sym, &any_valist, rc);
+            }
+            else
+            {
+                parser_ferror(rc,
+                              "error: va_start must be called on a concrete object (was %s)\n",
+                              value_info_kind_to_string(result->kind));
+            }
+            check_expr(chk, e->expr2, result);
+            // TODO: ensure expr2 is initialized and valid
+            *result = s_valueinfo_void;
             break;
         default:
-            parser_tok_error(e->tok, "error: unimplemented Builtin checker (%s)\n", lexstate_to_string(e->tok->type));
+            parser_ferror(rc, "error: unimplemented Builtin checker (%s)\n", lexstate_to_string(e->tok->type));
+            *result = s_valueinfo_void;
+            break;
     }
-    *result = s_valueinfo_void;
 }
 
 static void check_ExprAddress(Checker* chk, const ExprAddress* e, ValueInfo* result)
@@ -1809,13 +1890,46 @@ static void check_ExprBinOp_finish(Checker* chk, const ExprBinOp* e, ValueInfo* 
     }
 }
 
+static void check_ExprComma(Checker* chk, const ExprComma* e, ValueInfo* result)
+{
+    ValueInfo tmp;
+    check_expr(chk, e->lhs, &tmp);
+    check_expr(chk, e->rhs, result);
+}
+
+static void check_cond_ExprComma(Checker* chk, const ExprComma* e, CheckContext* false_ctx)
+{
+    ValueInfo tmp;
+    check_expr(chk, e->lhs, &tmp);
+    check_cond(chk, e->rhs, false_ctx);
+}
+
 static void check_ExprBinOp(Checker* chk, const ExprBinOp* e, ValueInfo* result)
 {
     check_expr(chk, e->lhs, result);
-    if (e->tok->type == TOKEN_SYM1(',')) return check_expr(chk, e->rhs, result);
     ValueInfo rhs;
     check_expr(chk, e->rhs, &rhs);
     check_ExprBinOp_finish(chk, e, result, &rhs);
+}
+
+static void check_cond_ExprUnOp(Checker* chk, const ExprUnOp* e, CheckContext* false_ctx)
+{
+    ValueInfo result;
+    switch (e->tok->type)
+    {
+        case TOKEN_SYM1('!'):
+            check_push_ctx(chk);
+            chkctx_clone(false_ctx, chk->ctx);
+            CheckContext* true_ctx = chk->ctx;
+            chk->ctx = false_ctx;
+            check_cond(chk, e->lhs, true_ctx);
+            chk->ctx = true_ctx;
+            break;
+        default:
+            check_expr(chk, e->lhs, &result);
+            check_cond_with_result(chk, &result, false_ctx);
+            break;
+    }
 }
 
 static void check_cond_ExprBinOp(Checker* chk, const ExprBinOp* e, CheckContext* false_ctx)
@@ -1920,7 +2034,7 @@ static void check_addsub_valinfo(
     {
         case value_info_bottom: return;
         case value_info_sym:;
-            // TODO: ensure pointer arithmetic is part of an array
+            // TODO: ensure pointer arithmetic is part of a valid array
             const Symbol* sym = result->sym.field;
             if (!sym) sym = result->sym.sym;
             TypeStrBuf tsb = sym->type.buf;
@@ -1939,6 +2053,12 @@ static void check_addsub_valinfo(
                 // add
                 result->val = chk_add_ofchk(chk, result->val, rhs->val, sz, rc);
             }
+            break;
+        case value_info_addr_any:
+            parser_ferror(rc, "error: possible arithmetic on null pointer\n");
+            result->kind = value_info_addr_obj;
+        case value_info_addr_obj:
+            // TODO: ensure pointer arithmetic is part of a valid array
             break;
         default:
             array_clear(&chk->fmt_tmp);
@@ -2007,7 +2127,7 @@ static void check_ExprAssign(Checker* chk, const ExprAssign* e, ValueInfo* resul
     check_expr(chk, e->lhs, result);
     ValueInfo rhs;
     check_expr(chk, e->rhs, &rhs);
-    if (result->kind == value_info_bottom)
+    if (result->kind == value_info_bottom || rhs.kind == value_info_bottom)
     {
         return;
     }
@@ -2026,6 +2146,7 @@ static void check_ExprAssign(Checker* chk, const ExprAssign* e, ValueInfo* resul
         }
         else
         {
+            check_valinfo_cast(chk, &pointed_ty, &rhs, token_rc(e->tok));
             check_invalidate_tbaa(chk, &pointed_ty, &rhs, token_rc(e->tok));
         }
     }
@@ -2108,6 +2229,7 @@ static void check_ExprCall(Checker* chk, const ExprCall* e, ValueInfo* result)
     }
     FnTypeInfo fn_info = tsb_strip_fn(chk->elab->types, &rtsb);
     const CallParam* params = parser_params(chk->elab->p, e);
+    Array args = {0};
     for (size_t i = 0; i < e->param_extent; ++i)
     {
         const TypeStrBuf* arg_ty = i < fn_info.extent ? tt_fn_arg(chk->elab->types, fn_info.offset + i) : NULL;
@@ -2146,8 +2268,44 @@ static void check_ExprCall(Checker* chk, const ExprCall* e, ValueInfo* result)
             if (arg.addr.or_uninit)
                 parser_tok_error(e->tok, "error: passing pointer to possibly uninitialized is not allowed\n");
         }
+        array_push(&args, &arg, sizeof(ValueInfo));
     }
+
     check_any_from_type(chk, result, &rtsb, token_rc(e->tok));
+
+    if (!chk->ctx->is_void && fn_decl && fn_decl->type->kind == AST_DECLFN)
+    {
+        if (fn_decl->attr.pre)
+        {
+            const DeclFn* declfn = (DeclFn*)fn_decl->type;
+            const size_t prev_ctx = check_push_ctx(chk);
+            const StmtDecls* const* const stmts = chk->elab->p->expr_seqs.data;
+            const Decl* const* decls = chk->elab->p->expr_seqs.data;
+            if (e->param_extent < declfn->seq.ext) abort();
+            for (size_t j = 0; j < declfn->seq.ext; ++j)
+            {
+                const StmtDecls* const stmt = stmts[declfn->seq.off + j];
+                if (stmt->ast.kind != STMT_DECLS) abort();
+                if (stmt->seq.ext != 1) abort();
+                if (decls[stmt->seq.off]->kind != AST_DECL) abort();
+                const Decl* arg_decl = decls[stmt->seq.off];
+                check_init_sym(chk, arg_decl->sym, (ValueInfo*)args.data + j, token_rc(arg_decl->tok));
+            }
+            check_prove(chk, fn_decl->attr.pre);
+            chkctx_clear(chk->ctx);
+            chk->ctx->parent = prev_ctx;
+        }
+        if (fn_decl->attr.noreturn)
+        {
+            chk->ctx->is_void = 1;
+        }
+        if (fn_decl->attr.ret_nonnull)
+        {
+            check_refine_valinfo_true(chk, chk->ctx, result);
+        }
+    }
+
+    array_destroy(&args);
 }
 static void check_ExprIncr(Checker* chk, const ExprIncr* e, ValueInfo* result)
 {
@@ -2225,6 +2383,7 @@ static void check_expr_impl(Checker* chk, const Expr* e, ValueInfo* result)
         DISPATCH_CHECK(ExprBinOp);
         DISPATCH_CHECK(ExprAndOr);
         DISPATCH_CHECK(ExprAdd);
+        DISPATCH_CHECK(ExprComma);
         DISPATCH_CHECK(ExprDeref);
         DISPATCH_CHECK(ExprBuiltin);
         DISPATCH_CHECK(ExprUnOp);
@@ -2253,31 +2412,38 @@ static void check_expr(Checker* chk, const Expr* e, ValueInfo* result)
     if (result->kind > value_info_void) abort();
 }
 
+static void check_cond_with_result(Checker* chk, ValueInfo* result, CheckContext* false_ctx)
+{
+    chkctx_clear(false_ctx);
+    size_t x = check_push_ctx(chk);
+    false_ctx->parent = x;
+    if (result->ref_ssa)
+    {
+        check_refine_ssa_true(chk, chk->ctx, result->ref_ssa);
+        check_refine_ssa_false(chk, false_ctx, result->ref_ssa);
+    }
+    else
+    {
+        value_cast_to_bool(result);
+        if (!interval_contains_nonzero(result->val)) chk->ctx->is_void = 1;
+        if (!interval_contains_0(result->val)) false_ctx->is_void = 1;
+    }
+}
+
 static void check_cond_impl(Checker* chk, const Expr* e, CheckContext* false_ctx)
 {
+    ValueInfo result;
     switch (e->kind)
     {
 #define DISPATCH_CHECK(type) DISPATCH(check_cond_, type, e, false_ctx)
+        DISPATCH_CHECK(ExprUnOp);
+        DISPATCH_CHECK(ExprComma);
         DISPATCH_CHECK(ExprBinOp);
         DISPATCH_CHECK(ExprAndOr);
 #undef DISPATCH_CHECK
-        default:;
-            ValueInfo result;
+        default:
             check_expr(chk, e, &result);
-            chkctx_clear(false_ctx);
-            size_t x = check_push_ctx(chk);
-            false_ctx->parent = x;
-            if (result.ref_ssa)
-            {
-                check_refine_ssa_true(chk, chk->ctx, result.ref_ssa);
-                check_refine_ssa_false(chk, false_ctx, result.ref_ssa);
-            }
-            else
-            {
-                value_cast_to_bool(&result);
-                if (!interval_contains_nonzero(result.val)) chk->ctx->is_void = 1;
-                if (!interval_contains_0(result.val)) false_ctx->is_void = 1;
-            }
+            check_cond_with_result(chk, &result, false_ctx);
             break;
     }
 }
@@ -2331,6 +2497,11 @@ static void check_FnParams(Checker* chk, const Decl* e)
         if (decls[stmt->seq.off]->ast.kind != AST_DECL) abort();
         check_FnParam(chk, decls[stmt->seq.off], j, e);
         ++j;
+    }
+    if (e->attr.pre)
+    {
+        CheckContext false_ctx = {};
+        check_cond(chk, e->attr.pre, &false_ctx);
     }
 }
 static void check_merge_jump_data(
@@ -2626,19 +2797,23 @@ static void check_StmtLoop(Checker* chk, const StmtLoop* e)
         check_stmt(chk, e->init);
     }
     const size_t top_label = check_jumpdata_for_ast(chk, &e->ast);
-    if (e->is_do_while) abort();
     if (!e->cond) abort();
 
     CheckContext false_ctx = {0};
-    check_cond(chk, e->cond, &false_ctx);
+    if (!e->is_do_while) check_cond(chk, e->cond, &false_ctx);
     check_stmt(chk, e->body);
-    check_stmt(chk, &e->advance->ast);
-    check_get_jumpdata(chk, top_label)->goto_ctx = check_push_ctx(chk);
+    if (e->advance) check_stmt(chk, &e->advance->ast);
+    if (e->is_do_while) check_cond(chk, e->cond, &false_ctx);
+    if (!chk->ctx->is_void)
+    {
+        check_get_jumpdata(chk, top_label)->goto_ctx = check_push_ctx(chk);
+    }
     check_merge_context(chk, chk->ctx, &false_ctx, token_rc(e->tok));
     chkctx_destroy(&false_ctx);
 }
 static void check_StmtGoto(Checker* chk, const StmtGoto* e)
 {
+    if (chk->ctx->is_void) return;
     const size_t i = check_jumpdata_for_label(chk, &e->ast, e->dst);
     JumpData* jdata = check_get_jumpdata(chk, i);
     if (jdata->goto_ctx != 0)
@@ -2661,10 +2836,14 @@ static void check_StmtLabel(Checker* chk, const StmtLabel* e)
         chkctx_destroy(&incoming);
     }
     jdata->goto_ctx = 0;
-    CheckContext iter_ctx = {.parent = check_push_ctx(chk)};
-    check_create_context(chk, &iter_ctx, jdata, token_rc(e->tok));
-    check_merge_context(chk, chk->ctx, &iter_ctx, token_rc(e->tok));
-    jdata->label_ctx = check_push_ctx(chk);
+    if (jdata->seq.ext)
+    {
+        CheckContext iter_ctx = {.parent = check_ctx_nonvoid_parent(chk, check_push_ctx(chk))};
+        check_create_context(chk, &iter_ctx, jdata, token_rc(e->tok));
+        check_merge_context(chk, chk->ctx, &iter_ctx, token_rc(e->tok));
+        jdata->label_ctx = check_push_ctx(chk);
+        chkctx_destroy(&iter_ctx);
+    }
     check_stmt(chk, e->stmt);
 }
 static void check_StmtReturn(Checker* chk, const StmtReturn* e)
@@ -2694,6 +2873,7 @@ static void check_stmt(Checker* chk, const Ast* ast)
         DISPATCH_CHECK(StmtLoop);
         DISPATCH_CHECK(StmtReturn);
         DISPATCH_CHECK(StmtBlock);
+        case STMT_NONE: break;
         default: parser_tok_error(ast->tok, "error: unknown stmt kind: %s\n", ast_kind_to_string(ast->kind)); return;
     }
 }
