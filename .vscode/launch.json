@@ -8,12 +8,12 @@
             "name": "Launch MacOS",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/out/runall-test",
+            "program": "${workspaceFolder}/out.tracing/out1/runall-test",
             "args": [
-                "/opt/src/mindustry.compiler"
+                "${workspaceFolder}"
             ],
             "stopAtEntry": false,
-            "cwd": "${workspaceFolder}",
+            "cwd": "${workspaceFolder}/out.tracing",
             "environment": [],
             "MIMode": "lldb"
         },
