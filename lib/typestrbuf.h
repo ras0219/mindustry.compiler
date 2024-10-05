@@ -45,6 +45,7 @@ typedef struct TypeStrBuf
     Y(TYPE_BYTE_VOLATILE, 'v')                                                                                         \
     Y(TYPE_BYTE_RESTRICT, 'r')                                                                                         \
     Y(TYPE_BYTE_POINTER, 'p')                                                                                          \
+    Y(TYPE_BYTE_REFERENCE, '&')                                                                                        \
     Y(TYPE_BYTE_ARRAY, '[')                                                                                            \
     Y(TYPE_BYTE_UNK_ARRAY, ']')                                                                                        \
     Y(TYPE_BYTE_FUNCTION, '(')                                                                                         \
@@ -109,6 +110,7 @@ void tsb_remove_pointer(TypeStrBuf* s);
 void tsb_add_cvr(TypeStrBuf* s, unsigned int mask);
 unsigned int tsb_get_cvr(const TypeStrBuf* ts);
 unsigned int tsb_strip_cvr(TypeStrBuf* ts);
+unsigned int tsb_strip_cvrR(TypeStrBuf* ts);
 unsigned int tsb_get_offset(const TypeStrBuf* ts);
 unsigned int tsb_pop_offset(TypeStrBuf* ts);
 int tsb_decay(TypeStrBuf* t);
@@ -147,6 +149,14 @@ __forceinline unsigned long long tsb_get_align(const struct TypeTable* types,
 {
     return tsb_get_align_i(types, ts, ts->buf[0], rc);
 }
+__forceinline int tsb_is_reference(const TypeStrBuf* ts) { return ts->buf[ts->buf[0]] == TYPE_BYTE_REFERENCE; }
+
+void tsb_remove_reference(struct TypeStrBuf* ts);
+void tsb_reference_to_pointer(struct TypeStrBuf* ts);
+void tsb_add_reference(struct TypeStrBuf* ts);
+void tsb_remove_array(struct TypeStrBuf* ts);
+int tsb_is_char_array(const struct TypeStrBuf* ts);
+static __forceinline int tsb_is_aggregate(const TypeStrBuf* ts) { return !!(tsb_mask(ts) & TYPE_MASK_AGGREGATE); }
 
 unsigned long long tsb_get_add_size(const struct TypeTable* types, const TypeStrBuf* ts, const struct RowCol* rc);
 

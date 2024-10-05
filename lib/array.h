@@ -44,6 +44,7 @@ __forceinline void array_copy(struct Array* arr, const struct Array* other)
 }
 void array_pop(struct Array* arr, size_t sz);
 void array_destroy(struct Array* arr);
+void array_insert(struct Array* arr, size_t offset, const void* data, size_t sz);
 
 // Does not append null byte
 void array_appendf(struct Array* arr, const char* fmt, ...);

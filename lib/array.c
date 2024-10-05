@@ -65,6 +65,17 @@ void array_assign(struct Array* arr, const void* src, size_t n)
 }
 void array_pop(struct Array* arr, size_t sz) { arr->sz -= sz; }
 void array_destroy(struct Array* arr) { my_free(arr->data); }
+void array_insert(struct Array* arr, size_t offset, const void* data, size_t sz)
+{
+    if (offset == arr->sz)
+    {
+        array_push(arr, data, sz);
+        return;
+    }
+    array_alloc(arr, sz);
+    memmove(arr->data + offset, arr->data + offset + sz, arr->sz - offset - sz);
+    memcpy(arr->data + offset, data, sz);
+}
 
 size_t array_appends(struct Array* arr, const char* s)
 {

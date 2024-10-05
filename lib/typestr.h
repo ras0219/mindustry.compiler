@@ -124,7 +124,6 @@ static __forceinline int typestr_is_aggregate(const struct TypeStr* ts)
     return !!(typestr_mask(ts) & TYPE_MASK_AGGREGATE);
 }
 static __forceinline int typestr_is_unknown(const TypeStr* ts) { return ts->buf.buf[0] == 0; }
-int typestr_is_char_array(const struct TypeStr* ts);
 
 static __forceinline unsigned int typestr_strip_cvr(struct TypeStr* ts) { return tsb_strip_cvr(&ts->buf); }
 static __forceinline unsigned int typestr_get_cvr(const TypeStr* ts) { return tsb_get_cvr(&ts->buf); }

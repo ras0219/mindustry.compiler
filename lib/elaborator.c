@@ -95,7 +95,7 @@ static int elaborate_declspecs(struct Elaborator* elab, struct DeclSpecs* specs)
 static void elaborate_stmt(struct Elaborator* elab, struct Ast* ast);
 static void elaborate_expr(struct Elaborator* elab, struct Expr* top_expr, struct TypeStr* rty);
 static void elaborate_expr_decay(struct Elaborator* elab, struct Expr* top_expr, struct TypeStr* rty);
-static void elaborate_expr_address(struct Elaborator* elab, struct Expr* expr, struct TypeStr* rty);
+// static void elaborate_expr_address(struct Elaborator* elab, struct Expr* expr, struct TypeStr* rty);
 static void elaborate_expr_lvalue(struct Elaborator* elab, struct Expr* top_expr, struct TypeStr* rty);
 
 enum
@@ -445,7 +445,12 @@ static void elaborate_expr_ExprAssign(struct Elaborator* elab, struct ExprAssign
 {
     const RowCol* const rc = &e->tok->rc;
     elaborate_expr_lvalue(elab, e->lhs, rty);
-    typestr_dereference(rty);
+    tsb_remove_reference(&rty->buf);
+    if (!rty->buf.buf[0])
+    {
+        typestr_error1(rc, elab->types, "error: expected reference on LHS of assignment, but got '%.*s'\n", rty);
+        return;
+    }
     e->lhs_sizing = typestr_calc_sizing(elab->types, rty, token_rc(e->tok));
     const struct TypeStr orig_lhs = *rty;
     if (typestr_is_const(rty))
@@ -781,9 +786,15 @@ static void elaborate_expr_ExprUnOp(struct Elaborator* elab, struct ExprUnOp* e,
 static void elaborate_expr_ExprDeref(struct Elaborator* elab, struct ExprDeref* e, struct TypeStr* rty)
 {
     elaborate_expr_decay(elab, e->lhs, rty);
+    typestr_dereference(rty);
+}
+static void elaborate_expr_lvalue_ExprDeref(Elaborator* elab, ExprDeref* e, TypeStr* rty)
+{
+    elaborate_expr_decay(elab, e->lhs, rty);
     if (typestr_byte(rty) == TYPE_BYTE_POINTER)
     {
-        typestr_dereference(rty);
+        tsb_strip_cvr(&rty->buf);
+        rty->buf.buf[rty->buf.buf[0]] = TYPE_BYTE_REFERENCE;
     }
     else
     {
@@ -791,18 +802,15 @@ static void elaborate_expr_ExprDeref(struct Elaborator* elab, struct ExprDeref* 
         *rty = s_type_unknown;
     }
 }
-static void elaborate_expr_lvalue_ExprDeref(Elaborator* elab, ExprDeref* e, TypeStr* rty)
-{
-    elaborate_expr_decay(elab, e->lhs, rty);
-}
 static void elaborate_expr_ExprAddress(struct Elaborator* elab, struct ExprAddress* e, struct TypeStr* rty)
 {
     elaborate_expr_lvalue(elab, e->lhs, rty);
+    tsb_reference_to_pointer(&rty->buf);
 }
 static void elaborate_expr_ExprIncr(struct Elaborator* elab, struct ExprIncr* e, struct TypeStr* rty)
 {
     elaborate_expr_lvalue(elab, e->lhs, rty);
-    typestr_dereference(rty);
+    tsb_remove_reference(&rty->buf);
     e->inner_sizing = typestr_calc_sizing(elab->types, rty, token_rc(e->tok));
     const struct TypeStr orig_lhs = *rty;
     unsigned int lhs_mask = typestr_mask(rty);
@@ -844,14 +852,14 @@ typedef struct DInitFrame
     uint32_t elem_size;
     size_t elem_slots;
     /// Always cvr-stripped
-    struct TypeStr ty;
+    struct TypeStrBuf ty;
 } DInitFrame;
 
 typedef struct DInitIter
 {
     size_t slot;
     size_t offset;
-    TypeStr cur_ty;
+    TypeStrBuf cur_ty;
     /// Array<DInitFrame>
     Array stk;
 } DInitIter;
@@ -863,14 +871,14 @@ static int di_fill_frame(DInitFrame* frame,
                          Elaborator* elab,
                          size_t offset,
                          size_t slot,
-                         const TypeStr* parent_ty,
+                         const TypeStrBuf* parent_ty,
                          size_t designator_idx,
                          const RowCol* rc)
 {
     memset(frame, 0, sizeof(*frame));
     frame->ty = *parent_ty;
-    typestr_strip_cvr(&frame->ty);
-    char b = frame->ty.buf.buf[frame->ty.buf.buf[0]];
+    tsb_strip_cvrR(&frame->ty);
+    char b = frame->ty.buf[frame->ty.buf[0]];
     switch (b)
     {
         case TYPE_BYTE_UNK_ARRAY:
@@ -883,12 +891,12 @@ static int di_fill_frame(DInitFrame* frame,
             }
             else
             {
-                frame->extent = typestr_get_offset(&frame->ty);
+                frame->extent = tsb_get_offset(&frame->ty);
             }
-            typestr_remove_array(&frame->ty);
-            typestr_strip_cvr(&frame->ty);
-            frame->elem_size = typestr_get_size(elab->types, &frame->ty, rc);
-            frame->elem_slots = tsb_calc_slots(elab->types, &frame->ty.buf, rc);
+            tsb_remove_array(&frame->ty);
+            tsb_strip_cvr(&frame->ty);
+            frame->elem_size = tsb_get_size(elab->types, &frame->ty, rc);
+            frame->elem_slots = tsb_calc_slots(elab->types, &frame->ty, rc);
             if (frame->extent == 0)
             {
                 return parser_ferror(rc, "error: array must have nonzero extent\n");
@@ -918,7 +926,7 @@ static int di_fill_frame(DInitFrame* frame,
         case TYPE_BYTE_UNION: frame->is_union = 1;
         case TYPE_BYTE_STRUCT:
         {
-            TypeSymbol* sym = typestr_get_decl(elab->types, &frame->ty);
+            TypeSymbol* sym = tsb_get_decl(elab->types, &frame->ty);
             if (!sym || !sym->def)
             {
                 return parser_ferror(rc, "error: incomplete type\n");
@@ -946,8 +954,8 @@ static int di_fill_frame(DInitFrame* frame,
             }
             frame->slot += slot;
             frame->offset += offset;
-            typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, &frame->ty, frame->field->def);
-            typestr_strip_cvr(&frame->ty);
+            frame->ty = frame->field->type.buf;
+            tsb_strip_cvrR(&frame->ty);
             return 0;
         }
         default: return parser_ferror(rc, "error: unimplemented type for initializer list\n");
@@ -967,7 +975,7 @@ static int di_enter(DInitIter* i, struct Elaborator* elab, const RowCol* rc)
 }
 
 static int di_reset(
-    DInitIter* i, struct Elaborator* elab, size_t offset, size_t slot, const struct TypeStr* dty, const RowCol* rc)
+    DInitIter* i, struct Elaborator* elab, size_t offset, size_t slot, const struct TypeStrBuf* dty, const RowCol* rc)
 {
     i->slot = slot;
     i->offset = offset;
@@ -1002,21 +1010,22 @@ loop:;
         if (back->field == NULL) goto pop;
         back->offset += back->field->field_offset;
         back->slot += back->field->field_slot;
-        typestr_from_decltype_Decl(elab->p->expr_seqs.data, elab->types, &back->ty, back->field->def);
-        typestr_strip_cvr(&back->ty);
+        back->ty = back->field->type.buf;
+        tsb_strip_cvrR(&back->ty);
     }
 }
 
 static int di_end(DInitIter* i) { return 0 == i->stk.sz; }
 
 static void elaborate_init_ty_AstInit(
-    struct Elaborator* elab, size_t offset, size_t slot, const TypeStr* dty, struct AstInit* init)
+    struct Elaborator* elab, size_t offset, size_t slot, const TypeStrBuf* dty, struct AstInit* init)
 {
-    if (typestr_is_char_array(dty) && init->is_braced_strlit)
+    if (tsb_is_char_array(dty) && init->is_braced_strlit)
     {
         TypeStr ts;
         elaborate_expr(elab, (Expr*)init->init, &ts);
         init->slot = slot;
+        init->slot_extent = tsb_calc_slots(elab->types, &ts.buf, token_rc(init->tok));
         return;
     }
 
@@ -1051,8 +1060,9 @@ static void elaborate_init_ty_AstInit(
         if (init->init->kind == AST_INIT)
         {
             init->slot = back->slot;
+            init->slot_extent = back->elem_slots;
             init->offset = back->offset;
-            init->width = typestr_calc_sizing(elab->types, &back->ty, rc).width;
+            init->width = tsb_calc_sizing(elab->types, &back->ty, rc).width;
             elaborate_init_ty_AstInit(elab, back->offset, back->slot, &back->ty, (AstInit*)init->init);
         }
         else
@@ -1068,19 +1078,20 @@ static void elaborate_init_ty_AstInit(
             const int ts_is_strlit = expr->kind == EXPR_STRLIT;
             elaborate_expr_decay(elab, expr, &ts);
 
-            while (typestr_is_aggregate(&back->ty))
+            while (tsb_is_aggregate(&back->ty))
             {
-                if (ts_is_strlit && typestr_is_char_array(&back->ty)) goto skip_conversion;
-                if (tsb_match(&back->ty.buf, &ts.buf)) break;
+                if (ts_is_strlit && tsb_is_char_array(&back->ty)) goto skip_conversion;
+                if (tsb_match(&back->ty, &ts.buf)) break;
                 if (di_enter(&iter, elab, token_rc(init->tok))) goto fail;
                 back = array_back(&iter.stk, sizeof(*back));
             }
-            typestr_implicit_conversion(elab->types, rc, &ts, &back->ty);
+            typestr_implicit_conversion2(elab->types, rc, &ts, &back->ty);
         skip_conversion:
-            init->is_aggregate_init = typestr_is_aggregate(&back->ty);
+            init->is_aggregate_init = tsb_is_aggregate(&back->ty);
             init->offset = back->offset;
             init->slot = back->slot;
-            init->width = typestr_calc_sizing(elab->types, &back->ty, rc).width;
+            init->slot_extent = back->elem_slots;
+            init->width = tsb_calc_sizing(elab->types, &back->ty, rc).width;
         }
     }
 
@@ -1095,23 +1106,20 @@ fail:
 }
 
 static void elaborate_init_ty(
-    struct Elaborator* elab, size_t offset, size_t slot, const TypeStr* dty, Constant* c, struct Ast* ast)
+    struct Elaborator* elab, size_t offset, size_t slot, const TypeStrBuf* dty, Constant* c, struct Ast* ast)
 {
     if (ast->kind == AST_INIT)
     {
         return elaborate_init_ty_AstInit(elab, offset, slot, dty, (struct AstInit*)ast);
     }
-    const char tyb = typestr_byte(dty);
+    const char tyb = tsb_byte(dty);
     switch (tyb)
     {
         case TYPE_BYTE_FUNCTION: elaborate_stmt(elab, ast); break;
         case TYPE_BYTE_ARRAY:
         case TYPE_BYTE_UNK_ARRAY:
         {
-            TypeStr ts = *dty;
-            typestr_remove_array(&ts);
-            typestr_strip_cvr(&ts);
-            if (!tsb_match(&ts.buf, &s_type_char.buf))
+            if (!tsb_is_char_array(dty))
             {
                 parser_tok_error(ast->tok, "error: array initializer must be an initializer list\n");
                 break;
@@ -1122,6 +1130,7 @@ static void elaborate_init_ty(
                                  "error: array initializer must be an initializer list or a string literal\n");
                 break;
             }
+            TypeStr ts;
             elaborate_expr(elab, (Expr*)ast, &ts);
             break;
         }
@@ -1138,12 +1147,9 @@ static void elaborate_init_ty(
             // standard expression initialization
             struct TypeStr ts;
             elaborate_expr_decay(elab, expr, &ts);
-            typestr_implicit_conversion(elab->types, token_rc(ast->tok), &ts, dty);
-            if (typestr_is_const(dty))
-            {
-                *c = ts.c;
-                constant_load_lvalue(c);
-            }
+            typestr_implicit_conversion2(elab->types, token_rc(ast->tok), &ts, dty);
+            *c = ts.c;
+            constant_load_lvalue(c);
         }
     }
 }
@@ -1191,9 +1197,9 @@ static void elaborate_stmt(struct Elaborator* elab, struct Ast* ast)
             {
                 struct TypeStr ts;
                 elaborate_expr_decay(elab, stmt->expr, &ts);
-                struct TypeStr fn = elab->cur_decl->sym->type;
-                typestr_pop_offset(&fn);
-                typestr_implicit_conversion(elab->types, token_rc(stmt->tok), &ts, &fn);
+                TypeStrBuf ret_ty;
+                tsb_copy_elem_type(&ret_ty, &elab->cur_decl->sym->type.buf);
+                typestr_implicit_conversion2(elab->types, token_rc(stmt->tok), &ts, &ret_ty);
             }
 
             return;
@@ -1400,18 +1406,13 @@ static void elaborate_expr_ExprCall(struct Elaborator* elab,
 
 static void elaborate_expr_impl(struct Elaborator* elab, struct Expr* top_expr, struct TypeStr* rty);
 
-static void elaborate_expr_lvalue_ExprRef(Elaborator* elab, ExprRef* e, TypeStr* rty)
-{
-    *rty = e->sym->type;
-    typestr_addressof(rty);
-}
+static void elaborate_expr_lvalue_ExprRef(Elaborator* elab, ExprRef* e, TypeStr* rty) { *rty = e->sym->type; }
 
 static void elaborate_expr_ExprField_lhs(Elaborator* elab, ExprField* f, TypeStr* rty)
 {
     if (typestr_is_unknown(rty)) return;
     const RowCol* rc = token_rc(f->tok);
     const struct TypeStr orig_lhs = *rty;
-    typestr_dereference(rty);
     unsigned int cvr_mask = typestr_strip_cvr(rty);
     TypeSymbol* sym = typestr_get_decl(elab->types, rty);
     if (sym)
@@ -1424,6 +1425,7 @@ static void elaborate_expr_ExprField_lhs(Elaborator* elab, ExprField* f, TypeStr
             {
                 f->field = field;
                 rty->buf = field->type.buf;
+                tsb_remove_reference(&rty->buf);
                 if (rty->c.is_const && rty->c.is_lvalue)
                 {
                     mpa_add(&rty->c.value, mp_from_u64(f->field_offset));
@@ -1467,15 +1469,21 @@ static void elaborate_expr_ExprField(struct Elaborator* elab, struct ExprField* 
     fprintf(stderr, " EXPR_FIELD\n");
 #endif
 
-    elaborate_expr_address(elab, e->lhs, rty);
+    elaborate_expr(elab, e->lhs, rty);
+    e->lhs_type = rty->buf;
     elaborate_expr_ExprField_lhs(elab, e, rty);
 }
 
 static void elaborate_expr_lvalue_ExprField(Elaborator* elab, ExprField* e, TypeStr* rty)
 {
     elaborate_expr_lvalue(elab, e->lhs, rty);
-    elaborate_expr_ExprField_lhs(elab, e, rty);
-    typestr_addressof(rty);
+    if (rty->buf.buf[0] != 0)
+    {
+        tsb_remove_reference(&rty->buf);
+        e->lhs_type = rty->buf;
+        elaborate_expr_ExprField_lhs(elab, e, rty);
+        tsb_add_reference(&rty->buf);
+    }
 }
 
 static void elaborate_expr_lvalue(struct Elaborator* elab, struct Expr* expr, struct TypeStr* rty)
@@ -1503,17 +1511,17 @@ static void elaborate_expr_lvalue(struct Elaborator* elab, struct Expr* expr, st
     expr->elaborated = 1;
 }
 
-static void elaborate_expr_address(struct Elaborator* elab, struct Expr* expr, struct TypeStr* rty)
-{
-    elaborate_expr_impl(elab, expr, rty);
-    if (!rty->buf.buf[0]) return;
-    expr->sizing = typestr_calc_sizing_zero_void(elab->types, rty, token_rc(expr->tok));
-    typestr_addressof(rty);
-    expr->take_address = 1;
-    AstElabInfo* info = elab_info(elab, expr);
-    info->c = rty->c;
-    expr->elaborated = 1;
-}
+// static void elaborate_expr_address(struct Elaborator* elab, struct Expr* expr, struct TypeStr* rty)
+// {
+//     elaborate_expr_impl(elab, expr, rty);
+//     if (!rty->buf.buf[0]) return;
+//     expr->sizing = typestr_calc_sizing_zero_void(elab->types, rty, token_rc(expr->tok));
+//     typestr_addressof(rty);
+//     expr->take_address = 1;
+//     AstElabInfo* info = elab_info(elab, expr);
+//     info->c = rty->c;
+//     expr->elaborated = 1;
+// }
 
 static void elaborate_expr_decay(struct Elaborator* elab, struct Expr* expr, struct TypeStr* rty)
 {
@@ -1545,6 +1553,7 @@ static void elaborate_expr_ExprRef(Elaborator* elab, ExprRef* e, TypeStr* rty)
 {
     if (!e->sym) abort();
     *rty = e->sym->type;
+    if (!e->sym->is_enum_constant) tsb_remove_reference(&rty->buf);
     if (rty->buf.buf[0] == 0) abort();
 }
 static void elaborate_expr_ExprCast(Elaborator* elab, ExprCast* e, TypeStr* rty)
@@ -1769,7 +1778,6 @@ static int elaborate_decl(Elaborator* const elab, Decl* const decl)
 
         if (!decl->specs->is_typedef)
         {
-            const char tyb = typestr_byte(&sym->type);
             if (sym->is_fn)
             {
                 if (!decl->init) abort();
@@ -1777,9 +1785,9 @@ static int elaborate_decl(Elaborator* const elab, Decl* const decl)
 
                 elaborate_stmts(elab, decl->decl_list);
 
-                TypeStr ts = sym->type;
-                typestr_pop_offset(&ts);
-                sym->fn_ret_sizing = typestr_calc_sizing_zero_void(elab->types, &ts, token_rc(decl->tok));
+                TypeStrBuf ts;
+                tsb_copy_elem_type(&ts, &sym->type.buf);
+                sym->fn_ret_sizing = tsb_calc_sizing_zero_void(elab->types, &ts, token_rc(decl->tok));
 
                 Decl* prev = elab->cur_decl;
                 elab->cur_decl = decl;
@@ -1787,8 +1795,7 @@ static int elaborate_decl(Elaborator* const elab, Decl* const decl)
                 {
                     elaborate_stmt(elab, &decl->attr.pre->ast);
                 }
-                elaborate_init_ty(elab, 0, 0, &sym->type, &sym->const_init, decl->init);
-                if (!typestr_is_const(&sym->type)) sym->const_init = s_not_constant;
+                elaborate_stmt(elab, decl->init);
                 elab->cur_decl = prev;
             }
             else
@@ -1797,13 +1804,16 @@ static int elaborate_decl(Elaborator* const elab, Decl* const decl)
                 {
                     Decl* prev = elab->cur_decl;
                     elab->cur_decl = decl;
-                    elaborate_init_ty(elab, 0, 0, &sym->type, &sym->const_init, decl->init);
+                    TypeStrBuf init_ty = sym->type.buf;
+                    tsb_strip_cvrR(&init_ty);
+                    elaborate_init_ty(elab, 0, 0, &init_ty, &sym->const_init, decl->init);
                     if (!typestr_is_const(&sym->type)) sym->const_init = s_not_constant;
                     elab->cur_decl = prev;
                 }
+                const char tyb = typestr_byte(&sym->type);
                 if (tyb == TYPE_BYTE_UNK_ARRAY)
                 {
-                    const int is_char_array = typestr_is_char_array(&sym->type);
+                    const int is_char_array = tsb_is_char_array(&sym->type.buf);
                     typestr_remove_array(&sym->type);
                     const size_t elem_size = typestr_get_size(elab->types, &sym->type, &decl->tok->rc);
                     if (!decl->init)
@@ -1854,14 +1864,17 @@ static int elaborate_decl(Elaborator* const elab, Decl* const decl)
                                 "error: array initializer must be either a string literal or an initializer list\n"));
                         }
                     }
+                    tsb_add_reference(&sym->type.buf);
                 }
-                sym->align = typestr_get_align(elab->types, &sym->type, token_rc(decl->tok));
+                TypeStrBuf storage = sym->type.buf;
+                tsb_strip_cvrR(&storage);
+                sym->align = tsb_get_align(elab->types, &storage, token_rc(decl->tok));
                 if (tyb == TYPE_BYTE_UNK_ARRAY && !sym->next_field && sym->parent_su)
                 {
                 }
                 else
                 {
-                    sym->size = typestr_calc_sizing(elab->types, &sym->type, token_rc(decl->tok));
+                    sym->size = tsb_calc_sizing(elab->types, &storage, token_rc(decl->tok));
                     const TypeSymbol* ts = typestr_get_decl(elab->types, &sym->type);
                     sym->init_slots = ts ? ts->init_slots + 1 : 1;
 

@@ -340,7 +340,7 @@ static int parse_arguments(int argc, const char* const* argv, struct Arguments* 
     if (inc)
     {
         char *a = inc, *b;
-        for (; b = strchr(a, ';'); a = b + 1)
+        for (; (b = strchr(a, ';')); a = b + 1)
         {
             strlist_append(&out->inc, a, b - a);
         }

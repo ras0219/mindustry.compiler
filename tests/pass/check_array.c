@@ -183,7 +183,7 @@ __attribute__((nonnull)) void* array_push(struct Array* arr, const void* src, si
 __attribute__((nonnull)) void* array_push_byte(struct Array* arr, char ch)
 {
     char* dst = array_alloc(arr, 1);
-    *dst = ch;
+    //*dst = ch;
     return dst;
 }
 __attribute__((nonnull)) void* array_push_zeroes(struct Array* arr, size_t sz)

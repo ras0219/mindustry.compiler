@@ -604,6 +604,9 @@ static void foreach_c_file(struct TestState* state,
         // Only test files ending in .c
         if (ent->d_name[len - 2] != '.' || ent->d_name[len - 1] != 'c') continue;
 
+        // filter files
+        if (g_filter && strncmp(g_filter, ent->d_name, len)) continue;
+
         array_shrink(&arr, base_sz, 1);
         path_combine(&arr, ent->d_name, len);
         array_push_byte(&arr, '\0');
@@ -1318,6 +1321,10 @@ int main(int argc, char** argv)
     {
         g_datadir = argv[1];
         g_datadir_sz = strlen(argv[1]);
+        if (argc > 2)
+        {
+            g_filter = argv[2];
+        }
     }
 
     foreach_c_file(state, "tests/pass", test_file);

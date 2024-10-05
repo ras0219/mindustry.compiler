@@ -3,6 +3,7 @@
 #include "array.h"
 
 extern const char* g_datadir;
+extern const char* g_filter;
 extern size_t g_datadir_sz;
 
 struct TestFrame

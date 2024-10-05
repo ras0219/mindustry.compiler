@@ -183,6 +183,7 @@ typedef struct ExprField
     const char* fieldname;
 
     /* filled by elaboration */
+    TypeStrBuf lhs_type;
     struct Symbol* field;
     size_t field_offset;
     size_t field_slot;
@@ -340,6 +341,7 @@ typedef struct AstInit
     struct AstInit* next;
 
     size_t slot;
+    size_t slot_extent;
     uint32_t offset;
     uint32_t width;
     uint8_t is_aggregate_init;

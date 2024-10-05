@@ -59,7 +59,7 @@ typedef struct ValueInfoSym
 {
     const Symbol* sym;
     const Symbol* field;
-    size_t sym_offset;
+    size_t slot;
 } ValueInfoSym;
 
 typedef struct ValueInfo
@@ -77,13 +77,18 @@ typedef struct ValueInfo
         Interval val;
         struct
         {
-            size_t field_ssa[4];
-            size_t next_ssa;
-        };
+            size_t assign_ssa;
+            size_t slot;
+            size_t slot_width;
+            size_t prev_ssa;
+            size_t slot_offset;
+        } agg;
         struct
         {
-            TypeStrBuf obj_type;
-        };
+            TypeStrBuf type;
+            size_t region;
+            size_t slot_offset;
+        } any;
     };
 } ValueInfo;
 
@@ -104,19 +109,6 @@ static const ValueInfo s_valueinfo_void = {.kind = value_info_void, .ref_ssa = r
 static const ValueInfo s_valueinfo_uninit = {.kind = value_info_uninitialized, .ref_ssa = ref_ssa_uninit};
 static const ValueInfo s_valueinfo_bottom = {.kind = value_info_bottom, .ref_ssa = ref_ssa_bottom};
 static const ValueInfo s_valueinfo_null = {.kind = value_info_null, .ref_ssa = ref_ssa_null};
-static const ValueInfo s_valueinfo_agg_null = {
-    .kind = value_info_aggregate,
-    .field_ssa = {ref_ssa_null, ref_ssa_null, ref_ssa_null, ref_ssa_null},
-    .next_ssa = ref_ssa_null,
-};
-static const ValueInfo s_valueinfo_agg_uninit = {
-    .kind = value_info_aggregate,
-    .field_ssa = {ref_ssa_uninit, ref_ssa_uninit, ref_ssa_uninit, ref_ssa_uninit},
-    .next_ssa = ref_ssa_uninit,
-};
-static const ValueInfo s_valueinfo_agg_invalid = {
-    .kind = value_info_aggregate,
-};
 
 static void valinfo_init_interval(ValueInfo* info, Interval v)
 {
@@ -143,13 +135,6 @@ static void valinfo_init_integer(ValueInfo* info, Sizing sz, uint64_t value)
     info->kind = value_info_integer;
     info->val.sz = sz;
     info->val.base = value;
-}
-static void valinfo_init_agg_any(ValueInfo* info, const TypeStrBuf* tsb)
-{
-    memset(info, 0, sizeof(ValueInfo));
-    info->kind = value_info_any;
-    info->obj_type = *tsb;
-    tsb_strip_cvr(&info->obj_type);
 }
 #if 0
 static void valinfo_init_one(ValueInfo* info)
@@ -205,11 +190,10 @@ static void valinfo_fmt(Array* out, const ValueInfo* v)
     switch (v->kind)
     {
         case value_info_aggregate:
-            for (size_t i = 0; i < 4; ++i)
-            {
-                array_appendf(out, ",[%zu]=%zu", i, v->field_ssa[i]);
-            }
-            array_appendf(out, ",.next=%zu\n", v->next_ssa);
+            array_appendf(out, ",.slot=%zu\n", v->agg.slot);
+            array_appendf(out, ",.slot_width=%zu\n", v->agg.slot_width);
+            array_appendf(out, ",.assign=%zu\n", v->agg.assign_ssa);
+            array_appendf(out, ",.prev=%zu\n", v->agg.prev_ssa);
             break;
         case value_info_integer:
             array_appends(out, ", .val=");
@@ -217,7 +201,7 @@ static void valinfo_fmt(Array* out, const ValueInfo* v)
             break;
         case value_info_sym:
             if (v->sym.sym->name) array_appendf(out, ", .name='%s'", v->sym.sym->name);
-            if (v->sym.sym_offset) array_appendf(out, ", .offset=%zu", v->sym.sym_offset);
+            if (v->sym.slot) array_appendf(out, ", .slot=%zu", v->sym.slot);
         default: break;
     }
     array_push_byte(out, '}');
@@ -344,6 +328,18 @@ struct Checker
     // Array<const RowCol*>
     Array ssa_rc;
 
+    struct
+    {
+        // Array<size_t>
+        Array region;
+        // Array<size_t>
+        Array slot;
+        // Array<size_t>
+        Array ssa;
+
+        size_t next_region;
+    } any;
+
     // Array<CheckContext>
     Array saved_ctx;
 
@@ -359,6 +355,11 @@ void checker_free(struct Checker* chk)
     array_destroy(&chk->fmt_tmp);
     array_destroy(&chk->ssa_info);
     array_destroy(&chk->ssa_rc);
+
+    array_destroy(&chk->any.region);
+    array_destroy(&chk->any.slot);
+    array_destroy(&chk->any.ssa);
+
     ARRAY_FOREACH(CheckContext, i, &chk->saved_ctx) { chkctx_destroy(i); }
     array_destroy(&chk->saved_ctx);
     array_destroy(&chk->symbol_info);
@@ -373,6 +374,14 @@ static void check_fn_iter(Checker* chk)
         j->goto_ctx = 0;
         j->label_ctx = 0;
     }
+}
+static void check_new_region(Checker* chk, ValueInfo* info, const TypeStrBuf* tsb)
+{
+    memset(info, 0, sizeof(ValueInfo));
+    info->kind = value_info_any;
+    info->any.type = *tsb;
+    info->any.region = ++chk->any.next_region;
+    tsb_strip_cvr(&info->any.type);
 }
 
 size_t check_push_ctx(Checker* chk)
@@ -490,27 +499,66 @@ static __forceinline size_t check_push_ssa(Checker* chk, const ValueInfo* info, 
     return i->ref_ssa = arrptr_size(&chk->ssa_rc) - 1 + ref_ssa_start;
 }
 
-static const Symbol* check_find_field_or_containing(Checker* chk,
-                                                    const TypeStrBuf* tsb,
-                                                    size_t offset,
-                                                    size_t* out_index)
-{
-    *out_index = 0;
-    const TypeSymbol* ty_agg = tsb_get_decl(chk->elab->types, tsb);
-    if (!ty_agg) return NULL;
-    size_t index = 0;
-    for (const Symbol* f = ty_agg->first_member; f; f = f->next_field, ++index)
-    {
-        if (f->field_offset <= offset && offset - f->field_offset < f->size.width)
-        {
-            *out_index = index;
-            return f;
-        }
-    }
-    return NULL;
-}
+// static const Symbol* check_find_field_or_containing(Checker* chk,
+//                                                     const TypeStrBuf* tsb,
+//                                                     size_t offset,
+//                                                     size_t* out_index)
+// {
+//     *out_index = 0;
+//     const TypeSymbol* ty_agg = tsb_get_decl(chk->elab->types, tsb);
+//     if (!ty_agg) return NULL;
+//     size_t index = 0;
+//     for (const Symbol* f = ty_agg->first_member; f; f = f->next_field, ++index)
+//     {
+//         if (f->field_offset <= offset && offset - f->field_offset < f->size.width)
+//         {
+//             *out_index = index;
+//             return f;
+//         }
+//     }
+//     return NULL;
+// }
 
 static void check_any_from_type(Checker* chk, ValueInfo* out, const TypeStrBuf* ty, const RowCol* rc);
+
+// static const Symbol* find_field_with_slot(Checker* chk, const TypeSymbol* su, size_t slot)
+// {
+//     for (const Symbol* s = su->first_member; s; s = s->next_field)
+//     {
+//         if (s->field_slot + s->init_slots > slot) return s;
+//         // impossible
+//         if (s->field_slot > slot) abort();
+//     }
+//     return NULL;
+// }
+
+static void check_read_field(Checker* chk, ValueInfo* dst, size_t slot, const RowCol* rc)
+{
+    const ValueInfo* obj = dst;
+    while (obj->kind == value_info_aggregate && slot)
+    {
+        if (slot >= obj->agg.slot && (slot - obj->agg.slot) <= obj->agg.slot_width)
+        {
+            slot -= obj->agg.slot;
+            obj = check_get_ssa_info_rec(chk, chk->ctx, obj->agg.assign_ssa);
+        }
+        else
+        {
+            obj = check_get_ssa_info_rec(chk, chk->ctx, obj->agg.prev_ssa);
+        }
+    }
+
+    if (slot == 0 || obj->kind == value_info_bottom || obj->kind == value_info_uninitialized ||
+        obj->kind == value_info_null)
+    {
+        *dst = *obj;
+        return;
+    }
+
+    PARSER_UNIMPLEMENTED(
+        rc, "error: not implemented for check_read_field (%s).\n", value_info_kind_to_string(obj->kind));
+    *dst = s_valueinfo_bottom;
+}
 
 static void check_read_sym(Checker* chk, const ValueInfoSym* s, ValueInfo* result, const RowCol* rc)
 {
@@ -529,42 +577,7 @@ static void check_read_sym(Checker* chk, const ValueInfoSym* s, ValueInfo* resul
         return;
     }
     *result = *check_get_ssa_info_rec(chk, chk->ctx, ssa);
-    size_t offset = s->sym_offset;
-    while (s->field != sym)
-    {
-        size_t index;
-        sym = check_find_field_or_containing(chk, &sym->type.buf, offset, &index);
-        if (!sym)
-        {
-            parser_ferror(rc, "error: could not locate field of symbol: %s\n", s->sym->name);
-            *result = s_valueinfo_bottom;
-            return;
-        }
-        offset -= sym->field_offset;
-        if (result->kind == value_info_uninitialized || result->kind == value_info_null ||
-            result->kind == value_info_bottom)
-            break;
-        if (result->kind == value_info_any)
-        {
-            check_any_from_type(chk, result, &sym->type.buf, rc);
-            continue;
-        }
-        if (result->kind != value_info_aggregate)
-        {
-            PARSER_UNIMPLEMENTED(
-                rc, "error: unimplemented value_info for aggregate: %s\n", value_info_kind_to_string(result->kind));
-            *result = s_valueinfo_bottom;
-            return;
-        }
-        if (index > 3)
-        {
-            parser_ferror(rc, "error: unimplemented read from field #%zu\n", index);
-            *result = s_valueinfo_bottom;
-            return;
-        }
-
-        *result = *check_get_ssa_info_rec(chk, chk->ctx, result->field_ssa[index]);
-    }
+    check_read_field(chk, result, s->slot, rc);
     if (result->kind == value_info_uninitialized)
     {
         parser_ferror(rc, "error: uninitialized read: %s\n", s->sym->name);
@@ -575,74 +588,6 @@ static void check_read_sym(Checker* chk, const ValueInfoSym* s, ValueInfo* resul
 static void check_init_sym(Checker* chk, const Symbol* sym, const ValueInfo* v, const RowCol* rc)
 {
     ptrmap_set(&chk->ctx->sym_to_ssa, sym, check_push_ssa(chk, v, rc));
-}
-
-static void check_replace_field_in_value(Checker* chk,
-                                         ValueInfo* info,
-                                         const TypeStrBuf* cur,
-                                         const Symbol* field,
-                                         size_t offset,
-                                         size_t ssa,
-                                         const RowCol* rc)
-{
-    info->ref_ssa = 0;
-    if (info->kind == value_info_uninitialized)
-    {
-        *info = s_valueinfo_agg_uninit;
-    }
-    else if (info->kind == value_info_null)
-    {
-        *info = s_valueinfo_agg_null;
-    }
-    else if (info->kind == value_info_any)
-    {
-        return;
-    }
-    else if (info->kind != value_info_aggregate)
-    {
-        parser_ferror(rc, "error: unimplemented value_info for aggregate: %s\n", value_info_kind_to_string(info->kind));
-        return;
-    }
-
-    size_t index;
-    const Symbol* f = check_find_field_or_containing(chk, cur, offset, &index);
-    if (!f)
-    {
-        // impossible?
-        parser_ferror(rc, "error: could not find path to field\n");
-        return;
-    }
-    if (index > 3)
-    {
-        parser_ferror(rc, "error: unimplemented assignment to field #%zu\n", index);
-        return;
-    }
-    if (field == f)
-    {
-        // found it
-        info->field_ssa[index] = ssa;
-    }
-    else
-    {
-        // contains the field
-        if (index > 3) abort();
-        ValueInfo inner = *check_get_ssa_info_rec(chk, chk->ctx, info->field_ssa[index]);
-        check_replace_field_in_value(chk, &inner, &f->type.buf, field, offset - f->field_offset, ssa, rc);
-        info->field_ssa[index] = check_push_ssa(chk, &inner, rc);
-    }
-}
-
-static size_t check_replace_field_in_ssa(Checker* chk,
-                                         size_t parent_ssa,
-                                         const Symbol* cur,
-                                         const Symbol* field,
-                                         size_t offset,
-                                         size_t ssa,
-                                         const RowCol* rc)
-{
-    ValueInfo info = *check_get_ssa_info_rec(chk, chk->ctx, parent_ssa);
-    check_replace_field_in_value(chk, &info, &cur->type.buf, field, offset, ssa, rc);
-    return check_push_ssa(chk, &info, rc);
 }
 
 static void dump_ssa(Checker* chk, size_t ssa)
@@ -661,8 +606,14 @@ static void check_assign_ssa(Checker* chk, const ValueInfoSym* s, size_t new_ssa
     if (!s->field) abort();
     if (s->field != s->sym)
     {
-        size_t ssa = check_get_ssa_rec(chk, chk->ctx, s->sym);
-        new_ssa = check_replace_field_in_ssa(chk, ssa, s->sym, s->field, s->sym_offset, new_ssa, rc);
+        ValueInfo v = {
+            .kind = value_info_aggregate,
+            .agg = {.slot = s->slot,
+                    .slot_width = s->field->init_slots - 1,
+                    .assign_ssa = new_ssa,
+                    .prev_ssa = check_get_ssa_rec(chk, chk->ctx, s->sym)},
+        };
+        new_ssa = check_push_ssa(chk, &v, rc);
     }
     ptrmap_set(&chk->ctx->sym_to_ssa, s->sym, new_ssa);
 }
@@ -717,6 +668,14 @@ static void check_assign_sym(Checker* chk, const ValueInfoSym* s, const ValueInf
     check_valinfo_cast(chk, &s->field->type.buf, &w, rc);
     check_assign_ssa(chk, s, check_push_ssa(chk, &w, rc), rc);
 }
+static void check_any_from_type(Checker* chk, ValueInfo* out, const TypeStrBuf* ty, const RowCol* rc);
+
+static void check_any_from_sym(Checker* chk, ValueInfo* out, const Symbol* sym, const RowCol* rc)
+{
+    TypeStrBuf tsb = sym->type.buf;
+    tsb_remove_reference(&tsb);
+    return check_any_from_type(chk, out, &tsb, rc);
+}
 
 static void check_any_from_type(Checker* chk, ValueInfo* out, const TypeStrBuf* ty, const RowCol* rc)
 {
@@ -736,47 +695,25 @@ static void check_any_from_type(Checker* chk, ValueInfo* out, const TypeStrBuf* 
         case TYPE_BYTE_ULLONG: valinfo_init_interval(out, s_interval_u64); break;
         case TYPE_BYTE_VOID: *out = s_valueinfo_void; break;
         case TYPE_BYTE_ARRAY:
-        case TYPE_BYTE_UNK_ARRAY: valinfo_init_agg_any(out, ty); break;
+        case TYPE_BYTE_UNK_ARRAY:
         case TYPE_BYTE_STRUCT:
-        case TYPE_BYTE_UNION:
-        {
-            const TypeSymbol* tsym = tsb_get_decl(chk->elab->types, ty);
-            if (!tsym) abort();
-            Array arr = {0};
-            ValueInfo inner;
-            size_t n = 0;
-            for (const Symbol* field = tsym->first_member; field; field = field->next_field)
-            {
-                check_any_from_type(chk, &inner, &field->type.buf, rc);
-                if (n == 0) array_push(&arr, &s_valueinfo_agg_invalid, sizeof(ValueInfo));
-                ValueInfo* back = array_back(&arr, sizeof(ValueInfo));
-                back->field_ssa[n] = check_push_ssa(chk, &inner, rc);
-                n = (n + 1) % 4;
-            }
-            for (size_t n = array_size(&arr, sizeof(ValueInfo)); n > 1; --n)
-            {
-                ((ValueInfo*)arr.data)[n - 1].next_ssa = check_push_ssa(chk, (ValueInfo*)arr.data + n, rc);
-            }
-            if (!arr.sz) abort();
-            *out = *(ValueInfo*)arr.data;
-            array_destroy(&arr);
-            break;
-        }
+        case TYPE_BYTE_UNION: check_new_region(chk, out, ty); break;
         case TYPE_BYTE_ENUM: valinfo_init_interval(out, s_interval_i32); break;
         default:
             tsb_error1(rc, chk->elab->types, "error: cannot determine range from type: %.*s\n", ty);
             *out = s_valueinfo_bottom;
     }
 }
+
 static void check_any_from_decl(Checker* chk, ValueInfo* out, const Decl* decl, const RowCol* rc)
 {
-    return check_any_from_type(chk, out, &decl->sym->type.buf, rc);
+    return check_any_from_sym(chk, out, decl->sym, rc);
 }
 
 static void check_generalize_sym(Checker* chk, ValueInfo* v, const RowCol* rc)
 {
     if (v->kind != value_info_sym && v->kind != value_info_sym_null) abort();
-    if (v->sym.sym_offset)
+    if (v->sym.slot)
     {
         PARSER_UNIMPLEMENTED(rc, "error: unimplemented generalize of offsets\n");
         *v = s_valueinfo_bottom;
@@ -884,7 +821,7 @@ static void check_merge_values_sym(Checker* chk, ValueInfo* v, const ValueInfo* 
 {
     if (v->kind == value_info_sym || v->kind == value_info_sym_null)
     {
-        if (v->sym.sym == w->sym.sym && v->sym.sym_offset == w->sym.sym_offset) return;
+        if (v->sym.sym == w->sym.sym && v->sym.slot == w->sym.slot) return;
     }
     ValueInfo w2 = *w;
     check_generalize_sym(chk, &w2, rc);
@@ -895,14 +832,170 @@ static void check_merge_values_sym(Checker* chk, ValueInfo* v, const ValueInfo* 
 }
 
 static void check_merge_values_impl(Checker* chk, ValueInfo* v, const ValueInfo* w, const RowCol* rc, int biased);
-static size_t check_merge_ssas(Checker* chk, size_t a, size_t b, const RowCol* rc, int biased)
+static size_t check_merge_values_ssa(Checker* chk, const ValueInfo* v, const ValueInfo* w, const RowCol* rc, int biased)
 {
-    if (a == b) return a;
-    ValueInfo v_inner = *check_get_ssa_info_rec(chk, chk->ctx, a);
-    ValueInfo w = *check_get_ssa_info_rec(chk, chk->ctx, b);
-    check_merge_values_impl(chk, &v_inner, &w, rc, biased);
-    return check_push_ssa(chk, &v_inner, rc);
+    ValueInfo u = *v;
+    check_merge_values_impl(chk, &u, w, rc, biased);
+    return u.ref_ssa ? u.ref_ssa : check_push_ssa(chk, &u, rc);
 }
+// static size_t check_merge_ssas(Checker* chk, size_t a, size_t b, const RowCol* rc, int biased)
+// {
+//     if (a == b) return a;
+//     ValueInfo v_inner = *check_get_ssa_info_rec(chk, chk->ctx, a);
+//     ValueInfo w = *check_get_ssa_info_rec(chk, chk->ctx, b);
+//     check_merge_values_impl(chk, &v_inner, &w, rc, biased);
+//     return check_push_ssa(chk, &v_inner, rc);
+// }
+
+struct AggMerge
+{
+    const ValueInfo* v;
+    // The amount that must be added to v->slot to compare with slot. The "zero point" of v into the target.
+    size_t v_offset;
+    const ValueInfo* w;
+    // The amount that must be added to w->slot to compare with slot
+    size_t w_offset;
+
+    size_t slot;
+    size_t end_slot;
+};
+
+static void check_merge_values_aggr2(Checker* chk, ValueInfo* inout, const ValueInfo* w, const RowCol* rc, int biased)
+{
+    size_t min_slot = 0;
+    struct Array ranges = {0};
+    const ValueInfo* v = inout;
+    while (v->kind == value_info_aggregate || w->kind == value_info_aggregate)
+    {
+        // merging identical objects
+        if (v->ref_ssa && v->ref_ssa == w->ref_ssa) break;
+
+        if (v->kind != value_info_aggregate || (w->kind == value_info_aggregate && w->agg.prev_ssa > v->agg.prev_ssa))
+        {
+            const ValueInfo* x = v;
+            v = w;
+            w = x;
+        }
+        // now v is the aggregate with the largest prev_ssa
+        size_t v_end_slot = v->agg.slot + v->agg.slot_width;
+        if (v_end_slot >= min_slot)
+        {
+            struct AggMerge m = {.v = v, .w = w, .slot = min_slot, .end_slot = v_end_slot};
+            array_push(&ranges, &m, sizeof(m));
+            min_slot = v_end_slot + 1;
+        }
+        v = check_get_ssa_info_rec(chk, chk->ctx, v->agg.prev_ssa);
+    }
+    // either v->ref_ssa == w->ref_ssa or neither are aggregates
+    ValueInfo base = *v;
+    check_merge_values_impl(chk, &base, w, rc, biased);
+    const size_t base1_ssa = v->ref_ssa;
+    const size_t base2_ssa = w->ref_ssa;
+
+    while (ranges.sz)
+    {
+        struct AggMerge a = *(struct AggMerge*)array_back(&ranges, sizeof(a));
+        array_pop(&ranges, sizeof(a));
+
+        while (a.v->kind == value_info_aggregate || a.w->kind == value_info_aggregate)
+        {
+            // merging identical objects
+            if (a.v->ref_ssa && a.v->ref_ssa == a.w->ref_ssa && a.v_offset == a.w_offset) break;
+
+            if (a.v->kind != value_info_aggregate ||
+                (a.w->kind == value_info_aggregate && a.w->agg.prev_ssa > a.v->agg.prev_ssa))
+            {
+                const ValueInfo* x = a.v;
+                a.v = a.w;
+                a.w = x;
+                size_t t = a.v_offset;
+                a.v_offset = a.w_offset;
+                a.w_offset = t;
+            }
+            // now a.v is the aggregate with the largest prev_ssa
+            const ValueInfo* v_prev = check_get_ssa_info_rec(chk, chk->ctx, a.v->agg.prev_ssa);
+            size_t v_slot = a.v_offset + a.v->agg.slot;
+            size_t v_end_slot = v_slot + a.v->agg.slot_width;
+            if (v_end_slot < a.slot || v_slot > a.end_slot)
+            {
+                // Assignment does not intersect, skip
+                a.v = v_prev;
+            }
+            else
+            {
+                if (v_slot > a.slot)
+                {
+                    struct AggMerge m = a;
+                    m.v = v_prev;
+                    m.end_slot = v_slot - 1;
+                    array_push(&ranges, &m, sizeof(m));
+                    a.slot = v_slot;
+                }
+                if (v_end_slot < a.end_slot)
+                {
+                    struct AggMerge m = a;
+                    m.v = v_prev;
+                    m.slot = v_end_slot + 1;
+                    array_push(&ranges, &m, sizeof(m));
+                    a.slot = v_slot;
+                }
+                a.v_offset += a.v->agg.slot;
+                a.v = check_get_ssa_info_rec(chk, chk->ctx, a.v->agg.assign_ssa);
+            }
+        }
+        if (a.v->ref_ssa && a.w->ref_ssa)
+        {
+            if (a.v_offset == 0 && a.w_offset == 0)
+            {
+                if ((a.v->ref_ssa == base1_ssa && a.w->ref_ssa == base2_ssa) ||
+                    (a.v->ref_ssa == base2_ssa && a.w->ref_ssa == base1_ssa))
+                {
+                    // incorporated as part of the merge base, do nothing.
+                    continue;
+                }
+            }
+        }
+        if (a.v_offset != a.slot)
+        {
+            if (a.v->kind == value_info_null || a.v->kind == value_info_uninitialized || a.v->kind == value_info_bottom)
+                ;
+            else
+                abort();
+        }
+        if (a.w_offset != a.slot)
+        {
+            if (a.w->kind == value_info_null || a.w->kind == value_info_uninitialized || a.w->kind == value_info_bottom)
+                ;
+            else if (a.w->kind == value_info_any)
+            {
+            }
+            else
+                abort();
+        }
+        size_t assign_ssa = (a.v->ref_ssa && a.v->ref_ssa == a.w->ref_ssa)
+                                ? a.v->ref_ssa
+                                : check_merge_values_ssa(chk, a.v, a.w, rc, biased);
+        if (assign_ssa == base.ref_ssa) continue;
+        // v and w are the same
+        ValueInfo assign = {
+            .kind = value_info_aggregate,
+            .agg =
+                {
+                    .prev_ssa = check_push_ssa(chk, &base, rc),
+                    .assign_ssa = assign_ssa,
+                    .slot = a.slot,
+                    .slot_width = a.end_slot - a.slot,
+                },
+        };
+        base = assign;
+    }
+    *inout = base;
+}
+
+//     const AggSubAssign* vdata = v_out->data;
+//     size_t i = 0, j = 0;
+//     while (i < )
+// }
 
 static void check_merge_values_impl(Checker* chk, ValueInfo* v, const ValueInfo* w, const RowCol* rc, int biased)
 {
@@ -913,6 +1006,12 @@ static void check_merge_values_impl(Checker* chk, ValueInfo* v, const ValueInfo*
     if (v->kind == value_info_any)
     {
         // TODO: ensure appropriate subtyping relationship?
+        return;
+    }
+
+    if (v->kind == value_info_aggregate || w->kind == value_info_aggregate)
+    {
+        check_merge_values_aggr2(chk, v, w, rc, biased);
         return;
     }
 
@@ -966,15 +1065,6 @@ static void check_merge_values_impl(Checker* chk, ValueInfo* v, const ValueInfo*
             return;
         else if (v->kind == value_info_void)
             return;
-        else if (v->kind == value_info_aggregate)
-        {
-            for (size_t i = 0; i < 4; ++i)
-            {
-                v->field_ssa[i] = check_merge_ssas(chk, v->field_ssa[i], w->field_ssa[i], rc, biased);
-            }
-            v->next_ssa = check_merge_ssas(chk, v->next_ssa, w->next_ssa, rc, biased);
-            return;
-        }
     }
 
     unsigned v_traits = valinfo_get_traits(v);
@@ -1013,7 +1103,6 @@ static void check_merge_values(Checker* chk, ValueInfo* v, const ValueInfo* w, c
 {
     check_merge_values_impl(chk, v, w, rc, 0);
 }
-
 static void check_merge_values_biased(Checker* chk, ValueInfo* v, const ValueInfo* w, const RowCol* rc)
 {
     check_merge_values_impl(chk, v, w, rc, 1);
@@ -1710,7 +1799,7 @@ static void check_ExprBuiltin(Checker* chk, const ExprBuiltin* e, ValueInfo* res
             else if (result->kind == value_info_sym)
             {
                 ValueInfo any_valist;
-                valinfo_init_agg_any(&any_valist, &s_tsb_valist_ptr);
+                check_new_region(chk, &any_valist, &s_tsb_valist_ptr);
                 check_assign_sym(chk, &result->sym, &any_valist, rc);
             }
             else
@@ -1740,7 +1829,7 @@ static void check_ExprBuiltin(Checker* chk, const ExprBuiltin* e, ValueInfo* res
             else if (result->kind == value_info_sym)
             {
                 ValueInfo any_valist;
-                valinfo_init_agg_any(&any_valist, &s_tsb_valist_ptr);
+                check_new_region(chk, &any_valist, &s_tsb_valist_ptr);
                 check_assign_sym(chk, &result->sym, &any_valist, rc);
             }
             else
@@ -1824,7 +1913,10 @@ static void check_ExprBinOp_finish(Checker* chk, const ExprBinOp* e, ValueInfo* 
     if (result->kind == value_info_bottom) return;
     if (rhs->kind != value_info_integer || result->kind != value_info_integer)
     {
-        parser_tok_error(e->tok, "error: unimplemented ExprBinOp on non-integers\n");
+        PARSER_UNIMPLEMENTED(token_rc(e->tok),
+                             "error: unimplemented ExprBinOp on non-integers (%s, %s)\n",
+                             value_info_kind_to_string(rhs->kind),
+                             value_info_kind_to_string(result->kind));
         *result = s_valueinfo_bottom;
         return;
     }
@@ -1941,6 +2033,7 @@ static void check_cond_ExprBinOp(Checker* chk, const ExprBinOp* e, CheckContext*
     check_expr(chk, e->rhs, &rhs);
     chkctx_clear(false_ctx);
     false_ctx->parent = check_push_ctx(chk);
+    false_ctx->is_void = chk->ctx->is_void;
     switch (e->tok->type)
     {
         case TOKEN_SYM2('!', '='):
@@ -2036,11 +2129,16 @@ static void check_addsub_valinfo(
         case value_info_sym:;
             // TODO: ensure pointer arithmetic is part of a valid array
             const Symbol* sym = result->sym.field;
-            if (!sym) sym = result->sym.sym;
-            TypeStrBuf tsb = sym->type.buf;
-            tsb_decay(&tsb);
-            check_any_from_type(chk, result, &tsb, rc);
-            if (result->kind == value_info_addr_any) result->kind = value_info_addr_obj;
+            if (!sym) abort();
+            // parser_ferror(rc, "error: unimplemented addition on symbol ref %s\n", sym->name);
+            // *result = s_valueinfo_bottom;
+            // if (!sym) sym = result->sym.sym;
+            // check_any_from_sym(chk, result, sym, rc);
+            // if (result->kind == value_info_addr_any) result->kind = value_info_addr_obj;
+            TypeStrBuf buf = sym->type.buf;
+            tsb_decay(&buf);
+            valinfo_init_addr(result, &buf);
+            result->kind = value_info_addr_obj;
             break;
         case value_info_integer:
             if (subtract)
@@ -2104,7 +2202,12 @@ static void check_ExprDeref(Checker* chk, const ExprDeref* e, ValueInfo* result)
             parser_tok_error(e->tok, "error: definite null pointer dereference\n");
             *result = s_valueinfo_bottom;
             return;
-        default: parser_tok_error(e->tok, "error: cannot dereference non-pointer value\n"); return;
+        default:
+            PARSER_UNIMPLEMENTED(token_rc(e->tok),
+                                 "error: cannot dereference non-pointer value (%s)\n",
+                                 value_info_kind_to_string(result->kind));
+            *result = s_valueinfo_bottom;
+            return;
     }
 }
 
@@ -2157,6 +2260,49 @@ static void check_ExprAssign(Checker* chk, const ExprAssign* e, ValueInfo* resul
     }
 }
 
+static void check_resolve_slot_at(Checker* chk, ValueInfo* result, size_t n, const TypeStrBuf* tsb, const RowCol* rc)
+{
+    while (1)
+    {
+        switch (result->kind)
+        {
+            case value_info_any:;
+                const size_t* region = chk->any.region.data;
+                const size_t* slot = chk->any.slot.data;
+                const size_t* ssa = chk->any.ssa.data;
+                for (size_t i = 0; i < arrsz_size(&chk->any.region); ++i)
+                {
+                    if (region[i] == result->any.region && slot[i] == result->any.slot_offset + n)
+                    {
+                        *result = *check_get_ssa_info_rec(chk, chk->ctx, ssa[i]);
+                        return;
+                    }
+                }
+
+                arrsz_push(&chk->any.region, result->any.region);
+                arrsz_push(&chk->any.slot, result->any.slot_offset + n);
+                check_any_from_type(chk, result, tsb, rc);
+                result->ref_ssa = check_push_ssa(chk, result, rc);
+                arrsz_push(&chk->any.ssa, result->ref_ssa);
+                return;
+            case value_info_aggregate:
+                n += result->agg.slot_offset;
+                if (n < result->agg.slot || n > result->agg.slot + result->agg.slot_width)
+                {
+                    *result = *check_get_ssa_info_rec(chk, chk->ctx, result->agg.prev_ssa);
+                    continue;
+                }
+                else
+                {
+                    n -= result->agg.slot;
+                    *result = *check_get_ssa_info_rec(chk, chk->ctx, result->agg.assign_ssa);
+                    continue;
+                }
+            default: return;
+        }
+    }
+}
+
 static void check_ExprField(Checker* chk, const ExprField* e, ValueInfo* result)
 {
     check_expr(chk, e->lhs, result);
@@ -2165,7 +2311,7 @@ static void check_ExprField(Checker* chk, const ExprField* e, ValueInfo* result)
     {
         if (!result->sym.sym) abort();
         result->sym.field = e->field;
-        result->sym.sym_offset += e->field_offset;
+        result->sym.slot += e->field_slot;
         if (!e->take_address)
         {
             const ValueInfoSym sym = result->sym;
@@ -2188,9 +2334,37 @@ static void check_ExprField(Checker* chk, const ExprField* e, ValueInfo* result)
             check_any_from_decl(chk, result, e->field->last_decl, token_rc(e->tok));
         }
     }
+    else if (result->kind == value_info_any)
+    {
+        result->ref_ssa = 0;
+        result->any.type = e->field->type.buf;
+        result->any.slot_offset += e->field_slot;
+        if (e->field->init_slots == 1)
+        {
+            check_resolve_slot_at(chk, result, 0, &e->field->type.buf, token_rc(e->tok));
+        }
+    }
+    else if (result->kind == value_info_aggregate)
+    {
+        result->ref_ssa = 0;
+        result->agg.slot_offset += e->field_slot;
+        if (e->field->init_slots == 1)
+        {
+            check_resolve_slot_at(chk, result, 0, &e->field->type.buf, token_rc(e->tok));
+        }
+    }
     else
     {
-        parser_tok_error(e->tok, "error: possible null pointer dereference\n");
+        if (result->kind == value_info_sym_null || result->kind == value_info_addr_any ||
+            result->kind == value_info_null)
+        {
+            parser_tok_error(e->tok, "error: possible arithmetic on null pointer\n");
+        }
+        else
+        {
+            PARSER_UNIMPLEMENTED(
+                token_rc(e->tok), "error: unimplemented value kind %s\n", value_info_kind_to_string(result->kind));
+        }
         *result = s_valueinfo_bottom;
         chk->ctx->is_void = 1;
     }
@@ -2417,6 +2591,7 @@ static void check_cond_with_result(Checker* chk, ValueInfo* result, CheckContext
     chkctx_clear(false_ctx);
     size_t x = check_push_ctx(chk);
     false_ctx->parent = x;
+    false_ctx->is_void = chk->ctx->is_void;
     if (result->ref_ssa)
     {
         check_refine_ssa_true(chk, chk->ctx, result->ref_ssa);
@@ -2460,6 +2635,7 @@ static void check_cond(Checker* chk, const Expr* e, CheckContext* false_ctx)
 
     check_cond_impl(chk, e, false_ctx);
     if (chk->ctx->parent == 0 || false_ctx->parent == 0) abort();
+    if (((CheckContext*)chk->saved_ctx.data)[false_ctx->parent - 1].is_void > false_ctx->is_void) abort();
 }
 
 static void check_DeclSpecs(Checker* chk, const DeclSpecs* e) { }
@@ -2548,17 +2724,6 @@ typedef struct TypeFieldStructure
     Array syms;
 } TypeFieldStructure;
 
-static const Symbol* find_field_with_slot(Checker* chk, const TypeSymbol* su, size_t slot)
-{
-    for (const Symbol* s = su->first_member; s; s = s->next_field)
-    {
-        if (s->field_slot + s->init_slots > slot) return s;
-        // impossible
-        if (s->field_slot > slot) abort();
-    }
-    return NULL;
-}
-
 // static size_t transform_slot(Checker* chk, const Symbol* sym, size_t slot, int* to_merge)
 // {
 //     if (slot == 0)
@@ -2580,65 +2745,34 @@ static const Symbol* find_field_with_slot(Checker* chk, const TypeSymbol* su, si
 //     }
 // }
 
-static void check_replace_field(
-    Checker* chk, const Symbol* sym, ValueInfo* dst, size_t slot, const ValueInfo* v, const RowCol* rc)
+static void check_assign_field(Checker* chk,
+                               const TypeStrBuf* tsb,
+                               ValueInfo* dst,
+                               size_t slot,
+                               size_t slot_width,
+                               const ValueInfo* v,
+                               const RowCol* rc)
 {
     if (slot == 0)
     {
         *dst = *v;
-        check_valinfo_cast(chk, &sym->type.buf, dst, rc);
+        check_valinfo_cast(chk, tsb, dst, rc);
         return;
     }
+    if (v->ref_ssa && v->ref_ssa == dst->ref_ssa) return;
     dst->ref_ssa = 0;
-    if (dst->kind == value_info_bottom || dst->kind == value_info_any) return;
-    if (dst->kind == value_info_null && v->kind == value_info_null) return;
-    const TypeSymbol* su = typestr_get_decl(chk->elab->types, &sym->type);
-    if (su)
-    {
-        const Symbol* field = find_field_with_slot(chk, su, slot);
-        if (!field) abort();
-        Array unpacked = {0};
-
-        const ValueInfo* it = dst;
-
-        size_t n = field->field_index / 4;
-        size_t m = field->field_index % 4;
-        for (size_t i = 0; i <= n; ++i)
-        {
-            if (it->kind == value_info_null)
+    if (dst->kind == value_info_bottom) return;
+    ValueInfo new = {
+        .kind = value_info_aggregate,
+        .agg =
             {
-                array_push(&unpacked, &s_valueinfo_agg_null, sizeof(ValueInfo));
-            }
-            else if (it->kind == value_info_aggregate)
-            {
-                array_push(&unpacked, it, sizeof(*it));
-                if (i < n) it = check_get_ssa_info_rec(chk, chk->ctx, it->next_ssa);
-            }
-            else
-            {
-                PARSER_UNIMPLEMENTED(
-                    rc, "error: unimplemented replace_field kind '%s'\n", value_info_kind_to_string(it->kind));
-                *dst = s_valueinfo_bottom;
-                return;
-            }
-        }
-
-        ValueInfo* unpacked_data = unpacked.data;
-
-        ValueInfo inner = *check_get_ssa_info_rec(chk, chk->ctx, unpacked_data[n].field_ssa[m]);
-        check_replace_field(chk, field, &inner, slot - field->field_slot, v, rc);
-        unpacked_data[n].field_ssa[m] = check_push_ssa(chk, &inner, rc);
-        for (size_t i = n; i > 0; --i)
-        {
-            unpacked_data[i - 1].next_ssa = check_push_ssa(chk, unpacked_data + i, rc);
-        }
-        *dst = unpacked_data[0];
-        array_destroy(&unpacked);
-    }
-    else
-    {
-        valinfo_init_agg_any(dst, &sym->type.buf);
-    }
+                .prev_ssa = check_push_ssa(chk, dst, rc),
+                .assign_ssa = check_push_ssa(chk, v, rc),
+                .slot = slot,
+                .slot_width = slot_width,
+            },
+    };
+    *dst = new;
 }
 
 static void check_Decl_init(Checker* chk, const Symbol* sym, Ast* a, ValueInfo* result)
@@ -2675,7 +2809,7 @@ static void check_Decl_init(Checker* chk, const Symbol* sym, Ast* a, ValueInfo* 
         else
         {
             check_expr(chk, (const Expr*)init->init, &info);
-            check_replace_field(chk, sym, result, init->slot, &info, token_rc(a->tok));
+            check_assign_field(chk, &sym->type.buf, result, init->slot, init->slot_extent, &info, token_rc(a->tok));
             init = init->next;
         }
     }
@@ -2755,7 +2889,9 @@ static void check_Decl(Checker* chk, const Decl* e)
         if (sym->is_static_lifetime)
         {
             ValueInfo v;
-            check_any_from_type(chk, &v, &sym->type.buf, token_rc(e->tok));
+            TypeStrBuf tsb = sym->type.buf;
+            tsb_strip_cvrR(&tsb);
+            check_any_from_type(chk, &v, &tsb, token_rc(e->tok));
             check_init_sym(chk, sym, &v, token_rc(e->tok));
         }
     }

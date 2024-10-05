@@ -6,6 +6,7 @@
 #include "string.h"
 
 const char* g_datadir = NULL;
+const char* g_filter = NULL;
 size_t g_datadir_sz = 0;
 
 void unittest_print_stack(const struct TestState* state)
